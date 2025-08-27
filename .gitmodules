@@ -1,0 +1,9 @@
+[submodule "submodules/lang2vec"]
+	path = submodules/lang2vec
+	url = https://github.com/antonisa/lang2vec
+[submodule "submodules/lm-evaluation-harness"]
+	path = submodules/lm-evaluation-harness
+	url = https://github.com/EleutherAI/lm-evaluation-harness
+[submodule "submodules/auto_merge_llm"]
+	path = submodules/auto_merge_llm
+	url = git@github.com:Erland366/auto-merge-llm.git
