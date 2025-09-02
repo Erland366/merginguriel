@@ -215,3 +215,5 @@ __marimo__/
 
 *.egg-info
 big_assets/
+merged_models
+benchmarks/

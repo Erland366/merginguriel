@@ -86,24 +86,59 @@ def get_language_name_from_iso639_3(code: str | list) -> str | None | list:
         return None
 
 
-def get_all_positive_columns(code_or_language: str, df: pd.DataFrame) -> list[str]:
+def get_all_positive_columns(
+    code_or_language: str, df: pd.DataFrame
+) -> dict[str, float]:
     if isinstance(code_or_language, list):
-        return [get_all_positive_columns(c) for c in code_or_language]
+        return [get_all_positive_columns(c, df) for c in code_or_language]
     if len(code_or_language) == 3:
         language_code = code_or_language
     else:
         language_code = get_iso639_3_code_from_name(code_or_language)
         if language_code is None:
-            return []
+            return {}
     try:
         row = df.loc[language_code]
-        positive_columns = row[row > 0].index.tolist()
-        return positive_columns
+        positive_columns = row[row > 0]
+        return positive_columns.to_dict()
     except KeyError:
         print(
             f"Warning: The language code '{language_code}' was not found in the DataFrame."
         )
-        return []
+        return {}
+
+
+def get_similarity_scores(
+    source_language: str, target_languages: list[str], df: pd.DataFrame
+) -> dict:
+    source_code = get_iso639_3_code_from_name(source_language)
+    if source_code is None:
+        return {"raw_scores": {}, "normalized_scores": {}}
+
+    target_codes = [get_iso639_3_code_from_name(lang) for lang in target_languages]
+    target_codes = [code for code in target_codes if code is not None]
+
+    try:
+        source_row = df.loc[source_code]
+        raw_scores = {
+            code: source_row.get(code, 0) for code in target_codes
+        }
+
+        total_score = sum(raw_scores.values())
+        if total_score > 0:
+            normalized_scores = {
+                code: score / total_score for code, score in raw_scores.items()
+            }
+        else:
+            normalized_scores = {code: 0 for code in target_codes}
+
+        return {"raw_scores": raw_scores, "normalized_scores": normalized_scores}
+
+    except KeyError:
+        print(
+            f"Warning: The source language code '{source_code}' was not found in the DataFrame."
+        )
+        return {"raw_scores": {}, "normalized_scores": {}}
 
 
 def seed_everything(seed):
