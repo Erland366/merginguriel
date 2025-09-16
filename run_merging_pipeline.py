@@ -19,7 +19,7 @@ if submodule_path not in sys.path:
 from merginguriel.utils import get_similarity_scores
 from auto_merge_llm.methods import merging_methods_dict
 
-def save_merge_details(output_dir: str, base_model: str, models_and_weights: dict, mode: str, target_lang: str = None):
+def save_merge_details(output_dir: str, base_model: str, models_and_weights: dict, mode: str, target_lang: str = None, base_model_info: dict = None):
     """Saves a text file with details about the merge."""
     filepath = os.path.join(output_dir, "merge_details.txt")
     with open(filepath, 'w') as f:
@@ -32,14 +32,46 @@ def save_merge_details(output_dir: str, base_model: str, models_and_weights: dic
         
         if mode in ['similarity', 'average']:
             # Handle the new format for similarity and average modes
-            total_weight = sum(info['weight'] for info in models_and_weights.values())
-            for i, (model, info) in enumerate(models_and_weights.items()):
-                weight = info['weight']
+            # Include base model if provided
+            all_models = []
+            
+            if base_model_info:
+                all_models.append({
+                    'base_model_name': base_model_info['base_model_name'],
+                    'subfolder': base_model_info['subfolder'],
+                    'language': base_model_info['language'],
+                    'locale': base_model_info['locale'],
+                    'weight': base_model_info['weight']
+                })
+            
+            # Add remaining models
+            for model, info in models_and_weights.items():
+                all_models.append({
+                    'base_model_name': info['base_model_name'],
+                    'subfolder': info['subfolder'],
+                    'language': info['language'],
+                    'locale': info['locale'],
+                    'weight': info['weight']
+                })
+            
+            # Calculate current total weight
+            total_weight = sum(model_info['weight'] for model_info in all_models)
+            
+            # For similarity and average modes, normalize all weights to sum to 1.0 for display
+            # This should match the actual weights used in the merge
+            if mode in ['similarity', 'average'] and total_weight > 0:
+                normalization_factor = 1.0 / total_weight
+                for model_info in all_models:
+                    model_info['weight'] = model_info['weight'] * normalization_factor
+                total_weight = 1.0  # Now normalized to 1.0
+            
+            for i, model_info in enumerate(all_models):
+                weight = model_info['weight']
                 portion = (weight / total_weight) * 100 if total_weight > 0 else 0
-                f.write(f"{i+1}. Model: {info['base_model_name']}\n")
-                f.write(f"   - Subfolder: {info['subfolder']}\n")
-                f.write(f"   - Language: {info['language']}\n")
-                f.write(f"   - Locale: {info['locale']}\n")
+                f.write(f"{i+1}. Model: {model_info['base_model_name']}\n")
+                f.write(f"   - Subfolder: {model_info['subfolder']}\n")
+                f.write(f"   - Language: {model_info['language']}\n")
+                f.write(f"   - Locale: {model_info['locale']}\n")
                 f.write(f"   - Weight: {weight:.6f} ({portion:.2f}% of total)\n")
         else:
             # Handle the old format for other modes (manual, uriel)
@@ -95,7 +127,7 @@ def map_locale_to_language_code(locale: str):
         print(f"Could not load locale mapping: {e}")
         return locale
 
-def load_similarity_weights(sparsed_matrix_path: str, model_mapping_path: str, target_lang: str, subfolder_pattern: str = "alpha_0.5_{locale}_epoch-9"):
+def load_similarity_weights(sparsed_matrix_path: str, model_mapping_path: str, target_lang: str, subfolder_pattern: str = "alpha_0.5_{locale}_epoch-9", num_languages: int = None):
     """Load similarity weights and create model-to-weight mapping for target language."""
     try:
         # Load the sparsed (normalized) similarity matrix
@@ -117,30 +149,38 @@ def load_similarity_weights(sparsed_matrix_path: str, model_mapping_path: str, t
         # Get weights for target language
         target_weights = sparsed_df.loc[target_lang]
         
+        # Filter languages with non-zero weights and valid model mappings
+        valid_languages = []
+        for lang, weight in target_weights.items():
+            if weight > 0 and lang in model_mapping_df.index:
+                valid_languages.append((lang, weight))
+        
+        # Sort by weight in descending order and limit to num_languages
+        valid_languages.sort(key=lambda x: x[1], reverse=True)
+        if num_languages is not None and num_languages > 0:
+            valid_languages = valid_languages[:num_languages]
+            print(f"Limiting to top {num_languages} languages by similarity weight")
+        
         # Create model-to-weight mapping
         models_and_weights = {}
-        for lang, weight in target_weights.items():
-            if weight > 0:  # Only include models with non-zero weights
-                if lang in model_mapping_df.index:
-                    model_info = model_mapping_df.loc[lang]
-                    model_name = model_info['model_name']
-                    locale = model_info['locale']
-                    
-                    # Generate language-specific subfolder
-                    subfolder = get_subfolder_for_language(locale, subfolder_pattern)
-                    
-                    # Use the format expected by auto_merge_llm: model_name@subfolder
-                    model_with_subfolder = f"{model_name}@{subfolder}"
-                    models_and_weights[model_with_subfolder] = {
-                        'weight': weight,
-                        'subfolder': subfolder,
-                        'language': lang,
-                        'locale': locale,
-                        'base_model_name': model_name
-                    }
-                    print(f"  - {model_with_subfolder}: {weight:.6f} (language: {lang})")
-                else:
-                    print(f"Warning: No model mapping found for language '{lang}'")
+        for lang, weight in valid_languages:
+            model_info = model_mapping_df.loc[lang]
+            model_name = model_info['model_name']
+            locale = model_info['locale']
+            
+            # Generate language-specific subfolder
+            subfolder = get_subfolder_for_language(locale, subfolder_pattern)
+            
+            # Use the format expected by auto_merge_llm: model_name@subfolder
+            model_with_subfolder = f"{model_name}@{subfolder}"
+            models_and_weights[model_with_subfolder] = {
+                'weight': weight,
+                'subfolder': subfolder,
+                'language': lang,
+                'locale': locale,
+                'base_model_name': model_name
+            }
+            print(f"  - {model_with_subfolder}: {weight:.6f} (language: {lang})")
         
         return models_and_weights
         
@@ -169,6 +209,12 @@ def main():
         default="alpha_0.5_{locale}_epoch-8",
         help="Subfolder pattern to use for model loading (default: alpha_0.5_{locale}_epoch-9)"
     )
+    parser.add_argument(
+        "--num-languages",
+        type=int,
+        default=5,
+        help="Number of languages to include in merging (default: all available languages)"
+    )
     args = parser.parse_args()
 
     print("*****************************************************")
@@ -179,6 +225,7 @@ def main():
     BASE_MODEL = "xlm-roberta-base"
     models_and_weights = {}
     base_model_for_merge = BASE_MODEL  # Default fallback
+    base_model_info = None  # Store base model info for similarity/average modes
 
     if args.mode == 'uriel':
         print("\n--- Step 1: Calculating URIEL Similarity Weights ---")
@@ -228,7 +275,7 @@ def main():
         sparsed_matrix_path = os.path.join(project_root, "sparsed_language_similarity_matrix.csv")
         model_mapping_path = os.path.join(project_root, "model_mapping.csv")
         
-        models_and_weights = load_similarity_weights(sparsed_matrix_path, model_mapping_path, target_lang_code, args.subfolder_pattern)
+        models_and_weights = load_similarity_weights(sparsed_matrix_path, model_mapping_path, target_lang_code, args.subfolder_pattern, args.num_languages)
         
         if not models_and_weights:
             print("Could not load similarity weights. Aborting.")
@@ -249,11 +296,35 @@ def main():
             base_weight = weight_values[0]
             weight_values = weight_values[1:]  # Remove first weight
             
-            # Renormalize remaining weights to sum to (1 - base_weight)
-            if weight_values:
-                total_remaining_weight = sum(weight_values)
-                if total_remaining_weight > 0:
+            # Store base model info for save_merge_details before removing it
+            base_model_info = {
+                'model_with_subfolder': base_model_for_merge,
+                'weight': base_weight,
+                'base_model_name': models_and_weights[base_model_for_merge]['base_model_name'],
+                'subfolder': models_and_weights[base_model_for_merge]['subfolder'],
+                'language': models_and_weights[base_model_for_merge]['language'],
+                'locale': models_and_weights[base_model_for_merge]['locale']
+            }
+            
+            # Remove base model from models_and_weights
+            models_and_weights.pop(base_model_for_merge)
+            
+              # Normalize ALL weights (including base model) to sum to 1.0
+            total_similarity_weight = base_weight + sum(weight_values)
+            if total_similarity_weight > 0:
+                # Update base model weight to normalized value
+                base_weight = base_weight / total_similarity_weight
+                # Renormalize remaining weights to sum to (1 - base_weight)
+                if weight_values:
+                    total_remaining_weight = sum(weight_values)
                     weight_values = [w * (1 - base_weight) / total_remaining_weight for w in weight_values]
+                
+                # Update base_model_info with normalized weight
+                base_model_info['weight'] = base_weight
+                
+                # Update weights in models_and_weights dictionary for save_merge_details
+                for i, model_key in enumerate(models_and_weights.keys()):
+                    models_and_weights[model_key]['weight'] = weight_values[i]
             
             print(f"Using {base_model_for_merge} as base model")
             print(f"Base model weight: {base_weight:.6f}")
@@ -305,18 +376,26 @@ def main():
         # Get the same models as similarity mode, but assign equal weights
         target_weights = sparsed_df.loc[target_lang_code]
         
-        # Count non-zero models to calculate equal weights
-        non_zero_models = [lang for lang, weight in target_weights.items() 
-                          if weight > 0 and lang in model_mapping_df.index]
+        # Filter languages with non-zero weights and valid model mappings (same as similarity mode)
+        valid_languages = []
+        for lang, weight in target_weights.items():
+            if weight > 0 and lang in model_mapping_df.index:
+                valid_languages.append((lang, weight))
         
-        if not non_zero_models:
+        # Sort by weight in descending order and limit to num_languages (same as similarity mode)
+        valid_languages.sort(key=lambda x: x[1], reverse=True)
+        if args.num_languages is not None and args.num_languages > 0:
+            valid_languages = valid_languages[:args.num_languages]
+            print(f"Limiting to top {args.num_languages} languages by similarity weight")
+        
+        if not valid_languages:
             print("No models found for the target language")
             return
         
-        equal_weight = 1.0 / len(non_zero_models)
+        equal_weight = 1.0 / len(valid_languages)
         models_and_weights = {}
         
-        for lang in non_zero_models:
+        for lang, weight in valid_languages:
             model_info = model_mapping_df.loc[lang]
             model_name = model_info['model_name']
             locale = model_info['locale']
@@ -335,19 +414,45 @@ def main():
             }
             print(f"  - {model_with_subfolder}: {equal_weight:.6f} (language: {lang})")
         
-        print(f"\\nUsing equal weights for {len(non_zero_models)} models: {equal_weight:.6f} each")
+        print(f"\\nUsing equal weights for {len(valid_languages)} models: {equal_weight:.6f} each")
         
         # Use the first model as the base model (remove it from models_to_merge)
         if models_and_weights:
             base_model_for_merge = list(models_and_weights.keys())[0]
             base_weight = list(models_and_weights.values())[0]['weight']
             
+            # Store base model info for save_merge_details
+            first_model_info = list(models_and_weights.values())[0]
+            base_model_info = {
+                'model_with_subfolder': base_model_for_merge,
+                'weight': base_weight,
+                'base_model_name': first_model_info['base_model_name'],
+                'subfolder': first_model_info['subfolder'],
+                'language': first_model_info['language'],
+                'locale': first_model_info['locale']
+            }
+            
             # Remove the first model from models_and_weights
             first_model_key = list(models_and_weights.keys())[0]
             models_and_weights.pop(first_model_key)
             
+            # For average mode, we want equal weights that sum to 1.0 including base model
+            num_models = len(valid_languages)
+            equal_weight = 1.0 / num_models
+            
+            # Update base weight and remaining weights to equal weights
+            base_weight = equal_weight
+            weight_values = [equal_weight] * (num_models - 1)
+            
+            # Update base_model_info with normalized weight
+            base_model_info['weight'] = base_weight
+            
+            # Update weights in models_and_weights dictionary for save_merge_details
+            for i, model_key in enumerate(models_and_weights.keys()):
+                models_and_weights[model_key]['weight'] = weight_values[i]
+            
             print(f"Using {base_model_for_merge} as base model")
-            print(f"Base model weight: {base_weight:.6f}")
+            print(f"Equal weight for each model: {equal_weight:.6f}")
         else:
             base_model_for_merge = BASE_MODEL
 
@@ -372,11 +477,20 @@ def main():
             base_weight = weight_values[0]
             weight_values = weight_values[1:]  # Remove first weight
             
-            # Renormalize remaining weights to sum to (1 - base_weight)
-            if weight_values:
-                total_remaining_weight = sum(weight_values)
-                if total_remaining_weight > 0:
+            # Renormalize ALL weights (including base model) to sum to 1.0
+            total_manual_weight = base_weight + sum(weight_values)
+            if total_manual_weight > 0:
+                # Update base model weight to normalized value
+                base_weight = base_weight / total_manual_weight
+                # Renormalize remaining weights to sum to (1 - base_weight)
+                if weight_values:
+                    total_remaining_weight = sum(weight_values)
                     weight_values = [w * (1 - base_weight) / total_remaining_weight for w in weight_values]
+                
+                # Note: Manual mode doesn't use base_model_info, so we don't update it here
+                
+            print(f"Normalized base model weight: {base_weight:.6f}")
+            print(f"Remaining models total weight: {sum(weight_values):.6f}")
             
             print(f"Using {base_model_for_merge} as base model")
             print(f"Base model weight: {base_weight:.6f}")
@@ -387,11 +501,18 @@ def main():
         # URIEL mode already set base_model_for_merge and removed first model
         models_to_merge_paths = list(models_and_weights.keys())
         weight_values = list(models_and_weights.values())
-        # Renormalize weights after removing base model
+        # Renormalize ALL weights (including base model) to sum to 1.0
         if weight_values:
-            total_weight = sum(weight_values)
-            if total_weight > 0:
+            total_urial_weight = base_weight + sum(weight_values)
+            if total_urial_weight > 0:
+                # Update base model weight to normalized value
+                base_weight = base_weight / total_urial_weight
+                # Renormalize remaining weights to sum to (1 - base_weight)
+                total_weight = sum(weight_values)
                 weight_values = [w * (1 - base_weight) / total_weight for w in weight_values]
+                
+        print(f"Normalized base model weight: {base_weight:.6f}")
+        print(f"Remaining models total weight: {sum(weight_values):.6f}")
     else:
         models_to_merge_paths = list(models_and_weights.keys())
         weight_values = [info['weight'] for info in models_and_weights.values()]
@@ -422,7 +543,7 @@ def main():
     merged_model.save_pretrained(output_dir)
     tokenizer.save_pretrained(output_dir)
     print(f"Model saved successfully to: {output_dir}")
-    save_merge_details(output_dir, BASE_MODEL, models_and_weights, args.mode, args.target_lang)
+    save_merge_details(output_dir, BASE_MODEL, models_and_weights, args.mode, args.target_lang, base_model_info)
 
     # --- 4. Evaluate the Merged Model ---
     print("\n--- Step 4: Evaluating Merged Model ---")

@@ -90,15 +90,42 @@ def evaluate_specific_model(model_name: str, subfolder: str | None = None, local
         logger.info("✓ Tokenizer loaded successfully")
         
         # Load model
-        if subfolder:
-            model = AutoModelForSequenceClassification.from_pretrained(model_name, subfolder=subfolder)
-        else:
-            model = AutoModelForSequenceClassification.from_pretrained(model_name)
-        logger.info("✓ Model loaded successfully")
-        
-        # Move to device
         device = "cuda" if torch.cuda.is_available() else "cpu"
-        model = model.to(device)
+        logger.info(f"Using device: {device}")
+
+        try:
+            # Try loading with device_map first (preferred)
+            if subfolder:
+                model = AutoModelForSequenceClassification.from_pretrained(
+                    model_name,
+                    subfolder=subfolder,
+                    device_map=device if device == "cuda" else None,
+                    torch_dtype=torch.float16 if device == "cuda" else None
+                )
+            else:
+                model = AutoModelForSequenceClassification.from_pretrained(
+                    model_name,
+                    device_map=device if device == "cuda" else None,
+                    torch_dtype=torch.float16 if device == "cuda" else None
+                )
+        except Exception as e:
+            logger.warning(f"Device mapping failed ({e}), falling back to CPU loading then moving to {device}")
+            # Fallback: load on CPU first, then move to device
+            if subfolder:
+                model = AutoModelForSequenceClassification.from_pretrained(
+                    model_name,
+                    subfolder=subfolder,
+                    low_cpu_mem_usage=True
+                )
+            else:
+                model = AutoModelForSequenceClassification.from_pretrained(
+                    model_name,
+                    low_cpu_mem_usage=True
+                )
+            # Then move to target device
+            model = model.to(device)
+
+        logger.info("✓ Model loaded successfully")
         logger.info(f"✓ Model moved to {device}")
         
         # Load test data
