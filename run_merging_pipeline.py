@@ -30,7 +30,7 @@ def save_merge_details(output_dir: str, base_model: str, models_and_weights: dic
             f.write(f"Target Language: {target_lang}\n")
         f.write("\n--- Merged Models and Weights ---\n")
         
-        if mode in ['similarity', 'average']:
+        if mode in ['similarity', 'average', 'fisher', 'fisher_simple', 'fisher_dataset']:
             # Handle the new format for similarity and average modes
             # Include base model if provided
             all_models = []
@@ -194,8 +194,8 @@ def main():
         "--mode",
         type=str,
         required=True,
-        choices=['uriel', 'manual', 'similarity', 'average'],
-        help="The merging mode to use. 'uriel' for URIEL-based weights, 'manual' for user-defined weights, 'similarity' for calculated similarity weights, 'average' for equal weights."
+        choices=['uriel', 'manual', 'similarity', 'average', 'fisher', 'fisher_simple', 'fisher_dataset'],
+        help="The merging mode to use. 'uriel' for URIEL-based weights, 'manual' for user-defined weights, 'similarity' for calculated similarity weights, 'average' for equal weights, 'fisher' for Fisher information merging (requires training data), 'fisher_simple' for simplified Fisher merging using parameter magnitudes, 'fisher_dataset' for Fisher merging with huggingface dataset."
     )
     parser.add_argument(
         "--target-lang",
@@ -206,7 +206,7 @@ def main():
     parser.add_argument(
         "--subfolder-pattern",
         type=str,
-        default="alpha_0.5_{locale}_epoch-8",
+        default="alpha_0.5_{locale}_epoch-9",
         help="Subfolder pattern to use for model loading (default: alpha_0.5_{locale}_epoch-9)"
     )
     parser.add_argument(
@@ -214,6 +214,36 @@ def main():
         type=int,
         default=5,
         help="Number of languages to include in merging (default: all available languages)"
+    )
+    parser.add_argument(
+        "--dataset-name",
+        type=str,
+        default=None,
+        help="HuggingFace dataset name for Fisher merging (e.g., 'imdb', 'ag_news')"
+    )
+    parser.add_argument(
+        "--dataset-split",
+        type=str,
+        default="train",
+        help="Dataset split to use (default: train)"
+    )
+    parser.add_argument(
+        "--text-column",
+        type=str,
+        default="text",
+        help="Column name containing text data (default: text)"
+    )
+    parser.add_argument(
+        "--label-column",
+        type=str,
+        default="label",
+        help="Column name containing labels (default: label)"
+    )
+    parser.add_argument(
+        "--num-fisher-examples",
+        type=int,
+        default=100,
+        help="Number of examples to use for Fisher computation (default: 100)"
     )
     args = parser.parse_args()
 
@@ -456,27 +486,121 @@ def main():
         else:
             base_model_for_merge = BASE_MODEL
 
+    elif args.mode in ['fisher', 'fisher_simple']:
+        # Use the same setup as similarity/average mode but with Fisher merging
+        target_lang_code = map_locale_to_language_code(args.target_lang)
+        print(f"Using target language: {args.target_lang} (mapped to: {target_lang_code})")
+
+        sparsed_matrix_path = os.path.join(project_root, "sparsed_language_similarity_matrix.csv")
+        model_mapping_path = os.path.join(project_root, "model_mapping.csv")
+
+        # Load similarity matrix and model mapping to get the same set of models
+        sparsed_df = pd.read_csv(sparsed_matrix_path, index_col=0)
+        model_mapping_df = pd.read_csv(model_mapping_path, index_col=0)
+
+        print(f"Loaded similarity matrix with shape: {sparsed_df.shape}")
+        print(f"Loaded model mapping with {len(model_mapping_df)} models")
+        print(f"Using subfolder pattern: {args.subfolder_pattern}")
+
+        # Find the target language row
+        if target_lang_code not in sparsed_df.index:
+            print(f"Target language '{target_lang_code}' not found in similarity matrix")
+            print(f"Available languages: {list(sparsed_df.index)}")
+            return
+
+        # Get the same models as similarity mode
+        target_weights = sparsed_df.loc[target_lang_code]
+
+        # Filter languages with non-zero weights and valid model mappings (same as similarity mode)
+        valid_languages = []
+        for lang, weight in target_weights.items():
+            if weight > 0 and lang in model_mapping_df.index:
+                valid_languages.append((lang, weight))
+
+        # Sort by weight in descending order and limit to num_languages (same as similarity mode)
+        valid_languages.sort(key=lambda x: x[1], reverse=True)
+        if args.num_languages is not None and args.num_languages > 0:
+            valid_languages = valid_languages[:args.num_languages]
+            print(f"Limiting to top {args.num_languages} languages by similarity weight")
+
+        if not valid_languages:
+            print("No models found for the target language")
+            return
+
+        # For Fisher merging, use similarity weights for selection but not for merging
+        models_and_weights = {}
+
+        for lang, weight in valid_languages:
+            model_info = model_mapping_df.loc[lang]
+            model_name = model_info['model_name']
+            locale = model_info['locale']
+
+            # Generate language-specific subfolder
+            subfolder = get_subfolder_for_language(locale, args.subfolder_pattern)
+
+            # Use the format expected by auto_merge_llm: model_name@subfolder
+            model_with_subfolder = f"{model_name}@{subfolder}"
+            models_and_weights[model_with_subfolder] = {
+                'weight': 1.0,  # Equal weights for Fisher merging
+                'subfolder': subfolder,
+                'language': lang,
+                'locale': locale,
+                'base_model_name': model_name
+            }
+            print(f"  - {model_with_subfolder}: (Fisher merging) (language: {lang})")
+
+        print(f"\\nUsing Fisher merging for {len(valid_languages)} models")
+
+        # Use the first model as the base model (remove it from models_to_merge)
+        if models_and_weights:
+            base_model_for_merge = list(models_and_weights.keys())[0]
+
+            # Store base model info for save_merge_details
+            first_model_info = list(models_and_weights.values())[0]
+            base_model_info = {
+                'model_with_subfolder': base_model_for_merge,
+                'weight': 1.0,
+                'base_model_name': first_model_info['base_model_name'],
+                'subfolder': first_model_info['subfolder'],
+                'language': first_model_info['language'],
+                'locale': first_model_info['locale']
+            }
+
+            # Remove the first model from models_and_weights
+            first_model_key = list(models_and_weights.keys())[0]
+            models_and_weights.pop(first_model_key)
+
+            print(f"Using {base_model_for_merge} as base model")
+            print(f"Fisher merging mode: {args.mode}")
+        else:
+            base_model_for_merge = BASE_MODEL
+
     # --- 2. Perform Model Merging ---
     print("\n--- Step 2: Performing Model Merge ---")
-    linear_merger = merging_methods_dict["linear"]()
-    
+
+    # Choose the appropriate merging method
+    if args.mode in ['fisher', 'fisher_simple', 'fisher_dataset']:
+        merger = merging_methods_dict[args.mode]()
+    else:
+        merger = merging_methods_dict["linear"]()
+
     # Extract model names and weights for merging
-    if args.mode in ['similarity', 'average']:
+    if args.mode in ['similarity', 'average', 'fisher', 'fisher_simple', 'fisher_dataset']:
         # These modes use complex dict structure
         models_to_merge_paths = list(models_and_weights.keys())
         weight_values = [info['weight'] for info in models_and_weights.values()]
-        # base_model_for_merge is already set in similarity/average sections above
+        # base_model_for_merge is already set in similarity/average/fisher sections above
     elif args.mode == 'manual':
         models_to_merge_paths = list(models_and_weights.keys())
         weight_values = [models_and_weights[model] for model in models_to_merge_paths]
-        
+
         # Use the first model as the base model (remove it from models_to_merge)
         if models_to_merge_paths:
             base_model_for_merge = models_to_merge_paths[0]
             models_to_merge_paths = models_to_merge_paths[1:]  # Remove first model from merge list
             base_weight = weight_values[0]
             weight_values = weight_values[1:]  # Remove first weight
-            
+
             # Renormalize ALL weights (including base model) to sum to 1.0
             total_manual_weight = base_weight + sum(weight_values)
             if total_manual_weight > 0:
@@ -486,12 +610,12 @@ def main():
                 if weight_values:
                     total_remaining_weight = sum(weight_values)
                     weight_values = [w * (1 - base_weight) / total_remaining_weight for w in weight_values]
-                
+
                 # Note: Manual mode doesn't use base_model_info, so we don't update it here
-                
+
             print(f"Normalized base model weight: {base_weight:.6f}")
             print(f"Remaining models total weight: {sum(weight_values):.6f}")
-            
+
             print(f"Using {base_model_for_merge} as base model")
             print(f"Base model weight: {base_weight:.6f}")
             print(f"Remaining models total weight: {sum(weight_values):.6f}")
@@ -510,15 +634,40 @@ def main():
                 # Renormalize remaining weights to sum to (1 - base_weight)
                 total_weight = sum(weight_values)
                 weight_values = [w * (1 - base_weight) / total_weight for w in weight_values]
-                
+
         print(f"Normalized base model weight: {base_weight:.6f}")
         print(f"Remaining models total weight: {sum(weight_values):.6f}")
     else:
         models_to_merge_paths = list(models_and_weights.keys())
         weight_values = [info['weight'] for info in models_and_weights.values()]
         base_model_for_merge = BASE_MODEL
-    
-    method_params = {"weights": weight_values}
+
+    # Set up method parameters based on merging mode
+    if args.mode in ['fisher', 'fisher_simple']:
+        method_params = {}  # Fisher methods don't need additional parameters
+    elif args.mode == 'fisher_dataset':
+        # Set up dataset configuration for Fisher merging
+        if args.dataset_name is None:
+            print("Error: --dataset-name is required for fisher_dataset mode")
+            return
+
+        method_params = {
+            "dataset_config": {
+                "dataset_name": args.dataset_name,
+                "dataset_split": args.dataset_split,
+                "text_column": args.text_column,
+                "label_column": args.label_column
+            },
+            "num_fisher_examples": args.num_fisher_examples,
+            "normalize_fisher_weight": True,
+            "minimal_fisher_weight": 1e-6,
+            "fisher_scaling_coefficients": None
+        }
+        print(f"Using dataset: {args.dataset_name}")
+        print(f"Text column: {args.text_column}, Label column: {args.label_column}")
+        print(f"Number of Fisher examples: {args.num_fisher_examples}")
+    else:
+        method_params = {"weights": weight_values}
     
     print("Starting merge...")
     print(f"Base model: {base_model_for_merge}")
@@ -526,7 +675,7 @@ def main():
     print(f"Weights: {weight_values}")
     
     # Perform the merge
-    result = linear_merger.merge(
+    result = merger.merge(
         base_model=base_model_for_merge,
         models_to_merge=models_to_merge_paths,
         method_params=method_params,

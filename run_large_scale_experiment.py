@@ -40,11 +40,11 @@ def get_model_for_locale(csv_path, locale):
 def run_merge(mode, target_lang):
     """Run the merging pipeline for a specific mode and target language."""
     print(f"Running {mode} merge for {target_lang}...")
-    
-    cmd = [sys.executable, "run_merging_pipeline.py", 
-           "--mode", mode, 
+
+    cmd = [sys.executable, "run_merging_pipeline.py",
+           "--mode", mode,
            "--target-lang", target_lang]
-    
+
     try:
         result = subprocess.run(cmd, check=True, capture_output=True, text=True)
         print(f"✓ {mode} merge completed for {target_lang}")
@@ -73,7 +73,7 @@ def run_evaluation(base_model, model_dir, locale, prefix):
         print(f"✗ Evaluation failed for {locale} ({prefix}): {e}")
         return False
 
-def run_experiment_for_locale(locale, skip_baseline=False, skip_similarity=False, skip_average=False):
+def run_experiment_for_locale(locale, skip_baseline=False, skip_similarity=False, skip_average=False, skip_fisher=False, skip_fisher_simple=False):
     """Run complete experiment for a single locale."""
     print(f"\n{'='*60}")
     print(f"Running experiment for locale: {locale}")
@@ -123,7 +123,21 @@ def run_experiment_for_locale(locale, skip_baseline=False, skip_similarity=False
             results['average'] = False
     else:
         results['average'] = "skipped"
-    
+
+    # 4. Run Fisher merge and evaluation
+    if not skip_fisher:
+        print(f"\n--- Fisher Merge for {locale} ---")
+        merge_success = run_merge("fisher_simple", locale)  # Use fisher_simple for now
+        if merge_success:
+            # Evaluate the merged model
+            eval_success = run_evaluation("merged_models/fisher_simple_merge_{locale}".format(locale=locale),
+                                       None, locale, "fisher_simple")
+            results['fisher_simple'] = eval_success
+        else:
+            results['fisher_simple'] = False
+    else:
+        results['fisher_simple'] = "skipped"
+
     return results
 
 def main():
@@ -134,8 +148,12 @@ def main():
                        help="Skip baseline evaluation")
     parser.add_argument("--skip-similarity", action="store_true", 
                        help="Skip similarity merging")
-    parser.add_argument("--skip-average", action="store_true", 
+    parser.add_argument("--skip-average", action="store_true",
                        help="Skip average merging")
+    parser.add_argument("--skip-fisher", action="store_true",
+                       help="Skip Fisher merging")
+    parser.add_argument("--skip-fisher-simple", action="store_true",
+                       help="Skip simplified Fisher merging")
     parser.add_argument("--start-from", type=int, default=0,
                        help="Start from specific locale index (for resuming)")
     parser.add_argument("--max-locales", type=int, default=None,
@@ -171,6 +189,8 @@ def main():
     print(f"Skip baseline: {args.skip_baseline}")
     print(f"Skip similarity: {args.skip_similarity}")
     print(f"Skip average: {args.skip_average}")
+    print(f"Skip Fisher: {args.skip_fisher}")
+    print(f"Skip Fisher Simple: {args.skip_fisher_simple}")
     print(f"Start from index: {args.start_from}")
     
     # Track overall results
@@ -180,10 +200,12 @@ def main():
         print(f"\nProcessing locale {i+1}/{len(locales)}: {locale}")
         
         results = run_experiment_for_locale(
-            locale, 
+            locale,
             skip_baseline=args.skip_baseline,
             skip_similarity=args.skip_similarity,
-            skip_average=args.skip_average
+            skip_average=args.skip_average,
+            skip_fisher=args.skip_fisher,
+            skip_fisher_simple=args.skip_fisher_simple
         )
         
         overall_results[locale] = results
@@ -210,11 +232,13 @@ def main():
     successful_baseline = sum(1 for r in overall_results.values() if r.get('baseline') == True)
     successful_similarity = sum(1 for r in overall_results.values() if r.get('similarity') == True)
     successful_average = sum(1 for r in overall_results.values() if r.get('average') == True)
-    
+    successful_fisher_simple = sum(1 for r in overall_results.values() if r.get('fisher_simple') == True)
+
     print(f"Total locales processed: {total_locales}")
     print(f"Successful baseline evaluations: {successful_baseline}")
     print(f"Successful similarity merges: {successful_similarity}")
     print(f"Successful average merges: {successful_average}")
+    print(f"Successful Fisher Simple merges: {successful_fisher_simple}")
     
     # Save final results
     final_results_file = "experiment_final_results.json"
@@ -225,6 +249,8 @@ def main():
                 'skip_baseline': args.skip_baseline,
                 'skip_similarity': args.skip_similarity,
                 'skip_average': args.skip_average,
+                'skip_fisher': args.skip_fisher,
+                'skip_fisher_simple': args.skip_fisher_simple,
                 'start_from': args.start_from,
                 'max_locales': args.max_locales
             },
@@ -232,7 +258,8 @@ def main():
                 'total_locales': total_locales,
                 'successful_baseline': successful_baseline,
                 'successful_similarity': successful_similarity,
-                'successful_average': successful_average
+                'successful_average': successful_average,
+                'successful_fisher_simple': successful_fisher_simple
             },
             'detailed_results': overall_results
         }, f, indent=2)
