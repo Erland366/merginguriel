@@ -527,8 +527,9 @@ def main():
             print("No models found for the target language")
             return
 
-        # For Fisher merging, use similarity weights for selection but not for merging
+        # For Fisher merging, store both URIEL weights and model info
         models_and_weights = {}
+        uriel_weights = []  # Store URIEL similarity weights for Fisher merging
 
         for lang, weight in valid_languages:
             model_info = model_mapping_df.loc[lang]
@@ -541,39 +542,45 @@ def main():
             # Use the format expected by auto_merge_llm: model_name@subfolder
             model_with_subfolder = f"{model_name}@{subfolder}"
             models_and_weights[model_with_subfolder] = {
-                'weight': 1.0,  # Equal weights for Fisher merging
+                'weight': weight,  # Store URIEL weight for reference
                 'subfolder': subfolder,
                 'language': lang,
                 'locale': locale,
                 'base_model_name': model_name
             }
-            print(f"  - {model_with_subfolder}: (Fisher merging) (language: {lang})")
+            uriel_weights.append(weight)  # Collect URIEL weights for Fisher merging
+            print(f"  - {model_with_subfolder}: {weight:.6f} (URIEL weight) (language: {lang})")
 
-        print(f"\\nUsing Fisher merging for {len(valid_languages)} models")
+        print(f"\\nUsing Fisher merging with URIEL weighting for {len(valid_languages)} models")
 
         # Use the first model as the base model (remove it from models_to_merge)
         if models_and_weights:
             base_model_for_merge = list(models_and_weights.keys())[0]
+            base_urial_weight = uriel_weights[0]  # First model's URIEL weight
 
             # Store base model info for save_merge_details
             first_model_info = list(models_and_weights.values())[0]
             base_model_info = {
                 'model_with_subfolder': base_model_for_merge,
-                'weight': 1.0,
+                'weight': base_urial_weight,
                 'base_model_name': first_model_info['base_model_name'],
                 'subfolder': first_model_info['subfolder'],
                 'language': first_model_info['language'],
                 'locale': first_model_info['locale']
             }
 
-            # Remove the first model from models_and_weights
+            # Remove the first model from models_and_weights and uriel_weights
             first_model_key = list(models_and_weights.keys())[0]
             models_and_weights.pop(first_model_key)
+            uriel_weights = uriel_weights[1:]  # Remove first weight
 
             print(f"Using {base_model_for_merge} as base model")
             print(f"Fisher merging mode: {args.mode}")
+            print(f"Base model URIEL weight: {base_urial_weight:.6f}")
+            print(f"Remaining models URIEL weights: {[f'{w:.6f}' for w in uriel_weights]}")
         else:
             base_model_for_merge = BASE_MODEL
+            uriel_weights = []
 
     # --- 2. Perform Model Merging ---
     print("\n--- Step 2: Performing Model Merge ---")
@@ -644,7 +651,24 @@ def main():
 
     # Set up method parameters based on merging mode
     if args.mode in ['fisher', 'fisher_simple']:
-        method_params = {}  # Fisher methods don't need additional parameters
+        # For Fisher merging, pass URIEL weights as method parameters
+        if 'uriel_weights' in locals() and uriel_weights:
+            # Normalize URIEL weights for remaining models (excluding base model)
+            if uriel_weights:
+                total_urial_weight = sum(uriel_weights)
+                if total_urial_weight > 0:
+                    normalized_urial_weights = [w / total_urial_weight for w in uriel_weights]
+                    method_params = {"weights": normalized_urial_weights}
+                    print(f"Passing normalized URIEL weights to Fisher merging: {[f'{w:.6f}' for w in normalized_urial_weights]}")
+                else:
+                    method_params = {"weights": [1.0 / len(uriel_weights)] * len(uriel_weights)}
+                    print("Using equal weights for Fisher merging (URIEL weights sum to 0)")
+            else:
+                method_params = {}  # No additional models to merge
+                print("No URIEL weights to pass to Fisher merging")
+        else:
+            method_params = {}  # Fallback to pure Fisher merging
+            print("No URIEL weights available, using pure Fisher merging")
     elif args.mode == 'fisher_dataset':
         # Set up dataset configuration for Fisher merging
         if args.dataset_name is None:

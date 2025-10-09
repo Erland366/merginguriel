@@ -152,8 +152,11 @@ def main():
                        help="Skip average merging")
     parser.add_argument("--skip-fisher", action="store_true",
                        help="Skip Fisher merging")
-    parser.add_argument("--skip-fisher-simple", action="store_true",
+      parser.add_argument("--skip-fisher-simple", action="store_true",
                        help="Skip simplified Fisher merging")
+    parser.add_argument("--fisher-mode", type=str, default="fisher_simple",
+                       choices=["fisher", "fisher_simple", "fisher_dataset"],
+                       help="Fisher merging mode to use (default: fisher_simple)")
     parser.add_argument("--start-from", type=int, default=0,
                        help="Start from specific locale index (for resuming)")
     parser.add_argument("--max-locales", type=int, default=None,
