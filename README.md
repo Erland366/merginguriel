@@ -114,9 +114,6 @@ Flow overview:
 - Data size: 300–1000 examples (good), 1000–2000 (robust). Diminishing returns beyond a few thousand short texts.
 - Normalization: internal Fisher-norm normalization stabilizes contributions; can be exposed as a flag if you need exact URIEL proportions.
 
-On-the-fly similarity notes
-- If `--similarity-source dense` is used, the pipeline computes a dense cosine matrix across locales, sparsifies with `--top-k`, applies Sinkhorn (`--sinkhorn-iters`), then selects the top `--num-languages` for the target. The selected weights are renormalized to sum to 1 for merging.
-
 **Merging Method Examples**
 - `similarity` (auto top‑K by language similarity; linear merge):
   - `python merginguriel/run_merging_pipeline_refactored.py --mode similarity --target-lang th-TH --num-languages 5 --similarity-source dense --top-k 20 --sinkhorn-iters 20`
@@ -184,3 +181,41 @@ Advanced methods (available in the underlying library):
 **Extending**
 - Add strategies under `submodules/auto_merge_llm/auto_merge_llm/methods` and register in `submodules/auto_merge_llm/auto_merge_llm/methods/__init__.py`.
 - For new corpora, adapt `fisher_dataset.py` to construct a shared dataloader.
+
+**How to Kill Iterative Training:**
+
+Sometimes iterative training can become unresponsive or you may need to stop it. Here are the methods to kill the process:
+
+1. **Find the Process ID (PID):**
+   ```bash
+   ps aux | grep python | grep iterative
+   ```
+   Look for the process running `run_iterative_training.py`
+
+2. **Force Kill the Process:**
+   ```bash
+   kill -9 <PID>
+   ```
+   Replace `<PID>` with the actual process ID (e.g., `kill -9 916746`)
+
+3. **Check if Process is Still Running:**
+   ```bash
+   ps aux | grep python | grep iterative
+   ```
+
+4. **Monitor GPU Usage (if needed):**
+   ```bash
+   nvidia-smi
+   ```
+
+**Why Ctrl+C May Not Work:**
+- Sequential training can become unresponsive during model loading/saving
+- GPU operations may prevent interrupt signals from being processed
+- Training loops with heavy computation may not check for interrupts frequently
+- Large batch sizes can make the system unresponsive
+
+**Prevention Tips:**
+- Use appropriate batch sizes for your GPU memory
+- Monitor GPU memory usage with `nvidia-smi` during training
+- Consider using `--max-epochs 1` for testing before full training runs
+- Use `--sequential-training` (enabled by default) to prevent OOM issues
