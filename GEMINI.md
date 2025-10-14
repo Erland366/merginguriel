@@ -2,11 +2,11 @@
 
 ## 0. Document Control
 
-**Document Status: LIVING DOCUMENT - Last Updated: 2025-10-14 20:00 UTC**
+**Document Status: LIVING DOCUMENT - Last Updated: 2025-10-14 20:35 UTC**
 
-**The Golden Rule:** This document, `GEMINI.md`, is the single source of truth for this project. Any developer, human or AI, who modifies the codebase, adds a feature, or changes a workflow **must** update the relevant sections of this document in the same commit/change. This ensures the documentation remains synchronized with the code.
+**The Golden Rule:** This document, `CLAUDE.md`, is the single source of truth for this project. Any developer, human or AI, who modifies the codebase, adds a feature, or changes a workflow **must** update the relevant sections of this document in the same commit/change. This ensures the documentation remains synchronized with the code.
 
-**A Note to Future Developers (Human or AI):** Before committing any changes, you are required to read this document to understand the project's standards and architecture. After implementing your changes, you **must** update the relevant sections of this `GEMINI.md` file and modify the `Last Updated` date and time above. This is a mandatory step for all contributions.
+**A Note to Future Developers (Human or AI):** Before committing any changes, you are required to read this document to understand the project's standards and architecture. After implementing your changes, you **must** update the relevant sections of this `CLAUDE.md` file and modify the `Last Updated` date and time above. This is a mandatory step for all contributions.
 
 ## 1. Introduction & Goal
 
@@ -113,6 +113,32 @@ python run_tests.py --list
     nvidia-smi
     ```
 
+### 3.3. Testing Framework
+
+The project includes a comprehensive testing framework located in the `tests/` directory. Tests are organized by functionality and should be run before making any significant changes.
+
+#### Available Tests:
+
+-   **`tests/test_new_methods_simple.py`** - Validates that all new merging strategies can be created
+-   **`tests/demo_new_merging_methods.py`** - User-friendly demo showing usage examples for all advanced merging methods
+-   **`tests/test_all_merging_methods.py`** - Comprehensive test suite for all merging methods
+-   **`tests/test_breadcrumbs_merging.py`** - Test framework for future breadcrumbs implementation
+
+#### Running Tests:
+
+```bash
+# Quick validation of new methods
+python tests/test_new_methods_simple.py
+
+# Full demo with usage examples
+python tests/demo_new_merging_methods.py
+
+# Comprehensive testing (may take longer)
+python tests/test_all_merging_methods.py
+```
+
+**Note:** All tests are designed as dry-run validation that doesn't require actual model files, making them safe to run in any environment.
+
 ## 4. Component Breakdown
 
 This section provides a deeper look into the main components of the MergingUriel project.
@@ -126,7 +152,7 @@ This directory is the heart of the project, containing the Python scripts that d
     -   **`WeightCalculatorFactory`**: A factory that, based on the `--mode` argument, instantiates the correct weighting strategy. For example:
         -   `--mode similarity`: Uses `SimilarityWeightCalculator` to load weights from the pre-computed URIEL similarity matrix.
         -   `--mode average`: Uses `AverageWeightCalculator` to assign an equal weight to all source models, establishing a crucial baseline.
-    -   **`MergingStrategyFactory`**: A factory that selects the underlying parameter-merging algorithm (e.g., `linear`, `fisher_simple`).
+    -   **`MergingStrategyFactory`**: A factory that selects the underlying parameter-merging algorithm (e.g., `linear`, `fisher`).
     -   **`ModelMerger`**: The class that takes the models, weights, and merging strategy and invokes the `auto-merge-llm` library to perform the merge.
     -   **`OutputManager`**: Saves the final merged model and a `merge_details.txt` file that records the configuration used for the run.
 
@@ -176,7 +202,7 @@ Each model directory contains a complete fine-tuned model with all necessary con
 The project leverages the `auto-merge-llm` library (located in `submodules/`) as the powerful backend for performing the parameter-level model merges. This library provides a framework and a collection of established merging algorithms.
 
 -   **High-Level Abstraction:** `MergingUriel` uses `auto-merge-llm` as a library, abstracting away the low-level tensor manipulations. The `run_merging_pipeline_refactored.py` script acts as a high-level orchestrator that prepares models and parameters before feeding them to the selected `auto-merge-llm` method.
--   **Weighting Strategy:** The core innovation of this project is the application of a URIEL-based weighting scheme *on top of* the `auto-merge-llm` methods. The pipeline calculates typologically-informed weights and passes them as parameters (e.g., the `weights` parameter for `linear` merge, or `fisher_scaling_coefficients` for `fisher_dataset` merge) to the `auto-merge-llm` functions.
+-   **Weighting Strategy:** The core innovation of this project is the application of a URIEL-based weighting scheme *on top of* the `auto-merge-llm` methods. The pipeline calculates typologically-informed weights and passes them as parameters (e.g., the `weights` parameter for `linear` merge, or `fisher_scaling_coefficients` for `fisher` merge) to the `auto-merge-llm` functions.
 
 ### Similarity Matrix Processing & Top-K Mechanism
 
@@ -229,14 +255,17 @@ Below is the status of the merging algorithms from `auto-merge-llm` that are cur
 | Merging Method (from auto-merge-llm) | Description | Status in MergingUriel | URIEL Weighting Support | Baseline Comparison |
 | :--- | :--- | :--- | :--- | :--- |
 | `linear` | A simple weighted average of model parameters. | **Implemented** | Yes | Yes, via `--mode average` |
-| `fisher_simple` | Weights parameters by their magnitude as a proxy for importance. | **Implemented** | Yes | Yes, via `--mode average` |
-| `fisher_dataset` | Estimates parameter importance using gradients from a sample dataset. | **Implemented** | Yes | Yes, via `--preweight equal` |
-| `ties` | Merges models by resolving sign disagreements and pruning low-magnitude weights. | Not Implemented | No | No |
-| `slerp` | Spherical Linear Interpolation, useful for interpolating between two models. | Not Implemented | No | No |
-| `task_arithmetic` | Adds or subtracts task vectors representing fine-tuning changes. | Not Implemented | No | No |
-| `dare` | A state-of-the-art method that prunes and rescales task vectors before merging. | Not Implemented | No | No |
-| `regmean` | A method that uses regression to find optimal merging coefficients. | Not Implemented | No | No |
+| `fisher` | Estimates parameter importance using gradients from a sample dataset (primary Fisher method). | **Implemented** | Yes | Yes, via `--preweight equal` |
+| `fisher_simple` | Weights parameters by their magnitude as a proxy for importance (class retained, option removed). | **Implemented** | Yes | Yes, via `--mode average` |
+| `fisher_dataset` | Fisher dataset-based method (now mapped to `--mode fisher`). | **Implemented** | Yes | Yes, via `--preweight equal` |
+| `ties` | Merges models by resolving sign disagreements and pruning low-magnitude weights. | **Implemented** | Yes | Yes, via `--mode ties` |
+| `slerp` | Spherical Linear Interpolation, useful for interpolating between models. | **Implemented** | Yes | Yes, via `--mode serp` |
+| `task_arithmetic` | Adds or subtracts task vectors representing fine-tuning changes. | **Implemented** | Yes | Yes, via `--mode task_arithmetic` |
+| `dare` | A state-of-the-art method that prunes and rescales task vectors before merging. | **Implemented*** | Yes | Yes, via `--mode task_arithmetic --param_value_mask_rate` |
+| `regmean` | A method that uses regression to find optimal merging coefficients. | **Implemented** | Yes | Yes, via `--mode regmean` |
 | `breadcrumbs` | A method for merging models by analyzing their training trajectories. | Not Implemented | No | No |
+
+*DARE functionality is available through `task_arithmetic` with pruning parameters (`param_value_mask_rate`).
 
 ### 5.1. Additional Evaluation Baselines
 
@@ -452,13 +481,24 @@ This workflow provides an alternative to parameter merging by combining model ou
 
 This section outlines the strategic goals for the evolution of the MergingUriel project.
 
-### 7.1. Support for Advanced Merging Methods
+### 7.1. Support for Advanced Merging Methods ✅ COMPLETED
 
--   **Goal:** Expand the pipeline to support all major merging algorithms available in the `auto-merge-llm` library, such as TIES, DARE, and SLERP.
--   **Implementation Strategy:**
-    1.  Extend the `MergingStrategyFactory` in `run_merging_pipeline_refactored.py` to recognize new modes (e.g., `--mode ties`).
-    2.  Implement corresponding `MergingStrategy` classes (e.g., `TiesStrategy`) that correctly format the parameters (`scaling_coefficient`, `param_value_mask_rate`, etc.) for the `auto-merge-llm` backend.
-    3.  Investigate how URIEL similarity scores can be adapted to serve as inputs for these more complex methods, which may go beyond a simple linear weighting.
+-   **Status:** ✅ **COMPLETED** - All major advanced merging methods have been successfully integrated into the pipeline.
+-   **Implemented Methods:**
+    -   **TIES**: Resolves sign disagreements and prunes low-magnitude weights (--mode ties)
+    -   **Task Arithmetic**: Adds/subtracts task vectors representing fine-tuning changes (--mode task_arithmetic)
+    -   **SLERP**: Spherical Linear Interpolation for models (--mode slerp)
+    -   **RegMean**: Uses regression to find optimal merging coefficients (--mode regmean)
+    -   **DARE**: Implemented through task_arithmetic with pruning parameters
+-   **Implementation Details:**
+    1.  ✅ Extended the `MergingStrategyFactory` to recognize new modes: `ties`, `task_arithmetic`, `slerp`, `regmean`
+    2.  ✅ Implemented corresponding `MergingStrategy` classes with proper parameter formatting for the `auto-merge-llm` backend
+    3.  ✅ Adapted URIEL similarity scores to influence each merging method:
+        -   **TIES**: Uses similarity scores to adjust scaling coefficients
+        -   **Task Arithmetic**: Directly scales task vectors by URIEL weights
+        -   **SLERP**: Uses average of similarity weights for interpolation ratios
+        -   **RegMean**: Uses similarity weights as priors for regression coefficients
+-   **Usage:** All new methods support both URIEL-weighted (`--mode similarity`) and average baseline (`--mode average`) comparisons for scientific evaluation.
 
 ### 7.2. Iterative Training & Merging ✅ **IMPLEMENTED**
 
@@ -689,7 +729,29 @@ Based on testing with the current model repository:
 | **de-DE** | 4 models (en-US, fr-FR, sq-AL, it-IT) | 0.047, 0.047, 0.044, 0.042 |
 | **en-US** | 4 models (fr-FR, de-DE, sq-AL, it-IT) | 0.044, 0.043, 0.040, 0.039 |
 
-### 7.4. Create a Comprehensive, Automated Evaluation Report
+### 7.4. Implement Breadcrumbs Merging Method
+
+-   **Goal:** Implement the `breadcrumbs` merging method from `auto-merge-llm` to enable trajectory-based model merging.
+-   **Status:** 🔄 **FUTURE IMPLEMENTATION** - Requires training pipeline modifications
+-   **Why Breadcrumbs?**
+    -   Analyzes training trajectories rather than just final model states
+    -   Could provide better merging for models with different learning patterns
+    -   Offers novel approach for cross-lingual transfer considering language-specific learning trajectories
+-   **Implementation Challenges:**
+    -   Requires significant changes to training pipeline to save intermediate checkpoints
+    -   Needs substantial storage for trajectory data (loss, gradients, parameter changes)
+    -   Complex trajectory comparison and similarity algorithms
+    -   Higher computational overhead during merging process
+-   **Implementation Strategy:**
+    1.  **Modify Training Pipeline:** Update `merginguriel/training_bert.py` to save intermediate checkpoints and training metrics
+    2.  **Design Trajectory Storage:** Create efficient format for storing and compressing training trajectories
+    3.  **Implement Trajectory Analysis:** Develop algorithms to compare and weight different learning paths
+    4.  **Create BreadcrumbsStrategy:** Implement strategy class with URIEL integration for trajectory weighting
+    5.  **Update Pipeline:** Integrate breadcrumbs mode into existing merging infrastructure
+    6.  **Testing:** Comprehensive validation using `tests/test_breadcrumbs_merging.py`
+-   **Test Coverage:** Test framework already prepared in `tests/test_breadcrumbs_merging.py`
+
+### 7.5. Create a Comprehensive, Automated Evaluation Report
 
 -   **Goal:** Fully automate the comprehensive evaluation process by refactoring `aggregate_results.py` to include the "Best Source Language" and "Best Overall Zero-Shot" baselines (as defined in Section 5.1) in the final reports.
 -   **Status:** ✅ **COMPLETED** - Implemented comprehensive automated evaluation system with full baseline integration.

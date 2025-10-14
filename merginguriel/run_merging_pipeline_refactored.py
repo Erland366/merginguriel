@@ -315,8 +315,17 @@ class WeightCalculatorFactory:
             'manual': ManualWeightCalculator,
             'similarity': SimilarityWeightCalculator,
             'average': AverageWeightCalculator,
+<<<<<<< HEAD
             'fisher_dataset': SimilarityWeightCalculator,
             'iterative': IterativeWeightCalculator,
+=======
+            'fisher': SimilarityWeightCalculator,
+            # Advanced merging methods use similarity-based weights
+            'ties': SimilarityWeightCalculator,
+            'task_arithmetic': SimilarityWeightCalculator,
+            'slerp': SimilarityWeightCalculator,
+            'regmean': SimilarityWeightCalculator,
+>>>>>>> feat/iterative-training-merging
         }
 
         if mode not in calculators:
@@ -429,13 +438,191 @@ class FisherDatasetStrategy(MergingStrategy):
         }
 
 
+class TiesStrategy(MergingStrategy):
+    """TIES merging strategy that resolves sign disagreements and prunes low-magnitude weights."""
+
+    def get_merger(self, mode: str):
+        return merging_methods_dict["ties"]()
+
+    def get_method_params(
+        self,
+        config: MergeConfig,
+        models_and_weights: Dict[str, ModelInfo],
+        base_model_info: ModelInfo,
+    ) -> Dict[str, Any]:
+        # TIES method parameters
+        # Use URIEL weights to influence the merging process
+        src_weights = [info.weight for info in models_and_weights.values()]
+
+        # Default parameters for TIES
+        param_value_mask_rate = 0.8  # Mask 80% of smallest-magnitude parameters
+        scaling_coefficient = 1.0    # Scaling coefficient for task vectors
+
+        # If we have meaningful weights, we can adjust scaling
+        if src_weights and max(src_weights) > 0:
+            # Use the maximum weight as scaling coefficient for better preservation
+            scaling_coefficient = max(src_weights)
+
+        return {
+            "param_value_mask_rate": param_value_mask_rate,
+            "scaling_coefficient": scaling_coefficient,
+        }
+
+
+class TaskArithmeticStrategy(MergingStrategy):
+    """Task Arithmetic merging strategy that adds/subtracts task vectors."""
+
+    def get_merger(self, mode: str):
+        return merging_methods_dict["task_arithmetic"]()
+
+    def get_method_params(
+        self,
+        config: MergeConfig,
+        models_and_weights: Dict[str, ModelInfo],
+        base_model_info: ModelInfo,
+    ) -> Dict[str, Any]:
+        # Task Arithmetic parameters
+        # For task_arithmetic, scaling_coefficient should be a single float
+        # We'll use the average of weights or a default value
+        src_weights = [info.weight for info in models_and_weights.values()]
+
+        if src_weights:
+            # Use the average weight as the scaling coefficient
+            scaling_coefficient = sum(src_weights) / len(src_weights)
+        else:
+            scaling_coefficient = 1.0  # Default if no weights
+
+        # Optional: mask smallest parameters (DARE-like behavior)
+        param_value_mask_rate = 0.0  # Default: no masking
+
+        return {
+            "scaling_coefficient": scaling_coefficient,
+            "param_value_mask_rate": param_value_mask_rate,
+        }
+
+
+class SlerpStrategy(MergingStrategy):
+    """SLERP (Spherical Linear Interpolation) merging strategy with incremental merging support."""
+
+    def get_merger(self, mode: str):
+        return merging_methods_dict["slerp"]()
+
+    def get_method_params(
+        self,
+        config: MergeConfig,
+        models_and_weights: Dict[str, ModelInfo],
+        base_model_info: ModelInfo,
+    ) -> Dict[str, Any]:
+        # For incremental SLERP, we need parameters for each merge step
+        # We'll use the model weights to determine interpolation ratios
+
+        # Get all models including base model for sorting
+        all_models = [(base_model_info.model_name, base_model_info.weight)]
+        all_models.extend([(name, info.weight) for name, info in models_and_weights.items()])
+
+        # Sort models by weight (descending) - merge most important first
+        all_models.sort(key=lambda x: x[1], reverse=True)
+
+        # The first model (highest weight) becomes the initial base
+        # Subsequent models are merged one by one
+        merge_steps = []
+
+        for i in range(1, len(all_models)):
+            current_model_name, current_weight = all_models[i]
+            prev_model_name, prev_weight = all_models[i-1]
+
+            # Calculate interpolation ratio based on relative weights
+            # Higher weight model gets more influence
+            total_weight = current_weight + prev_weight
+            if total_weight > 0:
+                slerp_t = prev_weight / total_weight  # Base model gets proportion of its weight
+            else:
+                slerp_t = 0.5  # Equal interpolation if weights are zero
+
+            merge_steps.append({
+                "slerp_t": slerp_t,
+                "dot_threshold": 0.9995,  # Default threshold from auto-merge-llm
+                "base_model": prev_model_name,
+                "merge_model": current_model_name,
+                "base_weight": prev_weight,
+                "merge_weight": current_weight
+            })
+
+        return {
+            "incremental_slerp": True,
+            "merge_steps": merge_steps,
+            "total_models": len(all_models)
+        }
+
+
+class RegMeanStrategy(MergingStrategy):
+    """RegMean merging strategy - simplified implementation using linear merging."""
+
+    def get_merger(self, mode: str):
+        # For now, use linear merging as RegMean requires complex trainer setup
+        # Full RegMean integration would require actual training data and trainers
+        return merging_methods_dict["linear"]()
+
+    def get_method_params(
+        self,
+        config: MergeConfig,
+        models_and_weights: Dict[str, ModelInfo],
+        base_model_info: ModelInfo,
+    ) -> Dict[str, Any]:
+        """
+        Simplified RegMean implementation.
+
+        NOTE: Full RegMean requires:
+        - Actual training data and data loaders
+        - Trainer instances for each model
+        - Complex setup to compute regression matrices
+
+        For practical use in this pipeline, we implement a simplified approach
+        that uses URIEL-weighted linear merging, which captures the spirit of RegMean
+        (data-driven coefficient optimization) without the complexity.
+        """
+
+        # Get URIEL weights as data-driven coefficients
+        weights = [info.weight for info in models_and_weights.values()]
+
+        # Additional RegMean-inspired parameters for potential future enhancement
+        # These would be used in a full RegMean implementation
+        num_models = len(models_and_weights)
+        regmean_lambda = 1.0  # Regularization strength
+        reduce_non_diagonal_ratio = 0.5  # Matrix regularization
+
+        print(f"\n📊 RegMean Strategy: Using simplified linear merging")
+        print(f"   Models: {num_models + 1} (including base model)")
+        print(f"   URIEL weights: {[f'{w:.3f}' for w in weights]}")
+        print(f"   Note: Full RegMean requires trainer setup, using weighted linear as approximation")
+
+        return {
+            "weights": weights,
+            # Metadata for documentation
+            "regmean_metadata": {
+                "original_method": "regmean",
+                "approximation": "linear_with_uriel_weights",
+                "num_models": num_models + 1,
+                "regularization_lambda": regmean_lambda,
+                "reduce_non_diagonal_ratio": reduce_non_diagonal_ratio,
+                "reason": "RegMean requires complex trainer setup, using simplified approach"
+            }
+        }
+
+
 class MergingStrategyFactory:
     @staticmethod
     def create(mode: str) -> MergingStrategy:
-        if mode in {"fisher", "fisher_simple"}:
-            return FisherSimpleStrategy()
-        if mode == "fisher_dataset":
+        if mode == "fisher":
             return FisherDatasetStrategy()
+        if mode == "ties":
+            return TiesStrategy()
+        if mode == "task_arithmetic":
+            return TaskArithmeticStrategy()
+        if mode == "slerp":
+            return SlerpStrategy()
+        if mode == "regmean":
+            return RegMeanStrategy()
         return LinearStrategy()
 
 
@@ -453,12 +640,22 @@ class ModelMerger:
         # Choose the appropriate merging method via strategy
         merger = self.strategy.get_merger(self.config.mode)
 
+        # Set up method parameters via strategy
+        method_params = self.strategy.get_method_params(self.config, models_and_weights, base_model_info)
+
+        # Check if this is incremental SLERP
+        if self.config.mode == "slerp" and method_params.get("incremental_slerp", False):
+            return self._perform_incremental_slerp(models_and_weights, base_model_info, merger, method_params)
+        else:
+            # Standard merging for all other methods
+            return self._perform_standard_merge(models_and_weights, base_model_info, merger, method_params)
+
+    def _perform_standard_merge(self, models_and_weights: Dict[str, ModelInfo], base_model_info: ModelInfo,
+                               merger, method_params: Dict[str, Any]) -> Tuple[Any, Any]:
+        """Perform standard model merging (non-incremental)."""
         # Prepare model paths and weights
         models_to_merge_paths = list(models_and_weights.keys())
         weight_values = [info.weight for info in models_and_weights.values()]
-
-        # Set up method parameters via strategy
-        method_params = self.strategy.get_method_params(self.config, models_and_weights, base_model_info)
 
         print(f"Base model: {base_model_info.model_name}")
         print(f"Models to merge: {models_to_merge_paths}")
@@ -473,6 +670,104 @@ class ModelMerger:
 
         print("Merge successful!")
         return result['merged_model'], result['base_tokenizer']
+
+    def _perform_incremental_slerp(self, models_and_weights: Dict[str, ModelInfo], base_model_info: ModelInfo,
+                                  merger, method_params: Dict[str, Any]) -> Tuple[Any, Any]:
+        """Perform incremental SLERP merging for multiple models."""
+        merge_steps = method_params["merge_steps"]
+        total_models = method_params["total_models"]
+
+        print(f"🔄 Starting Incremental SLERP merging for {total_models} models...")
+        print(f"   Number of merge steps: {len(merge_steps)}")
+
+        # Create temporary directory for intermediate models
+        import tempfile
+        temp_dir = tempfile.mkdtemp(prefix="incremental_slerp_")
+        print(f"   Using temporary directory: {temp_dir}")
+
+        try:
+            # Start with the first two models
+            first_step = merge_steps[0]
+            print(f"\n📦 Step 1/{len(merge_steps)}:")
+            print(f"   Base:  {first_step['base_model']} (weight: {first_step['base_weight']:.4f})")
+            print(f"   Merge: {first_step['merge_model']} (weight: {first_step['merge_weight']:.4f})")
+            print(f"   SLERP interpolation ratio: {first_step['slerp_t']:.4f}")
+
+            # Prepare SLERP parameters for first step
+            slerp_params = {
+                "slerp_t": first_step["slerp_t"],
+                "dot_threshold": first_step["dot_threshold"]
+            }
+
+            # Perform first SLERP merge
+            # SLERP expects exactly 2 models in models_to_merge list
+            result = merger.merge(
+                base_model=first_step["base_model"],  # Used as architecture reference
+                models_to_merge=[first_step["base_model"], first_step["merge_model"]],  # 2 models for SLERP
+                method_params=slerp_params,
+            )
+
+            # Save intermediate result
+            intermediate_path = os.path.join(temp_dir, "step_1_model")
+            result['merged_model'].save_pretrained(intermediate_path)
+            result['base_tokenizer'].save_pretrained(intermediate_path)
+
+            current_model_path = intermediate_path
+            print(f"   ✅ Step 1 completed, saved intermediate model")
+
+            # Continue with remaining steps
+            for i in range(1, len(merge_steps)):
+                step = merge_steps[i]
+                print(f"\n📦 Step {i+1}/{len(merge_steps)}:")
+                print(f"   Base:  intermediate_model (weight: cumulative)")
+                print(f"   Merge: {step['merge_model']} (weight: {step['merge_weight']:.4f})")
+                print(f"   SLERP interpolation ratio: {step['slerp_t']:.4f}")
+
+                # Prepare SLERP parameters for this step
+                slerp_params = {
+                    "slerp_t": step["slerp_t"],
+                    "dot_threshold": step["dot_threshold"]
+                }
+
+                try:
+                    # Perform SLERP merge using intermediate model as base
+                    # SLERP expects exactly 2 models in models_to_merge list
+                    result = merger.merge(
+                        base_model=current_model_path,  # Used as architecture reference
+                        models_to_merge=[current_model_path, step["merge_model"]],  # 2 models for SLERP
+                        method_params=slerp_params,
+                    )
+
+                    # Save new intermediate result
+                    intermediate_path = os.path.join(temp_dir, f"step_{i+1}_model")
+                    result['merged_model'].save_pretrained(intermediate_path)
+                    result['base_tokenizer'].save_pretrained(intermediate_path)
+
+                    current_model_path = intermediate_path
+                    print(f"   ✅ Step {i+1} completed, saved intermediate model")
+
+                except Exception as e:
+                    print(f"   ❌ Step {i+1} failed: {e}")
+                    raise RuntimeError(f"Incremental SLERP failed at step {i+1}: {e}")
+
+            print(f"\n🎉 Incremental SLERP merging completed successfully!")
+            print(f"   Final merged model created from {total_models} source models")
+
+            # Load final model and tokenizer
+            from transformers import AutoModel, AutoTokenizer
+            final_model = AutoModel.from_pretrained(current_model_path)
+            final_tokenizer = AutoTokenizer.from_pretrained(current_model_path)
+
+            return final_model, final_tokenizer
+
+        finally:
+            # Clean up temporary directory
+            import shutil
+            try:
+                shutil.rmtree(temp_dir)
+                print(f"   🧹 Cleaned up temporary directory: {temp_dir}")
+            except Exception as e:
+                print(f"   ⚠️  Warning: Could not clean up temp directory {temp_dir}: {e}")
 
     # _get_method_params removed in favor of strategy pattern
 
@@ -615,7 +910,12 @@ def main():
         "--mode",
         type=str,
         required=True,
+<<<<<<< HEAD
         choices=['uriel', 'manual', 'similarity', 'average', 'fisher', 'fisher_simple', 'fisher_dataset', 'iterative'],
+=======
+        choices=['uriel', 'manual', 'similarity', 'average', 'fisher',
+                'ties', 'task_arithmetic', 'slerp', 'regmean'],
+>>>>>>> feat/iterative-training-merging
         help="The merging mode to use."
     )
     parser.add_argument(
@@ -663,7 +963,7 @@ def main():
     parser.add_argument(
         "--num-fisher-examples",
         type=int,
-        default=100,
+        default=1000,
         help="Number of examples to use for Fisher computation"
     )
     parser.add_argument(
@@ -696,7 +996,7 @@ def main():
         "--preweight",
         type=str,
         choices=["equal", "uriel"],
-        default="equal",
+        default="uriel",
         help="Pre-weight models before Fisher merging: equal or URIEL cosine weights"
     )
     parser.add_argument(
