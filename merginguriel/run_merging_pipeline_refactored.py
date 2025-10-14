@@ -347,6 +347,11 @@ class WeightCalculatorFactory:
             'similarity': SimilarityWeightCalculator,
             'average': AverageWeightCalculator,
             'fisher_dataset': SimilarityWeightCalculator,
+            # Advanced merging methods use similarity-based weights
+            'ties': SimilarityWeightCalculator,
+            'task_arithmetic': SimilarityWeightCalculator,
+            'slerp': SimilarityWeightCalculator,
+            'regmean': SimilarityWeightCalculator,
         }
 
         if mode not in calculators:
@@ -454,6 +459,116 @@ class FisherDatasetStrategy(MergingStrategy):
         }
 
 
+class TiesStrategy(MergingStrategy):
+    """TIES merging strategy that resolves sign disagreements and prunes low-magnitude weights."""
+
+    def get_merger(self, mode: str):
+        return merging_methods_dict["ties"]()
+
+    def get_method_params(
+        self,
+        config: MergeConfig,
+        models_and_weights: Dict[str, ModelInfo],
+        base_model_info: ModelInfo,
+    ) -> Dict[str, Any]:
+        # TIES method parameters
+        # Use URIEL weights to influence the merging process
+        src_weights = [info.weight for info in models_and_weights.values()]
+
+        # Default parameters for TIES
+        param_value_mask_rate = 0.8  # Mask 80% of smallest-magnitude parameters
+        scaling_coefficient = 1.0    # Scaling coefficient for task vectors
+
+        # If we have meaningful weights, we can adjust scaling
+        if src_weights and max(src_weights) > 0:
+            # Use the maximum weight as scaling coefficient for better preservation
+            scaling_coefficient = max(src_weights)
+
+        return {
+            "param_value_mask_rate": param_value_mask_rate,
+            "scaling_coefficient": scaling_coefficient,
+        }
+
+
+class TaskArithmeticStrategy(MergingStrategy):
+    """Task Arithmetic merging strategy that adds/subtracts task vectors."""
+
+    def get_merger(self, mode: str):
+        return merging_methods_dict["task_arithmetic"]()
+
+    def get_method_params(
+        self,
+        config: MergeConfig,
+        models_and_weights: Dict[str, ModelInfo],
+        base_model_info: ModelInfo,
+    ) -> Dict[str, Any]:
+        # Task Arithmetic parameters
+        # Scale each task vector by its URIEL similarity weight
+        scaling_coefficients = [info.weight for info in models_and_weights.values()]
+
+        # Optional: mask smallest parameters (DARE-like behavior)
+        param_value_mask_rate = 0.0  # Default: no masking
+
+        return {
+            "scaling_coefficient": scaling_coefficients,
+            "param_value_mask_rate": param_value_mask_rate,
+        }
+
+
+class SlerpStrategy(MergingStrategy):
+    """SLERP (Spherical Linear Interpolation) merging strategy."""
+
+    def get_merger(self, mode: str):
+        return merging_methods_dict["slerp"]()
+
+    def get_method_params(
+        self,
+        config: MergeConfig,
+        models_and_weights: Dict[str, ModelInfo],
+        base_model_info: ModelInfo,
+    ) -> Dict[str, Any]:
+        # SLERP interpolation parameters
+        # For multiple models, we can use weights as interpolation ratios
+        # For simplicity, we'll use the average of weights as the main interpolation ratio
+        src_weights = [info.weight for info in models_and_weights.values()]
+
+        if src_weights:
+            # Use the average weight as interpolation ratio
+            interpolation_ratio = sum(src_weights) / len(src_weights)
+        else:
+            interpolation_ratio = 0.5  # Default: equal interpolation
+
+        return {
+            "interpolation_ratio": interpolation_ratio,
+            "mask_rate": 0.0,  # Default: no masking
+        }
+
+
+class RegMeanStrategy(MergingStrategy):
+    """RegMean merging strategy that uses regression to find optimal coefficients."""
+
+    def get_merger(self, mode: str):
+        return merging_methods_dict["regmean"]()
+
+    def get_method_params(
+        self,
+        config: MergeConfig,
+        models_and_weights: Dict[str, ModelInfo],
+        base_model_info: ModelInfo,
+    ) -> Dict[str, Any]:
+        # RegMean parameters
+        # Use URIEL weights as priors for regression coefficients
+        regmean_lambda = 1.0  # Regularization parameter
+
+        # Get normalization weights based on URIEL similarities
+        normalization_weights = [info.weight for info in models_and_weights.values()]
+
+        return {
+            "regmean_lambda": regmean_lambda,
+            "normalization_weights": normalization_weights,
+        }
+
+
 class MergingStrategyFactory:
     @staticmethod
     def create(mode: str) -> MergingStrategy:
@@ -461,6 +576,14 @@ class MergingStrategyFactory:
             return FisherSimpleStrategy()
         if mode == "fisher_dataset":
             return FisherDatasetStrategy()
+        if mode == "ties":
+            return TiesStrategy()
+        if mode == "task_arithmetic":
+            return TaskArithmeticStrategy()
+        if mode == "slerp":
+            return SlerpStrategy()
+        if mode == "regmean":
+            return RegMeanStrategy()
         return LinearStrategy()
 
 
@@ -640,7 +763,8 @@ def main():
         "--mode",
         type=str,
         required=True,
-        choices=['uriel', 'manual', 'similarity', 'average', 'fisher', 'fisher_simple', 'fisher_dataset'],
+        choices=['uriel', 'manual', 'similarity', 'average', 'fisher', 'fisher_simple', 'fisher_dataset',
+                'ties', 'task_arithmetic', 'slerp', 'regmean'],
         help="The merging mode to use."
     )
     parser.add_argument(
