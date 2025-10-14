@@ -26,6 +26,7 @@ from merginguriel.iterative_config import (
 )
 from merginguriel.iterative_training_orchestrator import IterativeTrainingOrchestrator
 from merginguriel.adaptive_merging import AdaptiveMergeScheduler, EnhancedMonitor
+from merginguriel.similarity_utils import load_and_process_similarity
 
 
 def setup_logging(log_level: str, log_file: Optional[str] = None):
@@ -77,12 +78,34 @@ def create_training_configs_from_args(args) -> List[IterativeTrainingConfig]:
 
 def create_merge_config_from_args(args) -> IterativeMergeConfig:
     """Create merge configuration from command line arguments."""
+    # Map mode to merge_algorithm and weight_calculation for backward compatibility
+    mode = args.mode
+
+    # Determine merge algorithm based on mode
+    if mode in ["linear", "fisher_simple", "fisher_dataset"]:
+        merge_algorithm = mode
+        weight_calculation = "similarity"  # Default for these modes
+    elif mode == "similarity":
+        merge_algorithm = "linear"
+        weight_calculation = "similarity"
+    elif mode == "average":
+        merge_algorithm = "linear"
+        weight_calculation = "average"
+    elif mode == "uriel":
+        merge_algorithm = "linear"
+        weight_calculation = "similarity"
+    elif mode == "manual":
+        merge_algorithm = "linear"
+        weight_calculation = "manual"
+    else:  # iterative or other modes
+        merge_algorithm = "linear"
+        weight_calculation = "similarity"
+
     return IterativeMergeConfig(
         merge_frequency=args.merge_frequency,
-        merge_algorithm=args.merge_algorithm,
-        weight_calculation=args.weight_calculation,
-        target_languages=[locale.strip() for locale in args.target_languages.split(',')] if args.target_languages else [],
-        similarity_source=args.similarity_source,
+        merge_algorithm=merge_algorithm,
+        weight_calculation=weight_calculation,
+        target_languages=[args.target_lang],  # Use target_lang for consistency with main pipeline
         top_k=args.top_k,
         sinkhorn_iters=args.sinkhorn_iters,
         num_languages=args.num_languages,
@@ -108,6 +131,7 @@ def create_orchestrator_config_from_args(args) -> IterativeOrchestratorConfig:
         orchestrator_name=args.experiment_name,
         base_output_dir=args.output_dir,
         log_level=args.log_level,
+        sequential_training=args.sequential_training,
         max_sync_wait_time=args.max_sync_wait_time,
         merge_timeout=args.merge_timeout,
         enable_distributed=args.enable_distributed,
@@ -127,11 +151,62 @@ def create_orchestrator_config_from_args(args) -> IterativeOrchestratorConfig:
     )
 
 
+def auto_select_source_locales(target_languages: List[str], num_languages: int, top_k: int, sinkhorn_iters: int) -> List[str]:
+    """Auto-select source locales based on similarity to target languages."""
+    from collections import defaultdict
+
+    # Get similarity matrix path
+    similarity_matrix_path = os.path.join(project_root, "language_similarity_matrix_unified.csv")
+
+    selected_locales = []
+
+    for target_lang in target_languages:
+        print(f"Finding source languages for target: {target_lang}")
+
+        try:
+            # Get similar languages using same logic as main pipeline
+            similar_languages = load_and_process_similarity(
+                similarity_matrix_path, target_lang, num_languages,
+                top_k, sinkhorn_iters, verbose=False
+            )
+
+            # Extract just the locale codes
+            source_locales = [locale for locale, weight in similar_languages]
+            selected_locales.extend(source_locales)
+
+            print(f"  Auto-selected source languages: {source_locales}")
+
+        except Exception as e:
+            print(f"  Warning: Failed to auto-select sources for {target_lang}: {e}")
+            print(f"  Using fallback: English (en-US)")
+            selected_locales.append("en-US")
+
+    # Remove duplicates and limit to reasonable number
+    unique_locales = list(dict.fromkeys(selected_locales))  # Preserve order, remove duplicates
+
+    # Limit to 2x num_languages to avoid too many training jobs
+    max_locales = max(num_languages * 2, len(target_languages))
+    final_locales = unique_locales[:max_locales]
+
+    print(f"Final source languages for training: {final_locales}")
+    return final_locales
+
+
 def validate_args(args):
     """Validate command line arguments."""
-    # Check if locales are provided
+    # For iterative training, we need target_lang to find source languages
+    if not args.target_lang:
+        raise ValueError("Target language must be specified with --target-lang")
+
+    # If locales is not specified, we'll auto-select source languages based on similarity
     if not args.locales:
-        raise ValueError("At least one locale must be specified with --locales")
+        print("No source locales specified. Will auto-select based on similarity to target language.")
+        # Auto-select based on the target language
+        auto_selected = auto_select_source_locales(
+            [args.target_lang], args.num_languages, args.top_k, args.sinkhorn_iters
+        )
+        args.locales = ",".join(auto_selected)
+        print(f"Auto-selected source locales: {args.locales}")
 
     # Validate merge frequency
     if args.merge_frequency <= 0:
@@ -226,12 +301,93 @@ def main():
         help="Logging level"
     )
 
-    # Model configuration
+    # Model configuration (matching main pipeline)
+    parser.add_argument(
+        "--mode",
+        type=str,
+        required=True,
+        choices=['uriel', 'manual', 'similarity', 'average', 'fisher', 'fisher_simple', 'fisher_dataset', 'iterative'],
+        help="The merging mode to use."
+    )
+    parser.add_argument(
+        "--target-lang",
+        type=str,
+        default="sq-AL",
+        help="Target language/locale for similarity-based merging (e.g., sq-AL, th-TH, af-ZA)"
+    )
+    parser.add_argument(
+        "--num-languages",
+        type=int,
+        default=5,
+        help="Number of languages to include in merging"
+    )
+    parser.add_argument(
+        "--dataset-name",
+        type=str,
+        default=None,
+        help="HuggingFace dataset name for Fisher merging"
+    )
+    parser.add_argument(
+        "--dataset-split",
+        type=str,
+        default="train",
+        help="Dataset split to use"
+    )
+    parser.add_argument(
+        "--text-column",
+        type=str,
+        default="utt",
+        help="Column name containing text data (MASSIVE uses 'utt')"
+    )
+    parser.add_argument(
+        "--label-column",
+        type=str,
+        default="label",
+        help="Column name containing labels"
+    )
+    parser.add_argument(
+        "--num-fisher-examples",
+        type=int,
+        default=100,
+        help="Number of examples to use for Fisher computation"
+    )
+    parser.add_argument(
+        "--similarity-source",
+        type=str,
+        choices=["sparse", "dense"],
+        default="sparse",
+        help="Use precomputed sparse CSV or compute dense similarities on-the-fly with top-k + Sinkhorn"
+    )
+    parser.add_argument(
+        "--top-k",
+        type=int,
+        default=20,
+        help="Top-K neighbors to preserve per language when computing similarities on-the-fly"
+    )
+    parser.add_argument(
+        "--sinkhorn-iters",
+        type=int,
+        default=20,
+        help="Sinkhorn normalization iterations for similarity computation"
+    )
+    parser.add_argument(
+        "--fisher-data-mode",
+        type=str,
+        choices=["target", "sources", "both"],
+        default="target",
+        help="Which data distribution to compute Fisher on: target locale only, the selected source locales, or both"
+    )
+    parser.add_argument(
+        "--preweight",
+        type=str,
+        choices=["equal", "uriel"],
+        default="equal",
+        help="Pre-weight models before Fisher merging: equal or URIEL cosine weights"
+    )
     parser.add_argument(
         "--locales",
         type=str,
-        required=True,
-        help="Comma-separated list of locale codes to train (e.g., en-US,fr-FR,de-DE)"
+        help="Comma-separated list of source locale codes to train (e.g., en-US,fr-FR,de-DE). If not specified, will auto-select based on similarity to target-lang"
     )
     parser.add_argument(
         "--model-name-or-path",
@@ -323,81 +479,15 @@ def main():
         help="Patience for early stopping"
     )
 
-    # Merge configuration
+    # Merge configuration (matching main pipeline where possible)
     parser.add_argument(
         "--merge-frequency",
         type=int,
-        default=3,
+        default=1,
         help="Number of epochs between merges (always per epoch)"
-    )
-    parser.add_argument(
-        "--merge-algorithm",
-        type=str,
-        default="linear",
-        choices=["linear", "fisher_simple", "fisher_dataset"],
-        help="Merging algorithm to use"
-    )
-    parser.add_argument(
-        "--weight-calculation",
-        type=str,
-        default="similarity",
-        choices=["similarity", "average", "manual"],
-        help="Weight calculation strategy"
-    )
-    parser.add_argument(
-        "--target-languages",
-        type=str,
-        help="Comma-separated list of target languages for merging (default: all locales)"
-    )
-
-    # Similarity-based merging parameters
-    parser.add_argument(
-        "--similarity-source",
-        type=str,
-        default="sparse",
-        choices=["sparse", "dense"],
-        help="Source of similarity weights"
-    )
-    parser.add_argument(
-        "--top-k",
-        type=int,
-        default=20,
-        help="Top-K neighbors for similarity calculation"
-    )
-    parser.add_argument(
-        "--sinkhorn-iters",
-        type=int,
-        default=20,
-        help="Sinkhorn normalization iterations"
-    )
-    parser.add_argument(
-        "--num-languages",
-        type=int,
-        default=5,
-        help="Number of languages to include in similarity-based merging"
     )
 
     # Fisher-based merging parameters
-    parser.add_argument(
-        "--fisher-data-mode",
-        type=str,
-        default="target",
-        choices=["target", "sources", "both"],
-        help="Data mode for Fisher merging"
-    )
-    parser.add_argument(
-        "--preweight",
-        type=str,
-        default="equal",
-        choices=["equal", "uriel"],
-        help="Pre-weighting strategy for Fisher merging"
-    )
-    parser.add_argument(
-        "--num-fisher-examples",
-        type=int,
-        default=100,
-        help="Number of examples for Fisher computation"
-    )
     parser.add_argument(
         "--fisher-batch-size",
         type=int,
@@ -483,6 +573,14 @@ def main():
         help="Logging frequency (steps)"
     )
 
+    # Training strategy
+    parser.add_argument(
+        "--sequential-training",
+        action="store_true",
+        default=True,
+        help="Train models one by one to prevent OOM (default: enabled)"
+    )
+
     # Recovery and robustness
     parser.add_argument(
         "--enable-auto-recovery",
@@ -531,6 +629,7 @@ def main():
         help="Load configuration from JSON file"
     )
 
+  
     args = parser.parse_args()
 
     # Setup logging

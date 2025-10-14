@@ -54,6 +54,7 @@ class MergeConfig:
     num_fisher_examples: int = 100
     base_model: str = "xlm-roberta-base"
     # Similarity matrix options
+    similarity_source: str = "sparse"  # 'sparse' (precomputed) or 'dense' (on-the-fly)
     top_k: int = 20
     sinkhorn_iters: int = 20
     # Fisher/dataset options
@@ -597,6 +598,7 @@ def create_config_from_args(args) -> MergeConfig:
         label_column=args.label_column,
         num_fisher_examples=args.num_fisher_examples,
         base_model="xlm-roberta-base",
+        similarity_source=args.similarity_source,
         top_k=args.top_k,
         sinkhorn_iters=args.sinkhorn_iters,
         fisher_data_mode=args.fisher_data_mode,
@@ -663,6 +665,13 @@ def main():
         type=int,
         default=100,
         help="Number of examples to use for Fisher computation"
+    )
+    parser.add_argument(
+        "--similarity-source",
+        type=str,
+        choices=["sparse", "dense"],
+        default="sparse",
+        help="Use precomputed sparse CSV or compute dense similarities on-the-fly with top-k + Sinkhorn"
     )
     parser.add_argument(
         "--top-k",

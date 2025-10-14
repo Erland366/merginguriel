@@ -156,12 +156,16 @@ class IterativeTrainingOrchestrator:
 
         # Preprocessing function
         def preprocess_function(examples):
-            return tokenizer(
+            # Tokenize the text
+            tokenized_inputs = tokenizer(
                 examples["utt"],
                 padding="max_length",
                 max_length=training_config.max_seq_length,
                 truncation=True,
             )
+            # Add labels
+            tokenized_inputs["labels"] = examples["labels"]
+            return tokenized_inputs
 
         # Preprocess datasets
         train_dataset = raw_datasets["train"].map(
@@ -277,24 +281,10 @@ class IterativeTrainingOrchestrator:
         self.start_time = time.time()
 
         try:
-            # Start training for all models
-            with ThreadPoolExecutor(max_workers=self.config.num_workers) as executor:
-                # Submit training tasks
-                for locale, trainer in self.trainers.items():
-                    future = executor.submit(self._run_single_trainer, locale, trainer)
-                    self.training_futures[locale] = future
-                    logger.info(f"Submitted training task for {locale}")
-
-                # Monitor progress and handle merges
-                self._monitor_training_and_merges()
-
-                # Wait for all training to complete
-                for locale, future in self.training_futures.items():
-                    try:
-                        future.result()
-                        logger.info(f"Training completed for {locale}")
-                    except Exception as e:
-                        logger.error(f"Training failed for {locale}: {e}")
+            if self.config.sequential_training:
+                self._run_sequential_training()
+            else:
+                self._run_parallel_training()
 
         except KeyboardInterrupt:
             logger.info("Training interrupted by user")
@@ -307,11 +297,73 @@ class IterativeTrainingOrchestrator:
 
         logger.info("Iterative training loop completed")
 
+    def _run_sequential_training(self):
+        """Run training models one by one to prevent OOM."""
+        logger.info("Running sequential training to prevent GPU memory issues")
+
+        # Train models one by one to avoid OOM
+        locales = list(self.trainers.keys())
+        total_models = len(locales)
+
+        for i, locale in enumerate(locales):
+            logger.info(f"Training model {i+1}/{total_models}: {locale}")
+
+            try:
+                # Train this model to completion
+                self._run_single_trainer_sequential(locale, self.trainers[locale])
+                logger.info(f"Completed training for {locale}")
+
+                # Check if we should perform a merge after this model
+                if self._should_merge_after_model(locale, i, total_models):
+                    logger.info(f"Triggering merge after training {locale}")
+                    self._execute_merge_cycle_after_training(locales[:i+1])
+
+            except Exception as e:
+                logger.error(f"Training failed for {locale}: {e}")
+                # Continue with other models even if one fails
+                continue
+
+    def _run_parallel_training(self):
+        """Run training models in parallel (legacy method - may cause OOM)."""
+        logger.warning("Running parallel training - this may cause GPU memory issues!")
+
+        # Start training for all models
+        with ThreadPoolExecutor(max_workers=self.config.num_workers) as executor:
+            # Submit training tasks
+            for locale, trainer in self.trainers.items():
+                future = executor.submit(self._run_single_trainer, locale, trainer)
+                self.training_futures[locale] = future
+                logger.info(f"Submitted training task for {locale}")
+
+            # Monitor progress and handle merges
+            self._monitor_training_and_merges()
+
+            # Wait for all training to complete
+            for locale, future in self.training_futures.items():
+                try:
+                    future.result()
+                    logger.info(f"Training completed for {locale}")
+                except Exception as e:
+                    logger.error(f"Training failed for {locale}: {e}")
+
     def _run_single_trainer(self, locale: str, trainer: Trainer):
-        """Run training for a single model."""
-        logger.info(f"Starting training for {locale}")
+        """Run training for a single model (legacy method for compatibility)."""
+        return self._run_single_trainer_sequential(locale, trainer)
+
+    def _run_single_trainer_sequential(self, locale: str, trainer: Trainer):
+        """Run training for a single model sequentially with memory management."""
+        logger.info(f"Starting sequential training for {locale}")
 
         try:
+            # Clear GPU memory before training
+            self._clear_gpu_memory()
+
+            # Set model to training device
+            device = "cuda" if torch.cuda.is_available() else "cpu"
+            trainer.model.to(device)
+
+            logger.info(f"Training {locale} on device: {device}")
+
             # Train the model
             trainer.train()
 
@@ -319,11 +371,93 @@ class IterativeTrainingOrchestrator:
             trainer.save_model()
             trainer.save_state()
 
+            # Clear GPU memory after training
+            self._clear_gpu_memory()
+
             logger.info(f"Training completed successfully for {locale}")
 
         except Exception as e:
             logger.error(f"Training failed for {locale}: {e}")
+            # Clear GPU memory on error
+            self._clear_gpu_memory()
             raise
+
+    def _clear_gpu_memory(self):
+        """Clear GPU memory to prevent OOM errors."""
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            torch.cuda.synchronize()
+            logger.info("Cleared GPU cache")
+
+    def _should_merge_after_model(self, locale: str, model_index: int, total_models: int) -> bool:
+        """Determine if we should merge after training a specific model."""
+        # Merge after every N models (based on merge frequency)
+        models_per_merge = max(1, total_models // max(1, self.config.merge_config.merge_frequency))
+
+        # Always merge after the last model
+        if model_index == total_models - 1:
+            return True
+
+        # Merge after every models_per_merge models
+        return (model_index + 1) % models_per_merge == 0
+
+    def _execute_merge_cycle_after_training(self, trained_locales: List[str]):
+        """Execute a merge cycle after training specific models."""
+        logger.info(f"Starting merge cycle for trained models: {trained_locales}")
+
+        try:
+            # Get active locales (those that have been trained)
+            active_locales = trained_locales.copy()
+            target_locales = self.config.merge_config.target_locales
+
+            if not target_locales:
+                target_locales = active_locales
+
+            # Execute merge
+            success, merged_model_path = self.merge_coordinator.execute_merge(
+                active_locales=active_locales,
+                target_locales=target_locales,
+                merge_metadata={
+                    "trained_models": len(active_locales),
+                    "merge_type": "sequential_training",
+                    "timestamp": datetime.utcnow().isoformat()
+                }
+            )
+
+            if success:
+                logger.info(f"Merge cycle completed successfully: {merged_model_path}")
+
+                # Optional: Update remaining trainers with merged weights
+                self._update_remaining_trainers_with_merge(merged_model_path, active_locales, target_locales)
+            else:
+                logger.error("Merge cycle failed")
+
+        except Exception as e:
+            logger.error(f"Merge cycle failed: {e}")
+
+    def _update_remaining_trainers_with_merge(self, merged_model_path: str, trained_locales: List[str], target_locales: List[str]):
+        """Update remaining untrained models with weights from the merged model."""
+        try:
+            if merged_model_path and os.path.exists(merged_model_path):
+                # Load merged model
+                merged_model = AutoModelForSequenceClassification.from_pretrained(merged_model_path)
+
+                # Update trainers for remaining untrained locales
+                all_locales = list(self.trainers.keys())
+                remaining_locales = [loc for loc in all_locales if loc not in trained_locales]
+
+                for locale in remaining_locales:
+                    if locale in self.trainers:
+                        # Update the trainer's model with merged weights
+                        self.trainers[locale].model.load_state_dict(merged_model.state_dict())
+                        logger.info(f"Updated {locale} trainer with merged weights")
+
+                # Clean up
+                del merged_model
+                self._clear_gpu_memory()
+
+        except Exception as e:
+            logger.warning(f"Failed to update remaining trainers with merge weights: {e}")
 
     def _monitor_training_and_merges(self):
         """Monitor training progress and trigger merges when appropriate."""

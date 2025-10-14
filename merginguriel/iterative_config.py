@@ -21,7 +21,7 @@ class IterativeTrainingConfig:
     dataset_config_name: str
     max_epochs: int = 15
     learning_rate: float = 5e-5
-    batch_size: int = 128
+    batch_size: int = 32  # Reduced from 128 to prevent OOM in sequential training
     max_seq_length: int = 128
 
     # Training state tracking
@@ -72,7 +72,6 @@ class IterativeMergeConfig:
     target_languages: List[str] = field(default_factory=list)
 
     # Similarity-based merging (if weight_calculation == "similarity")
-    similarity_source: str = "sparse"  # "sparse" or "dense"
     top_k: int = 20
     sinkhorn_iters: int = 20
     num_languages: int = 5
@@ -113,6 +112,7 @@ class IterativeOrchestratorConfig:
     orchestrator_name: str = "iterative_training"
     base_output_dir: str = "iterative_training_results"
     log_level: str = "INFO"
+    sequential_training: bool = True  # Train models one by one to prevent OOM
 
     # Synchronization settings
     max_sync_wait_time: int = 300  # seconds

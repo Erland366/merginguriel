@@ -292,57 +292,88 @@ class MergeCoordinator:
     ) -> Tuple[Dict[str, Any], Any]:
         """Prepare model paths and weights for the merge operation."""
         from merginguriel.run_merging_pipeline_refactored import ModelInfo
+        from merginguriel.similarity_utils import load_and_process_similarity
 
-        # Create weight calculator
-        weight_calculator = WeightCalculatorFactory.create_calculator(
-            self.merge_config.weight_calculation
-        )
+        logger.info("Preparing merge inputs using cosine similarity matrix")
 
-        # Create temporary config for weight calculation
-        temp_config = MergeConfig(
-            mode=self.merge_config.weight_calculation,
-            target_lang=target_locales[0] if target_locales else "unknown",
-            num_languages=len(model_states)
-        )
+        # Use the same logic as run_merging_pipeline_refactored.py
+        # Calculate similarity weights for the target locales
+        target_lang = target_locales[0] if target_locales else list(model_states.keys())[0]
+
+        # Load similarity matrix and compute weights
+        project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+        similarity_matrix_path = os.path.join(project_root, "language_similarity_matrix_unified.csv")
 
         try:
-            # Calculate weights using existing infrastructure
-            models_and_weights, base_model_info = weight_calculator.calculate_weights(temp_config)
+            similar_languages = load_and_process_similarity(
+                similarity_matrix_path, target_lang, self.merge_config.num_languages,
+                self.merge_config.top_k, self.merge_config.sinkhorn_iters, verbose=False
+            )
 
-            # Override with our actual model states
-            actual_models_and_weights = {}
-            for locale, state in model_states.items():
-                # Find corresponding weight or use equal weight
-                weight = 1.0 / len(model_states)  # Default equal weight
-
-                # Try to find weight from calculated weights
-                for model_path, model_info in models_and_weights.items():
-                    if locale in model_path or state.locale in model_path:
-                        weight = model_info.weight
-                        break
-
-                actual_models_and_weights[state.checkpoint_path or state.locale] = ModelInfo(
-                    model_name=state.checkpoint_path or state.locale,
-                    subfolder="",
-                    language=locale,
-                    locale=locale,
-                    weight=weight
-                )
-
-            # Set base model (use first model)
-            if actual_models_and_weights:
-                base_key = list(actual_models_and_weights.keys())[0]
-                base_model_info = actual_models_and_weights[base_key]
-                actual_models_and_weights.pop(base_key)
-
-                return actual_models_and_weights, base_model_info
-            else:
-                raise ValueError("No models prepared for merging")
+            # Create a mapping from locale to similarity weight
+            similarity_weights = {locale: weight for locale, weight in similar_languages}
+            logger.info(f"Computed similarity weights for {len(similarity_weights)} languages")
 
         except Exception as e:
-            logger.error(f"Failed to prepare merge inputs: {e}")
-            # Fallback to equal weights
-            return self._prepare_equal_weight_merge(model_states)
+            logger.warning(f"Failed to compute similarity weights: {e}. Using equal weights.")
+            similarity_weights = {}
+
+        # Prepare models using haryos_model structure like in the main pipeline
+        actual_models_and_weights = {}
+
+        for locale, state in model_states.items():
+            # Use haryos_model path structure like in run_merging_pipeline_refactored.py (line 148)
+            model_path = f"/home/coder/Python_project/MergingUriel/haryos_model/xlm-roberta-base_massive_k_{locale}"
+
+            # Check if model exists locally
+            if not os.path.exists(model_path):
+                logger.warning(f"  ✗ Model path not found: {model_path}")
+                # Fallback to checkpoint path if available
+                if state.checkpoint_path and os.path.exists(state.checkpoint_path):
+                    model_path = state.checkpoint_path
+                    logger.info(f"  ✓ Using checkpoint path: {model_path}")
+                else:
+                    logger.warning(f"  ✗ No valid model found for {locale}")
+                    continue
+            else:
+                logger.info(f"  ✓ Found model: {model_path}")
+
+            # Use similarity weight if available, otherwise equal weight
+            if similarity_weights and locale in similarity_weights:
+                weight = similarity_weights[locale]
+                logger.info(f"  - {locale}: similarity weight {weight:.6f}")
+            else:
+                weight = 1.0 / len(model_states)  # Equal weight fallback
+                logger.info(f"  - {locale}: equal weight {weight:.6f}")
+
+            actual_models_and_weights[model_path] = ModelInfo(
+                model_name=model_path,
+                subfolder="",  # No subfolder needed with consolidated structure
+                language=locale,
+                locale=locale,
+                weight=weight
+            )
+
+        if not actual_models_and_weights:
+            raise ValueError(f"No valid models found for locales: {list(model_states.keys())}")
+
+        # Set base model (use first model like in main pipeline)
+        base_key = list(actual_models_and_weights.keys())[0]
+        base_model_info = actual_models_and_weights[base_key]
+        actual_models_and_weights.pop(base_key)
+
+        # Normalize weights to sum to 1.0 (like in main pipeline)
+        total_weight = sum(info.weight for info in actual_models_and_weights.values()) + base_model_info.weight
+        if total_weight > 0:
+            normalization_factor = 1.0 / total_weight
+            base_model_info.weight *= normalization_factor
+            for info in actual_models_and_weights.values():
+                info.weight *= normalization_factor
+
+        logger.info(f"Using {len(actual_models_and_weights) + 1} models for merge")
+        logger.info(f"Base model: {base_model_info.model_name} (weight: {base_model_info.weight:.6f})")
+
+        return actual_models_and_weights, base_model_info
 
     def _prepare_equal_weight_merge(
         self,
@@ -353,11 +384,23 @@ class MergeCoordinator:
 
         models_and_weights = {}
         equal_weight = 1.0 / len(model_states)
+        project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 
         for locale, state in model_states.items():
-            models_and_weights[state.checkpoint_path or locale] = ModelInfo(
-                model_name=state.checkpoint_path or locale,
-                subfolder="",
+            # Use the same path resolution logic as in _prepare_merge_inputs
+            if state.checkpoint_path and os.path.exists(state.checkpoint_path):
+                model_path = state.checkpoint_path
+            else:
+                # Fallback to haryos_model structure
+                model_path = os.path.join(project_root, "haryos_model", f"xlm-roberta-base_massive_k_{locale}")
+
+                # If haryos_model doesn't exist, use the checkpoint path or locale
+                if not os.path.exists(model_path):
+                    model_path = state.checkpoint_path or locale
+
+            models_and_weights[model_path] = ModelInfo(
+                model_name=model_path,
+                subfolder="",  # No subfolder needed with consolidated structure
                 language=locale,
                 locale=locale,
                 weight=equal_weight
