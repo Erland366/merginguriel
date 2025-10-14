@@ -26,9 +26,7 @@ if submodule_path not in sys.path:
     sys.path.insert(0, submodule_path)
 
 from merginguriel.utils import get_similarity_scores
-from merginguriel.similarity import sinkhorn_normalize, filter_top_k, locale_to_uriel_code
-import lang2vec.lang2vec as l2v
-from sklearn.metrics.pairwise import cosine_similarity
+from merginguriel.similarity_utils import load_and_process_similarity
 from auto_merge_llm.methods import merging_methods_dict
 
 
@@ -56,7 +54,6 @@ class MergeConfig:
     num_fisher_examples: int = 100
     base_model: str = "xlm-roberta-base"
     # Similarity matrix options
-    similarity_source: str = "sparse"  # 'sparse' (precomputed) or 'dense' (on-the-fly)
     top_k: int = 20
     sinkhorn_iters: int = 20
     # Fisher/dataset options
@@ -130,20 +127,41 @@ class SimilarityWeightCalculator(WeightCalculator):
 
     def calculate_weights(self, config: MergeConfig) -> Tuple[Dict[str, ModelInfo], ModelInfo]:
         target_lang = config.target_lang
-        print(f"\n--- Loading Similarity Weights for {target_lang} ---")
-        if config.similarity_source == "dense":
-            print("Using on-the-fly dense similarity with top-k + Sinkhorn normalization")
-            df = self._compute_similarity_onfly(config.top_k, config.sinkhorn_iters)
-            models_and_weights = self._build_mapping_from_df(df, target_lang, config.num_languages)
-        else:
-            sparsed_matrix_path = os.path.join(project_root, "sparsed_language_similarity_matrix_unified.csv")
-            models_and_weights = self._load_similarity_weights(
-                sparsed_matrix_path, target_lang,
-                config.subfolder_pattern, config.num_languages
+        print(f"\n--- Computing Similarity Weights for {target_lang} ---")
+        print("Using on-the-fly similarity computation with top-k + Sinkhorn normalization")
+
+        # Use the new similarity utilities directly
+        similarity_matrix_path = os.path.join(project_root, "language_similarity_matrix_unified.csv")
+
+        similar_languages = load_and_process_similarity(
+            similarity_matrix_path, target_lang, config.num_languages,
+            config.top_k, config.sinkhorn_iters, verbose=True
+        )
+
+        if not similar_languages:
+            raise ValueError("Could not compute similarity weights")
+
+        # Create model mapping using the haryos_model structure
+        models_and_weights = {}
+        for locale, weight in similar_languages:
+            model_path = f"/home/coder/Python_project/MergingUriel/haryos_model/xlm-roberta-base_massive_k_{locale}"
+
+            # Check if model exists locally
+            if not os.path.exists(model_path):
+                print(f"  ✗ Model path not found: {model_path}")
+                continue
+
+            models_and_weights[model_path] = ModelInfo(
+                model_name=model_path,
+                subfolder="",  # No subfolder needed with consolidated structure
+                language=locale,
+                locale=locale,
+                weight=weight
             )
+            print(f"  ✓ {model_path}: {weight:.6f} (locale: {locale})")
 
         if not models_and_weights:
-            raise ValueError("Could not load similarity weights")
+            raise ValueError("No local models found for the target language")
 
         # Use first model as base
         first_model_key = list(models_and_weights.keys())[0]
@@ -160,103 +178,7 @@ class SimilarityWeightCalculator(WeightCalculator):
 
         return models_and_weights, base_model_info
 
-    
-    def _load_similarity_weights(self, sparsed_matrix_path: str,
-                                target_lang: str, subfolder_pattern: str, num_languages: int) -> Dict[str, ModelInfo]:
-        """Load similarity weights and create model-to-weight mapping."""
-        sparsed_df = pd.read_csv(sparsed_matrix_path, index_col=0)
-
-        print(f"Loaded similarity matrix with shape: {sparsed_df.shape}")
-
-        if target_lang not in sparsed_df.index:
-            raise ValueError(f"Target language '{target_lang}' not found in similarity matrix")
-
-        target_weights = sparsed_df.loc[target_lang]
-
-        # Filter languages with non-zero weights
-        valid_languages = []
-        for locale, weight in target_weights.items():
-            if weight > 0:
-                valid_languages.append((locale, weight))
-
-        # Sort by weight and limit
-        valid_languages.sort(key=lambda x: x[1], reverse=True)
-        if num_languages > 0:
-            valid_languages = valid_languages[:num_languages]
-
-        models_and_weights = {}
-        for locale, weight in valid_languages:
-            # Use consolidated model directory structure
-            model_path = f"./haryos_model/xlm-roberta-base_massive_k_{locale}"
-
-            models_and_weights[model_path] = ModelInfo(
-                model_name=model_path,
-                subfolder="",  # No subfolder needed with consolidated structure
-                language=locale,
-                locale=locale,
-                weight=weight
-            )
-            print(f"  - {model_path}: {weight:.6f} (locale: {locale})")
-
-        return models_and_weights
-
-    def _compute_similarity_onfly(self, top_k: int, sinkhorn_iters: int) -> pd.DataFrame:
-        """Compute dense similarity across locales on the fly, then sparsify + Sinkhorn.
-        Returns a DataFrame indexed/columned by MASSIVE locales with normalized weights.
-        """
-        mapping_path = os.path.join(project_root, "model_mapping_unified.csv")
-        map_df = pd.read_csv(mapping_path)
-        if "locale" not in map_df.columns:
-            raise ValueError(f"Missing 'locale' column in {mapping_path}")
-        locales = map_df["locale"].tolist()
-        uriel_codes = []
-        kept_locales = []
-        for loc in locales:
-            code = locale_to_uriel_code(loc)
-            if code:
-                uriel_codes.append(code)
-                kept_locales.append(loc)
-
-        feats = l2v.get_features(uriel_codes, "syntax_knn")
-        if isinstance(feats, dict):
-            X = np.stack([feats[c] for c in uriel_codes])
-        else:
-            X = np.asarray(feats)
-
-        sim = cosine_similarity(X)
-        sim = (sim + 1.0) / 2.0
-        sparse = filter_top_k(sim, top_k)
-        norm = sinkhorn_normalize(sparse, iterations=sinkhorn_iters)
-        df = pd.DataFrame(norm, index=kept_locales, columns=kept_locales)
-        return df
-
-    def _build_mapping_from_df(self, df: pd.DataFrame, target_lang: str, num_languages: int) -> Dict[str, ModelInfo]:
-        if target_lang not in df.index:
-            raise ValueError(f"Target language '{target_lang}' not found in computed similarity matrix")
-        target_weights = df.loc[target_lang]
-        valid = [(loc, float(w)) for loc, w in target_weights.items() if w > 0]
-        valid.sort(key=lambda x: x[1], reverse=True)
-        if num_languages > 0:
-            valid = valid[:num_languages]
-
-        # Renormalize to sum to 1 over the chosen subset
-        s = sum(w for _, w in valid) or 1.0
-        models_and_weights: Dict[str, ModelInfo] = {}
-        for locale, w in valid:
-            model_path = f"./haryos_model/xlm-roberta-base_massive_k_{locale}"
-            models_and_weights[model_path] = ModelInfo(
-                model_name=model_path,
-                subfolder="",
-                language=locale,
-                locale=locale,
-                weight=w / s,
-            )
-        return models_and_weights
-
-    def _get_subfolder_for_language(self, locale: str, subfolder_pattern: str) -> str:
-        """Generate subfolder pattern based on locale."""
-        return subfolder_pattern.format(locale=locale)
-
+  
 
 class ManualWeightCalculator(WeightCalculator):
     """Weight calculator using manually specified weights."""
@@ -307,20 +229,11 @@ class AverageWeightCalculator(SimilarityWeightCalculator):
         target_lang = config.target_lang
         print(f"\n--- Setting Up Average (Equal) Weights for {target_lang} ---")
 
-        sparsed_matrix_path = os.path.join(project_root, "sparsed_language_similarity_matrix_unified.csv")
-
-        models_and_weights = self._load_similarity_weights(
-            sparsed_matrix_path, target_lang,
-            config.subfolder_pattern, config.num_languages
-        )
+        # Use the parent class to get models, then set equal weights
+        models_and_weights, base_model_info = super().calculate_weights(config)
 
         if not models_and_weights:
             raise ValueError("No models found for the target language")
-
-        # Use first model as base
-        first_model_key = list(models_and_weights.keys())[0]
-        base_model_info = models_and_weights[first_model_key]
-        models_and_weights.pop(first_model_key)
 
         # Set equal weights
         num_models = len(models_and_weights) + 1  # +1 for base model
@@ -684,7 +597,6 @@ def create_config_from_args(args) -> MergeConfig:
         label_column=args.label_column,
         num_fisher_examples=args.num_fisher_examples,
         base_model="xlm-roberta-base",
-        similarity_source=args.similarity_source,
         top_k=args.top_k,
         sinkhorn_iters=args.sinkhorn_iters,
         fisher_data_mode=args.fisher_data_mode,
@@ -753,13 +665,6 @@ def main():
         help="Number of examples to use for Fisher computation"
     )
     parser.add_argument(
-        "--similarity-source",
-        type=str,
-        choices=["sparse", "dense"],
-        default="sparse",
-        help="Use precomputed sparse CSV or compute dense similarities on-the-fly with top-k + Sinkhorn"
-    )
-    parser.add_argument(
         "--top-k",
         type=int,
         default=20,
@@ -769,7 +674,7 @@ def main():
         "--sinkhorn-iters",
         type=int,
         default=20,
-        help="Sinkhorn normalization iterations for on-the-fly similarity"
+        help="Sinkhorn normalization iterations for similarity computation"
     )
     parser.add_argument(
         "--fisher-data-mode",

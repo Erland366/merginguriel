@@ -59,15 +59,13 @@ def evaluate_specific_model(model_name: str, subfolder: str | None = None, local
         try:
             model = AutoModelForSequenceClassification.from_pretrained(
                 model_name,
-                subfolder=subfolder,
                 device_map=("auto" if device == "cuda" else None),
-                torch_dtype=(torch.float16 if device == "cuda" else None),
+                torch_dtype=(torch.bfloat16 if device == "cuda" else None),
             )
         except Exception as e:
             logger.warning(f"Auto device mapping failed ({e}); loading on CPU then moving to {device}")
             model = AutoModelForSequenceClassification.from_pretrained(
                 model_name,
-                subfolder=subfolder,
                 low_cpu_mem_usage=True,
             ).to(device)
         logger.info("✓ Model loaded")
