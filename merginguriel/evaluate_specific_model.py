@@ -57,7 +57,7 @@ def evaluate_specific_model(model_name: str, locale: str = "cy-GB", eval_folder:
             model = AutoModelForSequenceClassification.from_pretrained(
                 model_name,
                 device_map=("auto" if device == "cuda" else None),
-                torch_dtype=(torch.float16 if device == "cuda" else None),
+                torch_dtype=(torch.bfloat16 if device == "cuda" else None),
             )
         except Exception as e:
             logger.warning(f"Auto device mapping failed ({e}); loading on CPU then moving to {device}")
