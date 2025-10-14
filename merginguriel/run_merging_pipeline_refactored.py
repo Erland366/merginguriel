@@ -54,6 +54,7 @@ class MergeConfig:
     num_fisher_examples: int = 100
     base_model: str = "xlm-roberta-base"
     # Similarity matrix options
+    similarity_source: str = "sparse"  # 'sparse' (precomputed) or 'dense' (on-the-fly)
     top_k: int = 20
     sinkhorn_iters: int = 20
     # Fisher/dataset options
@@ -248,6 +249,61 @@ class AverageWeightCalculator(SimilarityWeightCalculator):
         return models_and_weights, base_model_info
 
 
+class IterativeWeightCalculator(WeightCalculator):
+    """Weight calculator for iterative training merges."""
+
+    def __init__(self, active_model_states: Optional[Dict[str, Any]] = None, target_locales: Optional[List[str]] = None):
+        self.active_model_states = active_model_states or {}
+        self.target_locales = target_locales or []
+
+    def calculate_weights(self, config: MergeConfig) -> Tuple[Dict[str, ModelInfo], ModelInfo]:
+        print("\n--- Setting Up Iterative Merging Weights ---")
+
+        # For iterative merging, we use the provided model states and equal weights
+        # This can be extended to support more sophisticated weight calculation strategies
+
+        if not self.active_model_states:
+            # Fallback to similarity-based weights if no states provided
+            print("No active model states provided, falling back to similarity-based weights")
+            similarity_calculator = SimilarityWeightCalculator()
+            return similarity_calculator.calculate_weights(config)
+
+        models_and_weights = {}
+        equal_weight = 1.0 / len(self.active_model_states)
+
+        for locale, model_info in self.active_model_states.items():
+            model_path = model_info.get('checkpoint_path', model_info.get('locale', locale))
+
+            models_and_weights[model_path] = ModelInfo(
+                model_name=model_path,
+                subfolder="",
+                language=locale,
+                locale=locale,
+                weight=equal_weight
+            )
+            print(f"  - {locale}: {equal_weight:.6f} (from checkpoint: {model_path})")
+
+        if not models_and_weights:
+            raise ValueError("No models available for iterative merging")
+
+        # Use first model as base
+        first_model_key = list(models_and_weights.keys())[0]
+        base_model_info = models_and_weights[first_model_key]
+        models_and_weights.pop(first_model_key)
+
+        # Renormalize weights
+        num_models = len(models_and_weights) + 1  # +1 for base model
+        final_equal_weight = 1.0 / num_models
+
+        base_model_info.weight = final_equal_weight
+        for info in models_and_weights.values():
+            info.weight = final_equal_weight
+
+        print(f"Using equal weights for {num_models} models in iterative merge: {final_equal_weight:.6f} each")
+
+        return models_and_weights, base_model_info
+
+
 class WeightCalculatorFactory:
     """Factory for creating weight calculators."""
 
@@ -260,6 +316,7 @@ class WeightCalculatorFactory:
             'similarity': SimilarityWeightCalculator,
             'average': AverageWeightCalculator,
             'fisher_dataset': SimilarityWeightCalculator,
+            'iterative': IterativeWeightCalculator,
         }
 
         if mode not in calculators:
@@ -269,6 +326,11 @@ class WeightCalculatorFactory:
 
         if mode == 'manual':
             return calculator_class(kwargs.get('weights'))
+        elif mode == 'iterative':
+            return calculator_class(
+                kwargs.get('active_model_states'),
+                kwargs.get('target_locales')
+            )
         else:
             return calculator_class()
 
@@ -536,6 +598,7 @@ def create_config_from_args(args) -> MergeConfig:
         label_column=args.label_column,
         num_fisher_examples=args.num_fisher_examples,
         base_model="xlm-roberta-base",
+        similarity_source=args.similarity_source,
         top_k=args.top_k,
         sinkhorn_iters=args.sinkhorn_iters,
         fisher_data_mode=args.fisher_data_mode,
@@ -552,7 +615,7 @@ def main():
         "--mode",
         type=str,
         required=True,
-        choices=['uriel', 'manual', 'similarity', 'average', 'fisher', 'fisher_simple', 'fisher_dataset'],
+        choices=['uriel', 'manual', 'similarity', 'average', 'fisher', 'fisher_simple', 'fisher_dataset', 'iterative'],
         help="The merging mode to use."
     )
     parser.add_argument(
@@ -602,6 +665,13 @@ def main():
         type=int,
         default=100,
         help="Number of examples to use for Fisher computation"
+    )
+    parser.add_argument(
+        "--similarity-source",
+        type=str,
+        choices=["sparse", "dense"],
+        default="sparse",
+        help="Use precomputed sparse CSV or compute dense similarities on-the-fly with top-k + Sinkhorn"
     )
     parser.add_argument(
         "--top-k",

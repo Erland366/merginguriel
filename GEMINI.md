@@ -2,11 +2,7 @@
 
 ## 0. Document Control
 
-<<<<<<< HEAD
-**Document Status: LIVING DOCUMENT - Last Updated: 2025-10-14 19:35 UTC**
-=======
 **Document Status: LIVING DOCUMENT - Last Updated: 2025-10-14 20:00 UTC**
->>>>>>> feat/uriel-ensemble-inference
 
 **The Golden Rule:** This document, `GEMINI.md`, is the single source of truth for this project. Any developer, human or AI, who modifies the codebase, adds a feature, or changes a workflow **must** update the relevant sections of this document in the same commit/change. This ensures the documentation remains synchronized with the code.
 
@@ -156,8 +152,24 @@ This directory is the heart of the project, containing the Python scripts that d
 
 -   **Files Used**:
     - **`language_similarity_matrix_unified.csv`**: Pre-computed URIEL cosine similarity matrix (50×50) containing similarity scores between all language pairs
-    - **`haryoaw_k_models.csv`**: List of available models with locale codes and model paths
+    - **`haryos_model/`**: Consolidated model directory containing `xlm-roberta-base_massive_k_{locale}` models
     - **`similarity_utils.py`**: Shared processing module (replaces deprecated similarity_matrix.py)
+
+### Model Directory Structure
+
+The project now uses a consolidated model directory structure for better organization:
+
+```
+haryos_model/
+├── xlm-roberta-base_massive_k_en-US/
+├── xlm-roberta-base_massive_k_fr-FR/
+├── xlm-roberta-base_massive_k_de-DE/
+├── xlm-roberta-base_massive_k_es-ES/
+├── xlm-roberta-base_massive_k_sq-AL/
+└── ... (50+ locales total)
+```
+
+Each model directory contains a complete fine-tuned model with all necessary configuration files for direct loading and merging.
 
 ### `auto-merge-llm` Integration
 
@@ -195,6 +207,15 @@ The core innovation of MergingUriel is the dynamic processing of URIEL similarit
 - `--top-k 20`: Number of similar languages to consider (default: 20)
 - `--sinkhorn-iters 20`: Sinkhorn normalization iterations (default: 20)
 - `--num-languages 5`: Maximum number of models to actually use (default: 5)
+
+#### **Enhanced Similarity Processing**
+The system supports both sparse and dense similarity computation:
+
+- **Sparse Mode (Default)**: Uses pre-computed similarity matrix with top-K filtering
+- **Dense Mode**: Computes similarities on-the-fly using URIEL features with configurable top-K and Sinkhorn normalization
+- **Dynamic Top-K**: Experiment with different numbers of source languages without regenerating matrices
+- **Flexible Filtering**: Try different top-K values (5, 10, 20) to find optimal ensemble size
+- **Automatic Normalization**: Ensures weights always sum to 1.0 regardless of top-K setting
 
 ## 5. Supported Merging Methods & Baselines
 
@@ -340,7 +361,52 @@ python merginguriel/aggregate_results.py --locales sq-AL th-TH --experiment-type
 - **Comprehensive Reporting**: Automated evaluation with win rate analysis and statistical comparison
 - **Flexible CLI Interface**: Filtering, verbose logging, and multiple output formats
 
-### Workflow 4: URIEL-Guided Ensemble Inference
+### Workflow 4: Iterative Training & Merging ✅ **NEW**
+
+1.  **Objective:** Train multiple language models simultaneously with periodic merging during training to foster deeper integration.
+2.  **Script:** `merginguriel/run_iterative_training.py`
+3.  **Prerequisites:** Sufficient GPU memory for multiple models, locales for training
+4.  **Command Example (Auto-select source languages):**
+    ```bash
+    python merginguriel/run_iterative_training.py \
+      --target-lang sw-KE \
+      --max-epochs 15 \
+      --merge-frequency 3 \
+      --merge-algorithm linear \
+      --output-dir iterative_results
+    ```
+5.  **Command Example (Manual source languages):**
+    ```bash
+    python merginguriel/run_iterative_training.py \
+      --target-lang sw-KE \
+      --locales en-US,fr-FR,de-DE \
+      --max-epochs 15 \
+      --merge-frequency 3 \
+      --merge-algorithm linear
+    ```
+6.  **Command Example (Advanced with Adaptive Features):**
+    ```bash
+    python merginguriel/run_iterative_training.py \
+      --target-lang sw-KE \
+      --locales en-US,fr-FR,de-DE,es-ES,it-IT \
+      --max-epochs 20 \
+      --merge-frequency 3 \
+      --adaptive-merge-frequency \
+      --performance-merge-trigger \
+      --convergence-threshold 1e-4 \
+      --checkpoint-before-merge \
+      --enable-wandb \
+      --save-config
+    ```
+7.  **Key Features:**
+    -   Simultaneous multi-locale training with orchestrated merges
+    -   Adaptive merge scheduling based on performance convergence
+    -   Comprehensive state management and checkpointing
+    -   Real-time monitoring and automatic error recovery
+    -   Integration with existing MergingUriel pipeline
+8.  **Output:** Creates structured output with training logs, merged models, performance metrics, and comprehensive experiment statistics. 
+
+### Workflow 5: URIEL-Guided Ensemble Inference
 
 This workflow provides an alternative to parameter merging by combining model outputs at inference time using the same top-K similarity processing.
 
@@ -394,17 +460,161 @@ This section outlines the strategic goals for the evolution of the MergingUriel 
     2.  Implement corresponding `MergingStrategy` classes (e.g., `TiesStrategy`) that correctly format the parameters (`scaling_coefficient`, `param_value_mask_rate`, etc.) for the `auto-merge-llm` backend.
     3.  Investigate how URIEL similarity scores can be adapted to serve as inputs for these more complex methods, which may go beyond a simple linear weighting.
 
-### 7.2. Iterative Training & Merging
+### 7.2. Iterative Training & Merging ✅ **IMPLEMENTED**
 
 -   **Goal:** Move beyond a single, post-training merge. This new approach involves merging models *during* the training process itself to foster a more deeply integrated final model.
+-   **Status:** ✅ **FULLY IMPLEMENTED** - Available in production as of 2025-10-14
 -   **Implementation Strategy:**
-    1.  Develop a new, sophisticated training orchestrator that can manage multiple `Trainer` instances for different languages simultaneously.
-    2.  At the end of each epoch (or a set number of steps), the orchestrator will:
-        a. Pause training for all models.
-        b. Trigger the merging pipeline to combine the current checkpoints of the source models.
-        c. Reload the weights of each source model with the weights from the newly merged model.
-        d. Resume training for each model on its respective language-specific dataset.
-    3.  This will require careful management of model states, checkpoints, and the `Trainer` lifecycle.
+    1.  ✅ **Developed `IterativeTrainingOrchestrator`**: A sophisticated training orchestrator that manages multiple `Trainer` instances for different languages simultaneously.
+    2.  ✅ **Implemented Merge Cycle**: At the end of each epoch (or set number of steps), the orchestrator:
+        a. Pauses training for all models.
+        b. Triggers the merging pipeline to combine current checkpoints.
+        c. Reloads weights of each source model with merged weights.
+        d. Resumes training for each model on respective language datasets.
+    3.  ✅ **State Management**: Implemented comprehensive management of model states, checkpoints, and `Trainer` lifecycle.
+
+#### **New Components Added:**
+
+-   **`iterative_training_orchestrator.py`**: Main orchestrator class managing multi-model training
+-   **`iterative_config.py`**: Comprehensive configuration system for iterative training
+-   **`training_state.py`**: Model state management and checkpointing system
+-   **`merge_coordinator.py`**: Coordinates merge operations during training
+-   **`adaptive_merging.py`**: Intelligent merge scheduling and performance monitoring
+-   **`run_iterative_training.py`**: CLI interface for iterative training experiments
+
+#### **Key Features Implemented:**
+
+-   **Sequential Training**: Models trained one-by-one to prevent GPU OOM errors (default behavior)
+-   **Memory Management**: Automatic GPU cache clearing between model training
+-   **Adaptive Merge Scheduling**: Performance-based merge triggering after each model
+-   **Comprehensive Checkpointing**: Automatic state preservation and recovery
+-   **Enhanced Monitoring**: Real-time performance tracking and alerting
+-   **Flexible Configuration**: Extensive customization options
+-   **Robust Error Handling**: Training continues even if individual models fail
+-   **Resource Optimization**: Reduced batch sizes (32) for memory-efficient training
+
+#### **Usage Examples:**
+
+```bash
+# Basic sequential training (default, memory-safe)
+python merginguriel/run_iterative_training.py \
+  --target-lang sq-AL \
+  --mode similarity \
+  --max-epochs 15 \
+  --batch-size 32
+
+# Advanced sequential training with merging
+python merginguriel/run_iterative_training.py \
+  --target-lang sq-AL \
+  --mode similarity \
+  --merge-frequency 2 \
+  --sequential-training \
+  --enable-wandb \
+  --checkpoint-before-merge
+
+# Memory-optimized training for smaller GPUs
+python merginguriel/run_iterative_training.py \
+  --target-lang sq-AL \
+  --mode similarity \
+  --batch-size 16 \
+  --max-seq-length 64
+```
+
+**Note**: Merging always occurs per epoch for consistent training dynamics and stable convergence patterns.
+
+#### **Process Management for Iterative Training**
+
+**How to Kill Iterative Training:**
+
+Sometimes iterative training can become unresponsive or you may need to stop it. Here are the methods to kill the process:
+
+1. **Find the Process ID (PID):**
+   ```bash
+   ps aux | grep python | grep iterative
+   ```
+   Look for the process running `run_iterative_training.py`
+
+2. **Force Kill the Process:**
+   ```bash
+   kill -9 <PID>
+   ```
+   Replace `<PID>` with the actual process ID (e.g., `kill -9 916746`)
+
+3. **Check if Process is Still Running:**
+   ```bash
+   ps aux | grep python | grep iterative
+   ```
+
+4. **Monitor GPU Usage (if needed):**
+   ```bash
+   nvidia-smi
+   ```
+
+**Why Ctrl+C May Not Work:**
+- Sequential training can become unresponsive during model loading/saving
+- GPU operations may prevent interrupt signals from being processed
+- Training loops with heavy computation may not check for interrupts frequently
+- Large batch sizes can make the system unresponsive
+
+**Prevention Tips:**
+- Use appropriate batch sizes for your GPU memory
+- Monitor GPU memory usage with `nvidia-smi` during training
+- Consider using `--max-epochs 1` for testing before full training runs
+- Use `--sequential-training` (enabled by default) to prevent OOM issues
+
+#### **Key Arguments (Aligned with Main Pipeline):**
+
+- `--target-lang`: Target language/locale for merging (required, e.g., sw-KE)
+- `--locales`: Source languages to train (optional, auto-selected if not specified)
+- `--merge-frequency`: Epochs between merges (default: 3)
+- `--merge-algorithm`: Merging algorithm (linear, fisher_simple, fisher_dataset)
+- `--num-languages`: Number of languages to include in merging (default: 5)
+- `--similarity-source`: Use sparse/dense similarity computation (default: sparse)
+- `--top-k`: Top-K neighbors for similarity calculation (default: 20)
+- `--sinkhorn-iters`: Sinkhorn normalization iterations (default: 20)
+
+#### **Argument Alignment with Main Pipeline:**
+
+The iterative training system now uses the same argument names as `run_merging_pipeline_refactored.py`:
+
+| Argument | Iterative Training | Main Pipeline | Description |
+|----------|-------------------|---------------|-------------|
+| `--target-lang` | ✅ | ✅ | Target language for merging |
+| `--mode` | ✅ | ✅ | Merging mode (uriel, similarity, average, etc.) |
+| `--num-languages` | ✅ | ✅ | Number of languages to include |
+| `--similarity-source` | ✅ | ✅ | Sparse/dense similarity mode |
+| `--top-k` | ✅ | ✅ | Top-K neighbors |
+| `--sinkhorn-iters` | ✅ | ✅ | Sinkhorn iterations |
+| `--fisher-data-mode` | ✅ | ✅ | Fisher data mode |
+| `--preweight` | ✅ | ✅ | Pre-weighting strategy |
+| `--batch-size` | ✅ | ✅ | Training batch size (default: 128) |
+| `--max-seq-length` | ✅ | ✅ | Maximum sequence length |
+| `--sequential-training` | ✅ | N/A | Train models one-by-one to prevent OOM (default: enabled) |
+
+**✅ Complete Training System Fix (2025-10-14):**
+- **Argument Alignment**: Removed duplicate arguments and unified `--mode` argument with main pipeline
+- **Critical OOM Fix**: Implemented sequential training to train models one-by-one instead of in parallel
+- **Memory Optimization**: Reduced default batch size to 32 and added automatic GPU memory clearing
+- **Dataset Labels Fix**: Fixed preprocessing function to include labels for loss computation (resolves "logits only" error)
+- **Final Issue Resolution**: Fixed missing Fisher-related arguments (`--fisher-batch-size`, `--fisher-max-seq-length`)
+- **Verified Functionality**: Confirmed that sequential training works without OOM errors and loss computation works properly
+- **Resource Management**: Added `--sequential-training` flag (default: enabled) to control training strategy
+
+This ensures consistent user experience across both systems while preventing GPU memory issues and enabling proper model training. The iterative training script now uses the exact same argument interface as the main merging pipeline with memory-safe sequential training that actually works!
+
+#### **Integration with Existing Pipeline:**
+
+-   ✅ **Backward Compatibility**: All existing merging functionality preserved
+-   ✅ **Extended Pipeline**: Added `--mode iterative` to existing merge pipeline
+-   ✅ **Unified Architecture**: Seamless integration with current MergingUriel infrastructure
+-   ✅ **Shared Components**: Reuses existing weight calculation and merging strategies
+
+#### **Documentation:**
+
+-   ✅ **Comprehensive README**: `ITERATIVE_TRAINING_README.md` with detailed usage guide
+-   ✅ **Example Scripts**: `examples/iterative_training_example.py` demonstrating key features
+-   ✅ **Test Suite**: `tests/test_iterative_training.py` with comprehensive validation
+-   ✅ **Integration Tests**: End-to-end workflow validation
 
 ### 7.3. URIEL-Guided Ensemble Inference ✅ COMPLETED
 
@@ -479,7 +689,8 @@ Based on testing with the current model repository:
 | **de-DE** | 4 models (en-US, fr-FR, sq-AL, it-IT) | 0.047, 0.047, 0.044, 0.042 |
 | **en-US** | 4 models (fr-FR, de-DE, sq-AL, it-IT) | 0.044, 0.043, 0.040, 0.039 |
 
-### 7.4. ✅ COMPLETED: Comprehensive, Automated Evaluation Report
+### 7.4. Create a Comprehensive, Automated Evaluation Report
+
 -   **Goal:** Fully automate the comprehensive evaluation process by refactoring `aggregate_results.py` to include the "Best Source Language" and "Best Overall Zero-Shot" baselines (as defined in Section 5.1) in the final reports.
 -   **Status:** ✅ **COMPLETED** - Implemented comprehensive automated evaluation system with full baseline integration.
 -   **Solution:** Complete refactoring of `aggregate_results.py` with the following key enhancements:
