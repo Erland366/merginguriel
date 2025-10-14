@@ -2,7 +2,7 @@
 
 ## 0. Document Control
 
-**Document Status: LIVING DOCUMENT - Last Updated: 2025-10-14 14:45 UTC**
+**Document Status: LIVING DOCUMENT - Last Updated: 2025-10-14 16:45 UTC**
 
 **The Golden Rule:** This document, `GEMINI.md`, is the single source of truth for this project. Any developer, human or AI, who modifies the codebase, adds a feature, or changes a workflow **must** update the relevant sections of this document in the same commit/change. This ensures the documentation remains synchronized with the code.
 
@@ -162,7 +162,42 @@ This workflow automates the process of merging and evaluating models for multipl
     -   **Objective:** Collect results from all individual experiment folders and the N-vs-N evaluation to produce a single, comprehensive summary report.
     -   **Script:** `merginguriel/aggregate_results.py`
     -   **Command:** `python merginguriel/aggregate_results.py`
-    -   **Output:** Generates a CSV file and a Markdown report (`results_report_[timestamp].md`) comparing the performance of the `baseline`, `similarity`, and `average` methods across all tested locales. *Note: This script currently needs to be refactored to include the N-vs-N baselines (see Future Development Plan).* 
+    -   **Output:** Generates a CSV file and a Markdown report (`results_report_[timestamp].md`) comparing the performance of the `baseline`, `similarity`, and `average` methods across all tested locales. *Note: This script currently needs to be refactored to include the N-vs-N baselines (see Future Development Plan).*
+
+### Workflow 4: Iterative Training & Merging ✅ **NEW**
+
+1.  **Objective:** Train multiple language models simultaneously with periodic merging during training to foster deeper integration.
+2.  **Script:** `merginguriel/run_iterative_training.py`
+3.  **Prerequisites:** Sufficient GPU memory for multiple models, locales for training
+4.  **Command Example (Basic):**
+    ```bash
+    python merginguriel/run_iterative_training.py \
+      --locales en-US,fr-FR,de-DE \
+      --max-epochs 15 \
+      --merge-frequency 3 \
+      --merge-algorithm linear \
+      --output-dir iterative_results
+    ```
+5.  **Command Example (Advanced with Adaptive Features):**
+    ```bash
+    python merginguriel/run_iterative_training.py \
+      --locales en-US,fr-FR,de-DE,es-ES,it-IT \
+      --max-epochs 20 \
+      --merge-frequency 3 \
+      --adaptive-merge-frequency \
+      --performance-merge-trigger \
+      --convergence-threshold 1e-4 \
+      --checkpoint-before-merge \
+      --enable-wandb \
+      --save-config
+    ```
+6.  **Key Features:**
+    -   Simultaneous multi-locale training with orchestrated merges
+    -   Adaptive merge scheduling based on performance convergence
+    -   Comprehensive state management and checkpointing
+    -   Real-time monitoring and automatic error recovery
+    -   Integration with existing MergingUriel pipeline
+7.  **Output:** Creates structured output with training logs, merged models, performance metrics, and comprehensive experiment statistics. 
 
 ## 7. Future Development Plan
 
@@ -176,17 +211,73 @@ This section outlines the strategic goals for the evolution of the MergingUriel 
     2.  Implement corresponding `MergingStrategy` classes (e.g., `TiesStrategy`) that correctly format the parameters (`scaling_coefficient`, `param_value_mask_rate`, etc.) for the `auto-merge-llm` backend.
     3.  Investigate how URIEL similarity scores can be adapted to serve as inputs for these more complex methods, which may go beyond a simple linear weighting.
 
-### 7.2. Iterative Training & Merging
+### 7.2. Iterative Training & Merging ✅ **IMPLEMENTED**
 
 -   **Goal:** Move beyond a single, post-training merge. This new approach involves merging models *during* the training process itself to foster a more deeply integrated final model.
+-   **Status:** ✅ **FULLY IMPLEMENTED** - Available in production as of 2025-10-14
 -   **Implementation Strategy:**
-    1.  Develop a new, sophisticated training orchestrator that can manage multiple `Trainer` instances for different languages simultaneously.
-    2.  At the end of each epoch (or a set number of steps), the orchestrator will:
-        a. Pause training for all models.
-        b. Trigger the merging pipeline to combine the current checkpoints of the source models.
-        c. Reload the weights of each source model with the weights from the newly merged model.
-        d. Resume training for each model on its respective language-specific dataset.
-    3.  This will require careful management of model states, checkpoints, and the `Trainer` lifecycle.
+    1.  ✅ **Developed `IterativeTrainingOrchestrator`**: A sophisticated training orchestrator that manages multiple `Trainer` instances for different languages simultaneously.
+    2.  ✅ **Implemented Merge Cycle**: At the end of each epoch (or set number of steps), the orchestrator:
+        a. Pauses training for all models.
+        b. Triggers the merging pipeline to combine current checkpoints.
+        c. Reloads weights of each source model with merged weights.
+        d. Resumes training for each model on respective language datasets.
+    3.  ✅ **State Management**: Implemented comprehensive management of model states, checkpoints, and `Trainer` lifecycle.
+
+#### **New Components Added:**
+
+-   **`iterative_training_orchestrator.py`**: Main orchestrator class managing multi-model training
+-   **`iterative_config.py`**: Comprehensive configuration system for iterative training
+-   **`training_state.py`**: Model state management and checkpointing system
+-   **`merge_coordinator.py`**: Coordinates merge operations during training
+-   **`adaptive_merging.py`**: Intelligent merge scheduling and performance monitoring
+-   **`run_iterative_training.py`**: CLI interface for iterative training experiments
+
+#### **Key Features Implemented:**
+
+-   **Multi-Trainer Orchestration**: Simultaneous training of multiple language models
+-   **Adaptive Merge Scheduling**: Performance-based merge triggering
+-   **Comprehensive Checkpointing**: Automatic state preservation and recovery
+-   **Enhanced Monitoring**: Real-time performance tracking and alerting
+-   **Flexible Configuration**: Extensive customization options
+-   **Robust Error Handling**: Automatic recovery from merge failures
+-   **Resource Management**: Efficient GPU memory and compute utilization
+
+#### **Usage Examples:**
+
+```bash
+# Basic iterative training
+python merginguriel/run_iterative_training.py \
+  --locales en-US,fr-FR,de-DE \
+  --max-epochs 15 \
+  --merge-frequency 3 \
+  --merge-algorithm linear
+
+# Advanced adaptive merging
+python merginguriel/run_iterative_training.py \
+  --locales en-US,fr-FR,de-DE,es-ES \
+  --merge-frequency 2 \
+  --adaptive-merge-frequency \
+  --performance-merge-trigger \
+  --enable-wandb \
+  --checkpoint-before-merge
+```
+
+**Note**: Merging always occurs per epoch for consistent training dynamics and stable convergence patterns.
+
+#### **Integration with Existing Pipeline:**
+
+-   ✅ **Backward Compatibility**: All existing merging functionality preserved
+-   ✅ **Extended Pipeline**: Added `--mode iterative` to existing merge pipeline
+-   ✅ **Unified Architecture**: Seamless integration with current MergingUriel infrastructure
+-   ✅ **Shared Components**: Reuses existing weight calculation and merging strategies
+
+#### **Documentation:**
+
+-   ✅ **Comprehensive README**: `ITERATIVE_TRAINING_README.md` with detailed usage guide
+-   ✅ **Example Scripts**: `examples/iterative_training_example.py` demonstrating key features
+-   ✅ **Test Suite**: `tests/test_iterative_training.py` with comprehensive validation
+-   ✅ **Integration Tests**: End-to-end workflow validation
 
 ### 7.3. URIEL-Guided Ensemble Inference
 
