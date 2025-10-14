@@ -76,7 +76,7 @@ def run_evaluation(model_path, locale, prefix):
     print(f"Running evaluation for {model_path} with locale {locale}...")
 
     cmd = [sys.executable, os.path.join(REPO_ROOT, "merginguriel", "evaluate_specific_model.py"),
-           "--model-path", model_path,
+           "--base-model", model_path,
            "--locale", locale,
            "--prefix", prefix]
 
@@ -129,7 +129,8 @@ def main():
     parser = argparse.ArgumentParser(description="Run large-scale merging experiments")
     parser.add_argument("--locales", nargs="+", default=None,
                        help="Specific locales to run (default: all locales)")
-    parser.add_argument("--modes", nargs="+", default=["baseline", "similarity", "average", "fisher_dataset"],
+    parser.add_argument("--modes", nargs="+",
+                       default=["baseline", "similarity", "average", "fisher", "ties", "task_arithmetic", "slerp", "regmean", "linear"],
                        help="Which modes to run per locale (include 'baseline' to evaluate base model)")
     parser.add_argument("--start-from", type=int, default=0,
                        help="Start from specific locale index (for resuming)")

@@ -315,17 +315,13 @@ class WeightCalculatorFactory:
             'manual': ManualWeightCalculator,
             'similarity': SimilarityWeightCalculator,
             'average': AverageWeightCalculator,
-<<<<<<< HEAD
-            'fisher_dataset': SimilarityWeightCalculator,
             'iterative': IterativeWeightCalculator,
-=======
             'fisher': SimilarityWeightCalculator,
             # Advanced merging methods use similarity-based weights
             'ties': SimilarityWeightCalculator,
             'task_arithmetic': SimilarityWeightCalculator,
             'slerp': SimilarityWeightCalculator,
             'regmean': SimilarityWeightCalculator,
->>>>>>> feat/iterative-training-merging
         }
 
         if mode not in calculators:
@@ -910,12 +906,8 @@ def main():
         "--mode",
         type=str,
         required=True,
-<<<<<<< HEAD
-        choices=['uriel', 'manual', 'similarity', 'average', 'fisher', 'fisher_simple', 'fisher_dataset', 'iterative'],
-=======
-        choices=['uriel', 'manual', 'similarity', 'average', 'fisher',
+        choices=['uriel', 'manual', 'similarity', 'average', 'fisher', 'iterative',
                 'ties', 'task_arithmetic', 'slerp', 'regmean'],
->>>>>>> feat/iterative-training-merging
         help="The merging mode to use."
     )
     parser.add_argument(
