@@ -257,20 +257,37 @@ def main():
     import argparse
 
     parser = argparse.ArgumentParser(description="Comprehensive Ensemble Methods Comparison")
-    parser.add_argument(
+
+    # Target language(s) - support both singular and plural for flexibility
+    target_lang_group = parser.add_mutually_exclusive_group(required=False)
+    target_lang_group.add_argument(
+        "--target-lang",
+        type=str,
+        help="Single target language/locale (e.g., 'en-US', 'sq-AL')"
+    )
+    target_lang_group.add_argument(
         "--target-languages",
         type=str,
         nargs="+",
         default=["en-US", "sq-AL", "sw-KE", "th-TH"],
-        help="Target languages to test"
+        help="Target languages to test (multiple languages for comparison)"
     )
-    parser.add_argument(
+
+    # Voting method(s) - support both singular and plural for flexibility
+    voting_method_group = parser.add_mutually_exclusive_group(required=False)
+    voting_method_group.add_argument(
+        "--voting-method",
+        type=str,
+        choices=["majority", "weighted_majority", "soft", "uriel_logits"],
+        help="Single voting method to test"
+    )
+    voting_method_group.add_argument(
         "--voting-methods",
         type=str,
         nargs="+",
         default=["majority", "weighted_majority", "soft", "uriel_logits"],
         choices=["majority", "weighted_majority", "soft", "uriel_logits"],
-        help="Voting methods to compare"
+        help="Voting methods to compare (multiple methods for comparison)"
     )
     parser.add_argument(
         "--num-examples",
@@ -293,10 +310,20 @@ def main():
 
     args = parser.parse_args()
 
+    # Handle both singular and plural forms for flexibility
+    target_languages = args.target_languages if args.target_languages else [args.target_lang]
+    voting_methods = args.voting_methods if args.voting_methods else [args.voting_method]
+
+    # Validate that we have the required arguments
+    if not target_languages or not target_languages[0]:
+        parser.error("Either --target-lang or --target-languages must be specified")
+    if not voting_methods or not voting_methods[0]:
+        parser.error("Either --voting-method or --voting-methods must be specified")
+
     # Run comprehensive comparison
     results = run_comprehensive_comparison(
-        target_languages=args.target_languages,
-        voting_methods=args.voting_methods,
+        target_languages=target_languages,
+        voting_methods=voting_methods,
         num_examples=args.num_examples,
         num_languages=args.num_languages,
         output_dir=args.output_dir

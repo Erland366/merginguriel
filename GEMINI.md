@@ -2,7 +2,11 @@
 
 ## 0. Document Control
 
+<<<<<<< HEAD
 **Document Status: LIVING DOCUMENT - Last Updated: 2025-10-14 19:35 UTC**
+=======
+**Document Status: LIVING DOCUMENT - Last Updated: 2025-10-14 20:00 UTC**
+>>>>>>> feat/uriel-ensemble-inference
 
 **The Golden Rule:** This document, `GEMINI.md`, is the single source of truth for this project. Any developer, human or AI, who modifies the codebase, adds a feature, or changes a workflow **must** update the relevant sections of this document in the same commit/change. This ensures the documentation remains synchronized with the code.
 
@@ -49,7 +53,17 @@ All dependencies are managed within a Python virtual environment. Activate it us
 source .venv/bin/activate
 ```
 
-### 3.2. Testing & Quality Assurance
+### 3.1.1. Command-Line Argument Conventions
+
+All scripts in the MergingUriel project follow standardized command-line argument naming conventions to ensure consistency and usability. See [`CMD_ARGUMENT_CONVENTIONS.md`](CMD_ARGUMENT_CONVENTIONS.md) for complete documentation.
+
+**Key Naming Rules:**
+- **Singular form** (`--target-lang`, `--voting-method`): Used for single-target operations
+- **Plural form** (`--target-languages`, `--voting-methods`): Used for batch/comparison operations
+- **Kebab-case**: All arguments use lowercase with hyphens
+- **Consistency**: Core arguments (`--num-languages`, `--top-k`, `--sinkhorn-iters`) are identical across all scripts
+
+### 3.3. Testing & Quality Assurance
 
 The project includes a comprehensive test suite organized by test type to ensure code quality and system reliability.
 
@@ -94,7 +108,7 @@ python run_tests.py --list
 - **Integration Tests**: Test complete workflows and system interactions
 - **Verification Scripts**: Validate system properties and performance requirements
 
-### 3.3. Hardware & Monitoring
+### 3.4. Hardware & Monitoring
 
 -   **GPU:** The primary development environment is equipped with two NVIDIA RTX 4090 GPUs. However, most individual training and merging tasks are designed to run on a single GPU.
 -   **VRAM Management:** It is crucial to monitor GPU memory usage to prevent Out-Of-Memory (OOM) errors, especially when working with large models or batch sizes. Use the following command to check GPU status:
@@ -466,7 +480,6 @@ Based on testing with the current model repository:
 | **en-US** | 4 models (fr-FR, de-DE, sq-AL, it-IT) | 0.044, 0.043, 0.040, 0.039 |
 
 ### 7.4. ✅ COMPLETED: Comprehensive, Automated Evaluation Report
-
 -   **Goal:** Fully automate the comprehensive evaluation process by refactoring `aggregate_results.py` to include the "Best Source Language" and "Best Overall Zero-Shot" baselines (as defined in Section 5.1) in the final reports.
 -   **Status:** ✅ **COMPLETED** - Implemented comprehensive automated evaluation system with full baseline integration.
 -   **Solution:** Complete refactoring of `aggregate_results.py` with the following key enhancements:
@@ -531,4 +544,118 @@ results_summary_20251014_172045.json            # Summary statistics
 results_win_analysis_20251014_172045.json       # Win rate analysis
 ```
 
-The enhanced system now provides a complete, automated evaluation pipeline that fully integrates N-vs-N baselines, supports arbitrary merging methods, and generates comprehensive reports with statistical analysis and win rate analysis.
+### 7.5. Large-Scale Ensemble Inference Experiment Runner 📋 TODO
+
+-   **Goal:** Create a large-scale experiment runner for URIEL-guided ensemble inference that parallels `run_large_scale_experiment.py` but focuses on ensemble methods rather than model merging.
+-   **Status:** 📋 **PLANNED** - Design and implementation pending.
+-   **Why Needed:** The current ensemble system works for single experiments, but lacks automation for systematic evaluation across multiple target languages and voting methods. This would enable direct comparison between parameter merging and ensemble inference approaches.
+
+#### 7.5.1. Implementation Requirements
+
+**Core Script: `merginguriel/run_large_scale_ensemble_experiments.py`**
+
+1. **Architecture Design:**
+   - Follow the same pattern as `run_large_scale_experiment.py` but adapted for ensemble inference
+   - Support multiple voting methods: `majority`, `weighted_majority`, `soft`, `uriel_logits`
+   - Use the same similarity matrix processing as merging pipeline via `similarity_utils.py`
+   - Generate results compatible with `aggregate_results.py` for unified reporting
+
+2. **Key Features to Implement:**
+   - **Multi-Target Support:** Run experiments across multiple target languages automatically
+   - **Voting Method Matrix:** Test all combinations of target languages × voting methods
+   - **Progress Tracking:** Save progress after each locale with resumption capability
+   - **Result Aggregation:** Generate results in format expected by `aggregate_results.py`
+   - **Baseline Integration:** Include single-model baselines for comparison
+
+3. **Command Interface:**
+   ```bash
+   # Basic usage
+   python merginguriel/run_large_scale_ensemble_experiments.py \
+       --target-languages "en-US" "sq-AL" "sw-KE" \
+       --voting-methods "majority" "weighted_majority" "soft" "uriel_logits" \
+       --num-examples 100
+
+   # Advanced usage with all options
+   python merginguriel/run_large_scale_ensemble_experiments.py \
+       --max-locales 20 \
+       --voting-methods "majority" "weighted_majority" "soft" "uriel_logits" \
+       --num-examples 100 \
+       --num-languages 5 \
+       --top-k 20 \
+       --sinkhorn-iters 20 \
+       --output-dir "ensemble_results"
+   ```
+
+4. **Compatibility Requirements:**
+   - **Results Format:** Must generate `results.json` files compatible with `aggregate_results.py`
+   - **Folder Structure:** Use consistent naming: `ensemble_{method}_{locale}/`
+   - **Metadata:** Include all required fields for aggregation (`experiment_info`, `performance`, etc.)
+   - **Progress Files:** Use same format as merging experiments for unified tracking
+
+#### 7.5.2. Detailed Implementation Plan
+
+**Step 1: Core Experiment Engine**
+- [ ] Create `run_large_scale_ensemble_experiments.py` with basic structure
+- [ ] Implement locale discovery from similarity matrix
+- [ ] Add voting method enumeration and validation
+- [ ] Build command-line interface mirroring merging experiment runner
+
+**Step 2: Experiment Execution**
+- [ ] Implement `run_ensemble_experiment()` function per target language
+- [ ] Add support for all voting methods with error handling
+- [ ] Integrate with `uriel_ensemble_inference.py` for actual inference
+- [ ] Add progress tracking and resumption capabilities
+
+**Step 3: Results Management**
+- [ ] Ensure results structure matches `aggregate_results.py` expectations
+- [ ] Implement proper folder naming: `ensemble_{method}_{locale}/`
+- [ ] Add detailed metadata including voting method, similarity settings
+- [ ] Create progress tracking compatible with merging experiments
+
+**Step 4: Integration with Existing Systems**
+- [ ] Test compatibility with `aggregate_results.py`
+- [ ] Ensure results can be combined with merging experiment results
+- [ ] Add unified reporting across both merging and ensemble approaches
+- [ ] Update documentation and workflow examples
+
+#### 7.5.3. Expected Output Structure
+
+```
+ensemble_results/
+├── ensemble_majority_en-US/
+│   └── results.json
+├── ensemble_weighted_majority_en-US/
+│   └── results.json
+├── ensemble_soft_en-US/
+│   └── results.json
+├── ensemble_uriel_logits_en-US/
+│   └── results.json
+├── ensemble_majority_sq-AL/
+│   └── results.json
+└── ... (for all target language × voting method combinations)
+```
+
+#### 7.5.4. Integration with Section 7.4
+
+This system must be compatible with the automated evaluation report improvements planned in Section 7.4:
+
+- **Unified Aggregation:** `aggregate_results.py` should handle both merging and ensemble results
+- **Baseline Integration:** Include ensemble baselines alongside merging baselines
+- **Cross-Method Comparison:** Enable direct comparison between parameter merging and ensemble inference
+- **Comprehensive Reporting:** Final reports should show all approaches side-by-side
+
+#### 7.5.5. Success Criteria
+
+- [ ] **Automated Execution:** Can run experiments for 20+ locales without manual intervention
+- [ ] **Complete Coverage:** Tests all voting methods across all target languages
+- [ ] **Results Compatibility:** Results can be aggregated with existing merging experiments
+- [ ] **Progress Resumption:** Can resume from any point after interruption
+- [ ] **Unified Reporting:** Integrated with `aggregate_results.py` for comprehensive analysis
+- [ ] **Performance Comparison:** Enables direct comparison between merging and ensemble approaches
+
+#### 7.5.6. Dependencies
+
+- **Existing Components:** `uriel_ensemble_inference.py`, `similarity_utils.py`
+- **Data Files:** `language_similarity_matrix_unified.csv`, `haryoaw_k_models.csv`
+- **Integration:** Must work with updated `aggregate_results.py` from Section 7.4
+- **Testing:** Should be included in the test suite under `tests/integration/`
