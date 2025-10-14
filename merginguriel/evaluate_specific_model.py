@@ -18,14 +18,11 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
-def create_results_folder(base_model: str = None, model_dir: str = None, locale: str = None, prefix: str = None):
+def create_results_folder(base_model: str = None, locale: str = None, prefix: str = None):
     results_dir = "results"
     os.makedirs(results_dir, exist_ok=True)
     if prefix:
         folder_name = f"{prefix}_{locale}"
-    elif base_model and model_dir:
-        base_name = base_model.split('/')[-1] if '/' in base_model else base_model
-        folder_name = f"{base_name}_{model_dir}_{locale}"
     elif base_model:
         base_name = base_model.split('/')[-1] if '/' in base_model else base_model
         folder_name = f"{base_name}_{locale}"
@@ -43,14 +40,14 @@ def save_evaluation_results(results: dict, eval_folder: str):
     logger.info(f"✓ Results saved to: {results_path}")
 
 
-def evaluate_specific_model(model_name: str, subfolder: str | None = None, locale: str = "cy-GB", eval_folder: str = None):
+def evaluate_specific_model(model_name: str, locale: str = "cy-GB", eval_folder: str = None):
     try:
         massive_locale = locale
         logger.info(f"Loading model: {model_name}")
         logger.info(f"Testing on locale: {locale}")
 
         # Load tokenizer
-        tokenizer = AutoTokenizer.from_pretrained(model_name, subfolder=subfolder) if subfolder else AutoTokenizer.from_pretrained(model_name)
+        tokenizer = AutoTokenizer.from_pretrained(model_name)
         logger.info("✓ Tokenizer loaded successfully")
 
         # Load model
@@ -59,7 +56,6 @@ def evaluate_specific_model(model_name: str, subfolder: str | None = None, local
         try:
             model = AutoModelForSequenceClassification.from_pretrained(
                 model_name,
-                subfolder=subfolder,
                 device_map=("auto" if device == "cuda" else None),
                 torch_dtype=(torch.float16 if device == "cuda" else None),
             )
@@ -67,7 +63,6 @@ def evaluate_specific_model(model_name: str, subfolder: str | None = None, local
             logger.warning(f"Auto device mapping failed ({e}); loading on CPU then moving to {device}")
             model = AutoModelForSequenceClassification.from_pretrained(
                 model_name,
-                subfolder=subfolder,
                 low_cpu_mem_usage=True,
             ).to(device)
         logger.info("✓ Model loaded")
@@ -124,7 +119,6 @@ def evaluate_specific_model(model_name: str, subfolder: str | None = None, local
             'evaluation_info': {
                 'timestamp': datetime.now().isoformat(),
                 'model_name': model_name,
-                'subfolder': subfolder,
                 'locale': locale,
                 'massive_locale': massive_locale,
                 'dataset': 'AmazonScience/massive',
@@ -183,26 +177,16 @@ def evaluate_specific_model(model_name: str, subfolder: str | None = None, local
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Evaluate a MASSIVE model on a locale")
     parser.add_argument("--base-model", type=str, required=True, help="Local path or HF repo id")
-    parser.add_argument("--model-dir", type=str, default=None, help="Subfolder if loading from a repo")
     parser.add_argument("--locale", type=str, default="cy-GB", help="MASSIVE locale to evaluate")
-    parser.add_argument("--list-models", action="store_true", help="List available subfolders (HF repos only)")
     parser.add_argument("--results-dir", type=str, default=None, help="Custom results dir")
     parser.add_argument("--prefix", type=str, default=None, help="Prefix for results folder")
     args = parser.parse_args()
 
-    if args.list_models:
-        from huggingface_hub import list_repo_files
-        files = list_repo_files(args.base_model)
-        model_dirs = {p.split('/')[0] for p in files if '/' in p and p.endswith('config.json')}
-        print(f"Available subfolders in {args.base_model}:")
-        for d in sorted(model_dirs):
-            print(f"  - {d}")
-    else:
-        eval_folder = args.results_dir or create_results_folder(args.base_model, args.model_dir, args.locale, args.prefix)
-        logger.info(f"Results will be saved to: {eval_folder}")
-        results = evaluate_specific_model(args.base_model, args.model_dir, args.locale, eval_folder)
-        if results:
-            save_evaluation_results(results, eval_folder)
-            print("\n🎉 Evaluation complete.")
-            print(f"  Accuracy: {results['performance']['accuracy']:.4f}")
-            print(f"  Saved: {eval_folder}/results.json")
+    eval_folder = args.results_dir or create_results_folder(args.base_model, args.locale, args.prefix)
+    logger.info(f"Results will be saved to: {eval_folder}")
+    results = evaluate_specific_model(args.base_model, args.locale, eval_folder)
+    if results:
+        save_evaluation_results(results, eval_folder)
+        print("\n🎉 Evaluation complete.")
+        print(f"  Accuracy: {results['performance']['accuracy']:.4f}")
+        print(f"  Saved: {eval_folder}/results.json")

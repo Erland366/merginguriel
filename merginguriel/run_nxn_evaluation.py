@@ -58,7 +58,6 @@ def evaluate_single_model_target(model_info, target_locale, results_base_dir):
     """Evaluate a single model on a target locale."""
     model_locale = model_info['locale']
     model_name = model_info['path']
-    model_dir = None
 
     # Create results folder for this combination
     eval_folder = os.path.join(results_base_dir, f"{model_locale}_on_{target_locale}")
@@ -69,7 +68,6 @@ def evaluate_single_model_target(model_info, target_locale, results_base_dir):
 
         results = evaluate_specific_model(
             model_name=model_name,
-            subfolder=model_dir,
             locale=target_locale,
             eval_folder=eval_folder,
         )
