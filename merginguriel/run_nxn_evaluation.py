@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 """
-NxN cross-lingual evaluation script that evaluates each language model against all other languages.
-Creates a comprehensive evaluation matrix showing cross-lingual performance.
+NxN cross-lingual evaluation that evaluates each local language model against all other locales.
+Models are discovered under a local root (default: ./haryos_model) using the
+folder naming pattern: xlm-roberta-base_massive_k_{locale} (e.g., ..._fr-FR).
+
+Outputs a cross-lingual accuracy matrix and summary stats.
 """
 
 import os
@@ -16,47 +19,46 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import logging
 from tqdm import tqdm
 
-# Import evaluation functions from existing script
-from evaluate_specific_model import evaluate_specific_model, map_locale_to_massive_format
+# Import evaluation function (supports local paths)
+from merginguriel.evaluate_specific_model import evaluate_specific_model
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-def get_all_locales(csv_path):
-    """Extract all unique locales from the CSV file."""
-    df = pd.read_csv(csv_path)
-    # Filter out 'unknown' locale
-    locales = sorted([locale for locale in df['locale'].unique() if locale != 'unknown'])
-    return locales
+def discover_locales(models_root: str) -> list[str]:
+    """Scan the models root for locale-named folders and return sorted MASSIVE locales."""
+    root = Path(models_root)
+    if not root.exists():
+        logger.warning(f"Models root does not exist: {models_root}")
+        return []
+    locales = []
+    prefix = "xlm-roberta-base_massive_k_"
+    for entry in root.iterdir():
+        if entry.is_dir() and entry.name.startswith(prefix):
+            locale = entry.name[len(prefix):]
+            if isinstance(locale, str) and len(locale) >= 4 and "-" in locale:
+                locales.append(locale)
+    return sorted(locales)
 
-def get_k_models_for_locales(csv_path, locales=None):
-    """Get k-models for specified locales or all locales."""
-    df = pd.read_csv(csv_path)
-
-    # Filter for k-models (containing '_k_' in name)
-    k_models = df[df['model_name'].str.contains('_k_', na=False)]
-
-    if locales:
-        k_models = k_models[k_models['locale'].isin(locales)]
-
-    # Group by locale and take the first k-model for each locale
+def get_local_models_for_locales(locales: list[str], models_root: str) -> dict:
+    """Resolve local model paths under haryos_model for given locales."""
     result = {}
-    for locale in k_models['locale'].unique():
-        locale_models = k_models[k_models['locale'] == locale]
-        if not locale_models.empty:
-            model_info = locale_models.iloc[0]
+    for locale in locales:
+        model_path = os.path.join(models_root, f"xlm-roberta-base_massive_k_{locale}")
+        if os.path.isdir(model_path):
             result[locale] = {
-                'model_name': model_info['model_name'],
-                'model_dir': f"alpha_0.5_{locale}_epoch-9"
+                'locale': locale,
+                'path': model_path,
             }
-
+        else:
+            logger.warning(f"Missing local model for {locale}: {model_path}")
     return result
 
 def evaluate_single_model_target(model_info, target_locale, results_base_dir):
     """Evaluate a single model on a target locale."""
     model_locale = model_info['locale']
-    model_name = model_info['model_name']
-    model_dir = model_info['model_dir']
+    model_name = model_info['path']
+    model_dir = None
 
     # Create results folder for this combination
     eval_folder = os.path.join(results_base_dir, f"{model_locale}_on_{target_locale}")
@@ -69,7 +71,7 @@ def evaluate_single_model_target(model_info, target_locale, results_base_dir):
             model_name=model_name,
             subfolder=model_dir,
             locale=target_locale,
-            eval_folder=eval_folder
+            eval_folder=eval_folder,
         )
 
         if results:
@@ -117,15 +119,18 @@ def evaluate_single_model_target(model_info, target_locale, results_base_dir):
             'error': str(e)
         }
 
-def run_nxn_evaluation(csv_path, locales=None, max_workers=4, results_dir="nxn_results"):
+def run_nxn_evaluation(models_root: str, locales=None, max_workers=4, results_dir="nxn_results"):
     """Run NxN cross-lingual evaluation."""
 
-    # Get locales and models
-    all_locales = get_all_locales(csv_path)
+    # Discover locales from disk and optionally filter
+    discovered = discover_locales(models_root)
     if locales:
-        all_locales = [loc for loc in all_locales if loc in locales]
+        all_locales = [loc for loc in discovered if loc in locales]
+    else:
+        all_locales = discovered
 
-    models = get_k_models_for_locales(csv_path, all_locales)
+    # Resolve model directories
+    models = get_local_models_for_locales(all_locales, models_root)
 
     print(f"Found {len(models)} models for {len(all_locales)} locales")
     print(f"Models: {list(models.keys())}")
@@ -253,9 +258,9 @@ def create_evaluation_matrix(results, locales, results_base_dir):
     return matrix
 
 def main():
-    parser = argparse.ArgumentParser(description="Run NxN cross-lingual evaluation")
-    parser.add_argument("--csv-path", type=str, default="haryoaw_massive_models.csv",
-                       help="Path to CSV file containing model information")
+    parser = argparse.ArgumentParser(description="Run NxN cross-lingual evaluation (local models)")
+    parser.add_argument("--models-root", type=str, default="haryos_model",
+                       help="Root folder containing local models (default: haryos_model)")
     parser.add_argument("--locales", nargs="+", default=None,
                        help="Specific locales to evaluate (default: all locales)")
     parser.add_argument("--max-workers", type=int, default=1,
@@ -269,7 +274,7 @@ def main():
 
     # List locales if requested
     if args.list_locales:
-        locales = get_all_locales(args.csv_path)
+        locales = discover_locales(args.models_root)
         print("Available locales:")
         for i, locale in enumerate(locales):
             print(f"  {i:2d}. {locale}")
@@ -277,7 +282,7 @@ def main():
         return
 
     print(f"Starting NxN cross-lingual evaluation...")
-    print(f"CSV path: {args.csv_path}")
+    print(f"Models root: {args.models_root}")
     print(f"Max workers: {args.max_workers}")
     print(f"Results directory: {args.results_dir}")
     if args.locales:
@@ -285,7 +290,7 @@ def main():
 
     # Run evaluation
     results, results_dir = run_nxn_evaluation(
-        csv_path=args.csv_path,
+        models_root=args.models_root,
         locales=args.locales,
         max_workers=args.max_workers,
         results_dir=args.results_dir

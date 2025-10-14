@@ -4,28 +4,28 @@ This directory contains scripts for running large-scale model merging experiment
 
 ## Scripts Overview
 
-### 1. `run_large_scale_experiment.py`
+### 1. `merginguriel/run_large_scale_experiment.py`
 Main script to run complete experiments for multiple locales.
 
 **Usage:**
 ```bash
 # Run experiments for all locales
-python run_large_scale_experiment.py
+python merginguriel/run_large_scale_experiment.py
 
 # Run for specific locales only
-python run_large_scale_experiment.py --locales sq-AL cy-GB ja-JP
+python merginguriel/run_large_scale_experiment.py --locales sq-AL cy-GB ja-JP
 
 # Skip certain experiment types
-python run_large_scale_experiment.py --skip-baseline --skip-similarity
+python merginguriel/run_large_scale_experiment.py --skip-baseline --skip-similarity
 
 # Resume from a specific locale (useful for interrupted runs)
-python run_large_scale_experiment.py --start-from 10
+python merginguriel/run_large_scale_experiment.py --start-from 10
 
 # Limit number of locales to process
-python run_large_scale_experiment.py --max-locales 5
+python merginguriel/run_large_scale_experiment.py --max-locales 5
 
 # List all available locales
-python run_large_scale_experiment.py --list-locales
+python merginguriel/run_large_scale_experiment.py --list-locales
 ```
 
 **What it does:**
@@ -94,7 +94,7 @@ uv run evaluate_specific_model.py --base-model merged_models/average_merge_sq-AL
 ### For all locales:
 ```bash
 # Run everything
-python run_large_scale_experiment.py
+python merginguriel/run_large_scale_experiment.py
 
 # Then aggregate results
 python aggregate_results.py
@@ -147,17 +147,17 @@ If the experiment is interrupted:
 
 ### Quick test with 2 locales:
 ```bash
-python run_large_scale_experiment.py --locales sq-AL cy-GB --max-locales 2
+python merginguriel/run_large_scale_experiment.py --locales sq-AL cy-GB --max-locales 2
 ```
 
 ### Only run similarity merging for all locales:
 ```bash
-python run_large_scale_experiment.py --skip-baseline --skip-average
+python merginguriel/run_large_scale_experiment.py --skip-baseline --skip-average
 ```
 
 ### Resume from locale 10 (ja-JP):
 ```bash
-python run_large_scale_experiment.py --start-from 10
+python merginguriel/run_large_scale_experiment.py --start-from 10
 ```
 
 ## Monitoring Progress

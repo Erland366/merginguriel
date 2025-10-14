@@ -6,7 +6,6 @@ import numpy as np
 import argparse
 import pandas as pd
 
-# --- Add submodules and project root to Python path ---
 project_root = os.path.abspath(os.path.dirname(__file__))
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
@@ -14,10 +13,12 @@ if project_root not in sys.path:
 submodule_path = os.path.join(project_root, 'submodules/auto_merge_llm')
 if submodule_path not in sys.path:
     sys.path.insert(0, submodule_path)
-# --- End Path Setup ---
 
 from merginguriel.utils import get_similarity_scores
 from auto_merge_llm.methods import merging_methods_dict
+from dotenv import load_dotenv
+
+load_dotenv()
 
 def save_merge_details(output_dir: str, base_model: str, models_and_weights: dict, mode: str, target_lang: str = None, base_model_info: dict = None):
     """Saves a text file with details about the merge."""
@@ -86,7 +87,7 @@ def save_merge_details(output_dir: str, base_model: str, models_and_weights: dic
 
 def run_evaluation(model_path: str):
     """Calls the evaluation script on the specified model."""
-    evaluation_script_path = os.path.join(project_root, "testing_chamber/evaluate_base_encoder.py")
+    evaluation_script_path = os.path.join(project_root, "merginguriel/evaluate_base_encoder.py")
     if not os.path.exists(evaluation_script_path):
         print(f"Warning: Evaluation script not found at {evaluation_script_path}")
         return
@@ -548,17 +549,15 @@ def main():
                 'locale': locale,
                 'base_model_name': model_name
             }
-            uriel_weights.append(weight)  # Collect URIEL weights for Fisher merging
+            uriel_weights.append(weight)
             print(f"  - {model_with_subfolder}: {weight:.6f} (URIEL weight) (language: {lang})")
 
         print(f"\\nUsing Fisher merging with URIEL weighting for {len(valid_languages)} models")
 
-        # Use the first model as the base model (remove it from models_to_merge)
         if models_and_weights:
             base_model_for_merge = list(models_and_weights.keys())[0]
-            base_urial_weight = uriel_weights[0]  # First model's URIEL weight
+            base_urial_weight = uriel_weights[0] 
 
-            # Store base model info for save_merge_details
             first_model_info = list(models_and_weights.values())[0]
             base_model_info = {
                 'model_with_subfolder': base_model_for_merge,
@@ -569,10 +568,9 @@ def main():
                 'locale': first_model_info['locale']
             }
 
-            # Remove the first model from models_and_weights and uriel_weights
             first_model_key = list(models_and_weights.keys())[0]
             models_and_weights.pop(first_model_key)
-            uriel_weights = uriel_weights[1:]  # Remove first weight
+            uriel_weights = uriel_weights[1:]
 
             print(f"Using {base_model_for_merge} as base model")
             print(f"Fisher merging mode: {args.mode}")
@@ -582,26 +580,18 @@ def main():
             base_model_for_merge = BASE_MODEL
             uriel_weights = []
 
-    # --- 2. Perform Model Merging ---
-    print("\n--- Step 2: Performing Model Merge ---")
-
-    # Choose the appropriate merging method
     if args.mode in ['fisher', 'fisher_simple', 'fisher_dataset']:
         merger = merging_methods_dict[args.mode]()
     else:
         merger = merging_methods_dict["linear"]()
 
-    # Extract model names and weights for merging
     if args.mode in ['similarity', 'average', 'fisher', 'fisher_simple', 'fisher_dataset']:
-        # These modes use complex dict structure
         models_to_merge_paths = list(models_and_weights.keys())
         weight_values = [info['weight'] for info in models_and_weights.values()]
-        # base_model_for_merge is already set in similarity/average/fisher sections above
     elif args.mode == 'manual':
         models_to_merge_paths = list(models_and_weights.keys())
         weight_values = [models_and_weights[model] for model in models_to_merge_paths]
 
-        # Use the first model as the base model (remove it from models_to_merge)
         if models_to_merge_paths:
             base_model_for_merge = models_to_merge_paths[0]
             models_to_merge_paths = models_to_merge_paths[1:]  # Remove first model from merge list
@@ -629,16 +619,12 @@ def main():
         else:
             base_model_for_merge = BASE_MODEL
     elif args.mode == 'uriel':
-        # URIEL mode already set base_model_for_merge and removed first model
         models_to_merge_paths = list(models_and_weights.keys())
         weight_values = list(models_and_weights.values())
-        # Renormalize ALL weights (including base model) to sum to 1.0
         if weight_values:
             total_urial_weight = base_weight + sum(weight_values)
             if total_urial_weight > 0:
-                # Update base model weight to normalized value
                 base_weight = base_weight / total_urial_weight
-                # Renormalize remaining weights to sum to (1 - base_weight)
                 total_weight = sum(weight_values)
                 weight_values = [w * (1 - base_weight) / total_weight for w in weight_values]
 
@@ -649,11 +635,8 @@ def main():
         weight_values = [info['weight'] for info in models_and_weights.values()]
         base_model_for_merge = BASE_MODEL
 
-    # Set up method parameters based on merging mode
     if args.mode in ['fisher', 'fisher_simple']:
-        # For Fisher merging, pass URIEL weights as method parameters
         if 'uriel_weights' in locals() and uriel_weights:
-            # Normalize URIEL weights for remaining models (excluding base model)
             if uriel_weights:
                 total_urial_weight = sum(uriel_weights)
                 if total_urial_weight > 0:
@@ -664,13 +647,12 @@ def main():
                     method_params = {"weights": [1.0 / len(uriel_weights)] * len(uriel_weights)}
                     print("Using equal weights for Fisher merging (URIEL weights sum to 0)")
             else:
-                method_params = {}  # No additional models to merge
+                method_params = {}
                 print("No URIEL weights to pass to Fisher merging")
         else:
-            method_params = {}  # Fallback to pure Fisher merging
+            method_params = {}
             print("No URIEL weights available, using pure Fisher merging")
     elif args.mode == 'fisher_dataset':
-        # Set up dataset configuration for Fisher merging
         if args.dataset_name is None:
             print("Error: --dataset-name is required for fisher_dataset mode")
             return

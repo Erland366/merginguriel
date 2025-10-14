@@ -1,5 +1,6 @@
 
 #!/usr/bin/env python
+# Moved into merginguriel/ package
 # Copyright 2020 The HuggingFace Inc. team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -60,7 +61,7 @@ from transformers import (
     set_seed,
     EarlyStoppingCallback,
 )
-from transformers.trainer_utils import get_last_checkpoint
+from transformers.trainer_utils import get_last_checkpoint, IntervalStrategy
 from transformers.utils import check_min_version
 from transformers.utils.versions import require_version
 from dotenv import load_dotenv
@@ -294,6 +295,57 @@ def main():
         model_args, data_args, training_args = parser.parse_json_file(json_file=os.path.abspath(sys.argv[1]))
     else:
         model_args, data_args, training_args = parser.parse_args_into_dataclasses()
+
+    # Apply opinionated defaults matching project conventions unless explicitly provided
+    argv = sys.argv[1:]
+    def _has_flag(name: str) -> bool:
+        return any(arg == name for arg in argv)
+
+    # Model default
+    if not _has_flag('--model_name_or_path'):
+        model_args.model_name_or_path = 'xlm-roberta-base'
+
+    # Train/eval/predict toggles
+    if not _has_flag('--do_train'):
+        training_args.do_train = True
+    if not _has_flag('--do_eval'):
+        training_args.do_eval = True
+    if not _has_flag('--do_predict'):
+        training_args.do_predict = True
+
+    # Epochs and batch sizes
+    if not _has_flag('--num_train_epochs'):
+        training_args.num_train_epochs = 15
+    if not _has_flag('--per_device_train_batch_size'):
+        training_args.per_device_train_batch_size = 128
+    if not _has_flag('--per_device_eval_batch_size'):
+        training_args.per_device_eval_batch_size = 128
+
+    # Early stopping patience (already default 3 in DataTrainingArguments)
+    if not _has_flag('--early_stopping_patience'):
+        data_args.early_stopping_patience = 3
+
+    # Strategies must match when loading best model at end
+    if not _has_flag('--evaluation_strategy'):
+        training_args.evaluation_strategy = IntervalStrategy.EPOCH
+    if not _has_flag('--save_strategy'):
+        training_args.save_strategy = IntervalStrategy.EPOCH
+    if not _has_flag('--save_total_limit'):
+        training_args.save_total_limit = 15
+    if not _has_flag('--load_best_model_at_end'):
+        training_args.load_best_model_at_end = True
+    if not _has_flag('--metric_for_best_model'):
+        training_args.metric_for_best_model = 'accuracy'
+    if not _has_flag('--greater_is_better'):
+        training_args.greater_is_better = True
+    if not _has_flag('--overwrite_output_dir'):
+        training_args.overwrite_output_dir = True
+    # Optional compilation
+    if not _has_flag('--torch_compile'):
+        try:
+            training_args.torch_compile = True
+        except Exception:
+            pass
 
     # Setup wandb environment
     if wandb_available and not model_args.wandb_offline:
