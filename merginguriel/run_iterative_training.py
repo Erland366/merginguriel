@@ -32,6 +32,9 @@ def setup_logging(log_level: str, log_file: Optional[str] = None):
     """Setup logging configuration."""
     handlers = [logging.StreamHandler(sys.stdout)]
     if log_file:
+        # Ensure parent directory exists
+        log_dir = os.path.dirname(log_file)
+        os.makedirs(log_dir, exist_ok=True)
         handlers.append(logging.FileHandler(log_file))
 
     logging.basicConfig(

@@ -186,7 +186,7 @@ class IterativeTrainingOrchestrator:
             warmup_ratio=training_config.warmup_ratio,
             logging_dir=f"{training_config.output_dir}/logs",
             logging_steps=self.config.log_frequency,
-            evaluation_strategy=training_config.eval_strategy,
+            eval_strategy=training_config.eval_strategy,
             eval_steps=training_config.eval_steps,
             save_strategy=training_config.save_strategy,
             save_steps=training_config.save_steps,

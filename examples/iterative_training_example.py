@@ -170,9 +170,12 @@ def demo_adaptive_scheduling():
     stats = scheduler.get_merge_statistics()
     print(f"\nFinal Merge Statistics:")
     print(f"  Total Merges: {stats['total_merges']}")
-    print(f"  Successful Merges: {stats['successful_merges']}")
-    print(f"  Success Rate: {stats['overall_success_rate']:.2%}")
-    print(f"  Algorithm Performance: {stats['algorithm_statistics']}")
+    if stats['total_merges'] > 0:
+        print(f"  Successful Merges: {stats['successful_merges']}")
+        print(f"  Success Rate: {stats['overall_success_rate']:.2%}")
+        print(f"  Algorithm Performance: {stats['algorithm_statistics']}")
+    else:
+        print("  No merges were triggered during this simulation")
 
 
 def demo_configuration():

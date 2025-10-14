@@ -165,10 +165,29 @@ class IterativeOrchestratorConfig:
         merge_dict = config_dict.get("merge_config", {})
         merge_config = IterativeMergeConfig(**merge_dict)
 
+        # Extract nested dictionaries and flatten them
+        sync_dict = config_dict.get("synchronization", {})
+        resource_dict = config_dict.get("resource_management", {})
+        monitor_dict = config_dict.get("monitoring", {})
+        recovery_dict = config_dict.get("recovery", {})
+        features_dict = config_dict.get("advanced_features", {})
+
         # Create orchestrator config
         orchestrator_dict = config_dict.copy()
         orchestrator_dict.pop("training_configs", None)
         orchestrator_dict.pop("merge_config", None)
+        orchestrator_dict.pop("synchronization", None)
+        orchestrator_dict.pop("resource_management", None)
+        orchestrator_dict.pop("monitoring", None)
+        orchestrator_dict.pop("recovery", None)
+        orchestrator_dict.pop("advanced_features", None)
+
+        # Merge nested dictionaries
+        orchestrator_dict.update(sync_dict)
+        orchestrator_dict.update(resource_dict)
+        orchestrator_dict.update(monitor_dict)
+        orchestrator_dict.update(recovery_dict)
+        orchestrator_dict.update(features_dict)
 
         return cls(
             training_configs=training_configs,
