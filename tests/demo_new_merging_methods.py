@@ -37,8 +37,8 @@ def print_usage_examples():
         {
             "name": "SLERP",
             "mode": "slerp",
-            "description": "Spherical Linear Interpolation between models",
-            "use_case": "Best for smoothly interpolating between 2-3 similar models"
+            "description": "Spherical Linear Interpolation with incremental merging support",
+            "use_case": "Best for smoothly interpolating between models. Works with any number of models via incremental merging"
         },
         {
             "name": "RegMean",
@@ -69,8 +69,17 @@ def print_comparison_workflow():
     print("\n3. Advanced Method (e.g., TIES):")
     print("   python merginguriel/run_merging_pipeline_refactored.py --mode ties --target-lang sq-AL --num-languages 5")
 
-    print("\n💡 Tip: Run all three methods with the same --target-lang and --num-languages")
-    print("   to properly compare performance improvements!")
+    print("\n🔸 SLERP INCREMENTAL MERGING:")
+    print("   python merginguriel/run_merging_pipeline_refactored.py --mode slerp --target-lang sq-AL --num-languages 5")
+    print("   (SLERP now supports any number of models via incremental merging)")
+
+    print("\n📋 How SLERP Incremental Merging Works:")
+    print("   1. Models are sorted by weight (most important first)")
+    print("   2. Starting with the highest-weight model as base")
+    print("   3. Each subsequent model is merged one-by-one using SLERP")
+    print("   4. Interpolation ratios are calculated from model weights")
+
+    print("\n💡 Tip: SLERP now works with any --num-languages value, just like other methods!")
 
 def print_all_available_modes():
     """Print all available modes in the system."""
@@ -79,7 +88,7 @@ def print_all_available_modes():
 
     modes = {
         "Weighting Strategies": ["similarity", "average", "manual", "uriel"],
-        "Merging Algorithms": ["linear", "fisher_simple", "fisher_dataset", "ties", "task_arithmetic", "slerp", "regmean"]
+        "Merging Algorithms": ["linear", "fisher", "ties", "task_arithmetic", "slerp", "regmean"]
     }
 
     for category, mode_list in modes.items():

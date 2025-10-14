@@ -2,7 +2,7 @@
 
 ## 0. Document Control
 
-**Document Status: LIVING DOCUMENT - Last Updated: 2025-10-14 19:00 UTC**
+**Document Status: LIVING DOCUMENT - Last Updated: 2025-10-14 20:35 UTC**
 
 **The Golden Rule:** This document, `CLAUDE.md`, is the single source of truth for this project. Any developer, human or AI, who modifies the codebase, adds a feature, or changes a workflow **must** update the relevant sections of this document in the same commit/change. This ensures the documentation remains synchronized with the code.
 
@@ -142,7 +142,7 @@ This directory is the heart of the project, containing the Python scripts that d
     -   **`WeightCalculatorFactory`**: A factory that, based on the `--mode` argument, instantiates the correct weighting strategy. For example:
         -   `--mode similarity`: Uses `SimilarityWeightCalculator` to load weights from the pre-computed URIEL similarity matrix.
         -   `--mode average`: Uses `AverageWeightCalculator` to assign an equal weight to all source models, establishing a crucial baseline.
-    -   **`MergingStrategyFactory`**: A factory that selects the underlying parameter-merging algorithm (e.g., `linear`, `fisher_simple`).
+    -   **`MergingStrategyFactory`**: A factory that selects the underlying parameter-merging algorithm (e.g., `linear`, `fisher`).
     -   **`ModelMerger`**: The class that takes the models, weights, and merging strategy and invokes the `auto-merge-llm` library to perform the merge.
     -   **`OutputManager`**: Saves the final merged model and a `merge_details.txt` file that records the configuration used for the run.
 
@@ -176,7 +176,7 @@ This directory is the heart of the project, containing the Python scripts that d
 The project leverages the `auto-merge-llm` library (located in `submodules/`) as the powerful backend for performing the parameter-level model merges. This library provides a framework and a collection of established merging algorithms.
 
 -   **High-Level Abstraction:** `MergingUriel` uses `auto-merge-llm` as a library, abstracting away the low-level tensor manipulations. The `run_merging_pipeline_refactored.py` script acts as a high-level orchestrator that prepares models and parameters before feeding them to the selected `auto-merge-llm` method.
--   **Weighting Strategy:** The core innovation of this project is the application of a URIEL-based weighting scheme *on top of* the `auto-merge-llm` methods. The pipeline calculates typologically-informed weights and passes them as parameters (e.g., the `weights` parameter for `linear` merge, or `fisher_scaling_coefficients` for `fisher_dataset` merge) to the `auto-merge-llm` functions.
+-   **Weighting Strategy:** The core innovation of this project is the application of a URIEL-based weighting scheme *on top of* the `auto-merge-llm` methods. The pipeline calculates typologically-informed weights and passes them as parameters (e.g., the `weights` parameter for `linear` merge, or `fisher_scaling_coefficients` for `fisher` merge) to the `auto-merge-llm` functions.
 
 ### Similarity Matrix Processing & Top-K Mechanism
 
@@ -220,8 +220,9 @@ Below is the status of the merging algorithms from `auto-merge-llm` that are cur
 | Merging Method (from auto-merge-llm) | Description | Status in MergingUriel | URIEL Weighting Support | Baseline Comparison |
 | :--- | :--- | :--- | :--- | :--- |
 | `linear` | A simple weighted average of model parameters. | **Implemented** | Yes | Yes, via `--mode average` |
-| `fisher_simple` | Weights parameters by their magnitude as a proxy for importance. | **Implemented** | Yes | Yes, via `--mode average` |
-| `fisher_dataset` | Estimates parameter importance using gradients from a sample dataset. | **Implemented** | Yes | Yes, via `--preweight equal` |
+| `fisher` | Estimates parameter importance using gradients from a sample dataset (primary Fisher method). | **Implemented** | Yes | Yes, via `--preweight equal` |
+| `fisher_simple` | Weights parameters by their magnitude as a proxy for importance (class retained, option removed). | **Implemented** | Yes | Yes, via `--mode average` |
+| `fisher_dataset` | Fisher dataset-based method (now mapped to `--mode fisher`). | **Implemented** | Yes | Yes, via `--preweight equal` |
 | `ties` | Merges models by resolving sign disagreements and pruning low-magnitude weights. | **Implemented** | Yes | Yes, via `--mode ties` |
 | `slerp` | Spherical Linear Interpolation, useful for interpolating between models. | **Implemented** | Yes | Yes, via `--mode serp` |
 | `task_arithmetic` | Adds or subtracts task vectors representing fine-tuning changes. | **Implemented** | Yes | Yes, via `--mode task_arithmetic` |
