@@ -2,7 +2,7 @@
 
 ## 0. Document Control
 
-**Document Status: LIVING DOCUMENT - Last Updated: 2025-10-14 19:00 UTC**
+**Document Status: LIVING DOCUMENT - Last Updated: 2025-10-14 19:35 UTC**
 
 **The Golden Rule:** This document, `GEMINI.md`, is the single source of truth for this project. Any developer, human or AI, who modifies the codebase, adds a feature, or changes a workflow **must** update the relevant sections of this document in the same commit/change. This ensures the documentation remains synchronized with the code.
 
@@ -270,7 +270,61 @@ This workflow automates the process of merging and evaluating models for multipl
     -   **Objective:** Collect results from all individual experiment folders and the N-vs-N evaluation to produce a single, comprehensive summary report.
     -   **Script:** `merginguriel/aggregate_results.py`
     -   **Command:** `python merginguriel/aggregate_results.py`
-    -   **Output:** Generates a CSV file and a Markdown report (`results_report_[timestamp].md`) comparing the performance of the `baseline`, `similarity`, and `average` methods across all tested locales. *Note: This script currently needs to be refactored to include the N-vs-N baselines (see Future Development Plan).*
+    -   **Output:** Generates comprehensive CSV files and Markdown reports with full baseline integration, win rate analysis, and statistical comparisons. **✅ FULLY IMPLEMENTED** - See section 7.4.
+
+## Workflow 5: Testing & Quality Assurance
+
+This workflow provides comprehensive testing frameworks to ensure system reliability and validate all components.
+
+### 5.1. **Prerequisites**
+- **Required Files:** `language_similarity_matrix_unified.csv`, `haryos_model/` directory
+- **Processing Module:** `merginguriel/similarity_utils.py` for unified similarity processing
+- **Test Framework:** `test_data/` directory with testing utilities
+
+### 5.2. **Generate Test Data**
+```bash
+python test_data/generate_test_data.py
+```
+Creates realistic test experiments with:
+- 3 locales (sq-AL, th-TH, hr-H) with baseline, similarity, average experiments
+- Complete `merge_details.txt` files with source languages and weights
+- N-x-N evaluation matrix for baseline integration
+
+### 5.3. **Run Compatibility Tests**
+```bash
+# Full system test with baseline integration
+python merginguriel/aggregate_results.py --verbose
+
+# Test individual components
+python merginguriel/run_merging_pipeline_refactored.py --mode similarity --target-lang sq-AL --num-languages 3
+python merginguriel/uriel_ensemble_inference.py --target-lang sq-AL --voting-method uriel_logits --num-languages 3
+
+# Test filtering and options
+python merginguriel/aggregate_results.py --locales sq-AL th-TH --experiment-types similarity baseline
+```
+
+### 5.4. **Test Results Documentation**
+- **Comprehensive Report:** `test_data/COMPATIBILITY_TEST.md`
+- **Testing Guide:** `test_data/TESTING_GUIDE.md`
+- **Status:** ✅ **ALL SYSTEMS COMPATIBLE** - Latest validation confirms full integration
+
+### 5.5. **Current System Status (2025-10-14)**
+
+| Component | Status | Details |
+|-----------|--------|---------|
+| **Similarity Processing** | ✅ WORKING | Dynamic top-K + Sinkhorn normalization with 50×50 matrix |
+| **Model Repository** | ✅ AVAILABLE | 49 models in `/home/coder/Python_project/MergingUriel/haryos_model/` |
+| **Merging Pipeline** | ✅ FUNCTIONAL | Successfully merges with URIEL weights, generates proper `merge_details.txt` |
+| **Ensemble Inference** | ✅ FUNCTIONAL | URIEL logits weighting with same similarity processing |
+| **Automated Evaluation** | ✅ IMPLEMENTED | Comprehensive baseline integration with N-vs-N data |
+| **Testing Framework** | ✅ COMPLETE | Full test suite with compatibility validation |
+
+### 5.6. **Key Integration Features**
+- **Unified Similarity Processing**: Both merging and ensemble use `similarity_utils.py`
+- **Dynamic Top-K Configuration**: Runtime adjustment without matrix regeneration
+- **Enhanced Merge Details**: Detailed format with source languages and weights
+- **Comprehensive Reporting**: Automated evaluation with win rate analysis and statistical comparison
+- **Flexible CLI Interface**: Filtering, verbose logging, and multiple output formats
 
 ### Workflow 4: URIEL-Guided Ensemble Inference
 
