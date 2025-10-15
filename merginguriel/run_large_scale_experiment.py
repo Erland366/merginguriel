@@ -130,7 +130,7 @@ def main():
     parser.add_argument("--locales", nargs="+", default=None,
                        help="Specific locales to run (default: all locales)")
     parser.add_argument("--modes", nargs="+",
-                       default=["baseline", "similarity", "average", "fisher", "ties", "task_arithmetic", "slerp", "regmean", "linear"],
+                       default=["baseline", "similarity", "average", "fisher", "ties", "task_arithmetic", "slerp", "regmean"],
                        help="Which modes to run per locale (include 'baseline' to evaluate base model)")
     parser.add_argument("--start-from", type=int, default=0,
                        help="Start from specific locale index (for resuming)")

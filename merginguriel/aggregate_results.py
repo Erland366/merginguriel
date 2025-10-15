@@ -145,10 +145,27 @@ def parse_experiment_metadata(folder_name: str, folder_path: str) -> ExperimentM
     # 3. "average_sq-AL" -> type="average", locale="sq-AL"
     # 4. "xlm-roberta-base_massive_k_sq-AL_alpha_0.5_sq-AL_epoch-9_sq-AL" -> type="baseline", locale="sq-AL"
 
-    if parts[0] in ['baseline', 'similarity', 'average', 'fisher_simple', 'fisher_dataset', 'ties', 'dare', 'slerp', 'task_arithmetic', 'regmean', 'breadcrumbs']:
+    if parts[0] in ['baseline', 'similarity', 'average', 'fisher', 'ties', 'task_arithmetic', 'slerp', 'regmean']:
         # Simple case: prefix_locale
         exp_type = parts[0]
         locale = '_'.join(parts[1:])
+    elif parts[0] == 'ensemble':
+        # Handle ensemble folder: ensemble_{voting_method}_{locale}
+        # Need to handle voting methods with underscores (like uriel_logits)
+        if len(parts) >= 3:
+            # Try to identify the locale (last part should be locale like sq-AL, en-US, etc.)
+            if len(parts[-1]) == 5 and '-' in parts[-1]:  # xx-YY format
+                locale = parts[-1]
+                voting_method = '_'.join(parts[1:-1])
+                exp_type = f"ensemble_{voting_method}"
+            else:
+                # Fallback: assume locale is last 2 parts
+                locale = '_'.join(parts[-2:])
+                voting_method = '_'.join(parts[1:-2])
+                exp_type = f"ensemble_{voting_method}"
+        else:
+            exp_type = 'ensemble_unknown'
+            locale = '_'.join(parts[1:]) if len(parts) > 1 else 'unknown'
     elif 'massive_k_' in folder_name:
         # Complex case: baseline with full model name
         exp_type = 'baseline'
@@ -276,6 +293,23 @@ def parse_folder_name(folder_name):
         # Simple case: prefix_locale
         exp_type = parts[0]
         locale = '_'.join(parts[1:])
+    elif parts[0] == 'ensemble':
+        # Handle ensemble folder: ensemble_{voting_method}_{locale}
+        # Need to handle voting methods with underscores (like uriel_logits)
+        if len(parts) >= 3:
+            # Try to identify the locale (last part should be locale like sq-AL, en-US, etc.)
+            if len(parts[-1]) == 5 and '-' in parts[-1]:  # xx-YY format
+                locale = parts[-1]
+                voting_method = '_'.join(parts[1:-1])
+                exp_type = f"ensemble_{voting_method}"
+            else:
+                # Fallback: assume locale is last 2 parts
+                locale = '_'.join(parts[-2:])
+                voting_method = '_'.join(parts[1:-2])
+                exp_type = f"ensemble_{voting_method}"
+        else:
+            exp_type = 'ensemble_unknown'
+            locale = '_'.join(parts[1:]) if len(parts) > 1 else 'unknown'
     elif 'massive_k_' in folder_name:
         # Complex case: baseline with full model name
         exp_type = 'baseline'

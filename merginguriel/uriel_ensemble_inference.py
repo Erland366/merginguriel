@@ -396,7 +396,7 @@ def main():
         "--voting-method",
         type=str,
         choices=["majority", "weighted_majority", "soft", "uriel_logits"],
-        default="uriel_logits",
+        default="majority",
         help="Voting method to use"
     )
     parser.add_argument(
@@ -456,17 +456,13 @@ def main():
 
     # Load test data from MASSIVE dataset
     print(f"\n--- Loading Test Data for {args.target_lang} ---")
-    try:
-        dataset = load_dataset("AmazonScience/massive", f"{args.target_lang}", split="test")
-        test_texts = [example["utt"] for example in dataset[:args.num_examples]]
-        test_labels = [example["intent"] for example in dataset[:args.num_examples]]
-        print(f"Loaded {len(test_texts)} test examples")
-    except Exception as e:
-        print(f"Error loading dataset: {e}")
-        # Fallback to dummy data if dataset loading fails
-        print("Using dummy test data")
-        test_texts = ["Test text " + str(i) for i in range(args.num_examples)]
-        test_labels = [0] * args.num_examples
+    dataset = load_dataset("AmazonScience/massive", f"{args.target_lang}", split="test", trust_remote_code=True)
+
+    # Dataset slicing returns a dict, so we need to access fields correctly
+    subset = dataset[:args.num_examples]
+    test_texts = subset["utt"]
+    test_labels = subset["intent"]
+    print(f"Loaded {len(test_texts)} test examples")
 
     # Run ensemble inference
     predictions, metadata = run_ensemble_inference(

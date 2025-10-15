@@ -2,11 +2,47 @@
 
 ## 0. Document Control
 
-**Document Status: LIVING DOCUMENT - Last Updated: 2025-10-14 20:35 UTC**
+**Document Status: LIVING DOCUMENT - Last Updated: 2025-10-14 23:59 UTC**
 
 **The Golden Rule:** This document, `CLAUDE.md`, is the single source of truth for this project. Any developer, human or AI, who modifies the codebase, adds a feature, or changes a workflow **must** update the relevant sections of this document in the same commit/change. This ensures the documentation remains synchronized with the code.
 
 **A Note to Future Developers (Human or AI):** Before committing any changes, you are required to read this document to understand the project's standards and architecture. After implementing your changes, you **must** update the relevant sections of this `CLAUDE.md` file and modify the `Last Updated` date and time above. This is a mandatory step for all contributions.
+
+## 0.1. Development Principles
+
+### **🚫 NO FALLBACKS - FAIL FAST PRINCIPLE**
+
+**Critical Rule:** NEVER implement fallback mechanisms (dummy data, default values, graceful degradation) in production code during development.
+
+**Why:**
+- **Immediate Error Detection:** Fallbacks mask real issues and delay debugging
+- **Clear Failure Signals:** Scripts should fail immediately when something is wrong
+- **Development Transparency:** No silent failures or misleading "success" messages
+- **Research Integrity:** Results must reflect real data, not synthetic substitutes
+
+**Examples of FORBIDDEN Fallbacks:**
+```python
+# ❌ NEVER DO THIS
+try:
+    dataset = load_dataset("AmazonScience/massive", locale, split="test")
+except Exception as e:
+    print(f"Error loading dataset: {e}")
+    # Fallback to dummy data - FORBIDDEN!
+    dataset = create_dummy_data()  # 🚫 FORBIDDEN
+```
+
+**Required Approach:**
+```python
+# ✅ ALWAYS DO THIS
+dataset = load_dataset("AmazonScience/massive", locale, split="test", trust_remote_code=True)
+# Let the script fail if data loading fails - this reveals the real issue immediately
+```
+
+**Enforcement:**
+- All PRs must be checked for fallback patterns
+- Any fallback mechanism must be justified and documented
+- Development phase requires immediate failure on any error
+- Fallbacks only allowed in production with explicit monitoring
 
 ## 1. Introduction & Goal
 
