@@ -195,8 +195,8 @@ def main():
     # Pass-through options for uriel_ensemble_inference.py
     parser.add_argument("--num-languages", type=int, default=5,
                        help="Number of models to include in ensemble")
-    parser.add_argument("--num-examples", type=int, default=100,
-                       help="Number of test examples to evaluate")
+    parser.add_argument("--num-examples", type=int, default=None,
+                       help="Number of test examples to evaluate (default: all available examples)")
     parser.add_argument("--top-k", type=int, default=20,
                        help="Number of top similar languages to consider")
     parser.add_argument("--sinkhorn-iters", type=int, default=20,
@@ -246,12 +246,15 @@ def main():
     # Build pass-through args for ensemble inference
     ensemble_extra_args = [
         "--num-languages", str(args.num_languages),
-        "--num-examples", str(args.num_examples),
         "--top-k", str(args.top_k),
         "--sinkhorn-iters", str(args.sinkhorn_iters),
         "--output-dir", args.output_dir,
         "--subfolder-pattern", args.subfolder_pattern
     ]
+
+    # Only add num-examples if specified (for full test set evaluation)
+    if args.num_examples is not None:
+        ensemble_extra_args.extend(["--num-examples", str(args.num_examples)])
 
     for i, locale in enumerate(locales):
         print(f"\nProcessing locale {i+1}/{len(locales)}: {locale}")

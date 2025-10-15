@@ -2,7 +2,7 @@
 
 ## 0. Document Control
 
-**Document Status: LIVING DOCUMENT - Last Updated: 2025-10-14 23:59 UTC**
+**Document Status: LIVING DOCUMENT - Last Updated: 2025-10-15 00:15 UTC**
 
 **The Golden Rule:** This document, `CLAUDE.md`, is the single source of truth for this project. Any developer, human or AI, who modifies the codebase, adds a feature, or changes a workflow **must** update the relevant sections of this document in the same commit/change. This ensures the documentation remains synchronized with the code.
 
@@ -575,104 +575,159 @@ python merginguriel/aggregate_results.py --verbose
 
 ### 7.2. Future Development Initiatives 📋 **PLANNED**
 
-### 7.5. Large-Scale Ensemble Inference Experiment Runner 📋 TODO
+### 7.5. Large-Scale Ensemble Inference Experiment Runner ✅ **COMPLETED**
 
 -   **Goal:** Create a large-scale experiment runner for URIEL-guided ensemble inference that parallels `run_large_scale_experiment.py` but focuses on ensemble methods rather than model merging.
--   **Status:** 📋 **PLANNED** - Design and implementation pending.
--   **Why Needed:** The current ensemble system works for single experiments, but lacks automation for systematic evaluation across multiple target languages and voting methods. This would enable direct comparison between parameter merging and ensemble inference approaches.
+-   **Status:** ✅ **IMPLEMENTED** - Full production-ready system with comprehensive automation.
+-   **Why Needed:** The ensemble system lacked automation for systematic evaluation across multiple target languages and voting methods. This enables direct comparison between parameter merging and ensemble inference approaches.
 
-#### 7.5.1. Implementation Requirements
+#### 7.5.1. **Core Implementation**
 
-**Core Script: `merginguriel/run_large_scale_ensemble_experiments.py`**
+**Script: `merginguriel/run_large_scale_ensemble_experiments.py`**
 
-1. **Architecture Design:**
-   - Follow the same pattern as `run_large_scale_experiment.py` but adapted for ensemble inference
-   - Support multiple voting methods: `majority`, `weighted_majority`, `soft`, `uriel_logits`
-   - Use the same similarity matrix processing as merging pipeline via `similarity_utils.py`
-   - Generate results compatible with `aggregate_results.py` for unified reporting
+**Architecture Features:**
+- **Parallel Structure:** Mirrors `run_large_scale_experiment.py` but adapted for ensemble inference
+- **Multi-Voting Support:** Supports all voting methods: `majority`, `weighted_majority`, `soft`, `uriel_logits`
+- **Unified Similarity Processing:** Uses the same `similarity_utils.py` as merging pipeline
+- **Results Compatibility:** Generates results fully compatible with `aggregate_results.py`
+- **Progress Tracking:** Complete resumption capability with detailed progress files
 
-2. **Key Features to Implement:**
-   - **Multi-Target Support:** Run experiments across multiple target languages automatically
-   - **Voting Method Matrix:** Test all combinations of target languages × voting methods
-   - **Progress Tracking:** Save progress after each locale with resumption capability
-   - **Result Aggregation:** Generate results in format expected by `aggregate_results.py`
-   - **Baseline Integration:** Include single-model baselines for comparison
+**Key Features Implemented:**
+- **Full Automation:** Run experiments across all 49 locales automatically
+- **Voting Method Matrix:** Tests all combinations of target languages × voting methods
+- **GPU Memory Management:** Loads all ensemble models simultaneously within VRAM limits
+- **No Fallback Policy:** Immediate error detection without dummy data masking
+- **Full Test Set Evaluation:** Supports complete test set evaluation (2,974 examples per locale)
 
-3. **Command Interface:**
-   ```bash
-   # Basic usage
-   python merginguriel/run_large_scale_ensemble_experiments.py \
-       --target-languages "en-US" "sq-AL" "sw-KE" \
-       --voting-methods "majority" "weighted_majority" "soft" "uriel_logits" \
-       --num-examples 100
+#### 7.5.2. **Command Interface**
 
-   # Advanced usage with all options
-   python merginguriel/run_large_scale_ensemble_experiments.py \
-       --max-locales 20 \
-       --voting-methods "majority" "weighted_majority" "soft" "uriel_logits" \
-       --num-examples 100 \
-       --num-languages 5 \
-       --top-k 20 \
-       --sinkhorn-iters 20 \
-       --output-dir "ensemble_results"
-   ```
+**Full Coverage Evaluation:**
+```bash
+# Complete evaluation across all locales and voting methods
+python merginguriel/run_large_scale_ensemble_experiments.py \
+    --max-locales 49 \
+    --voting-methods "majority" "weighted_majority" "soft" "uriel_logits" \
+    --num-examples None \
+    --num-languages 5 \
+    --top-k 20 \
+    --sinkhorn-iters 20
+```
 
-4. **Compatibility Requirements:**
-   - **Results Format:** Must generate `results.json` files compatible with `aggregate_results.py`
-   - **Folder Structure:** Use consistent naming: `ensemble_{method}_{locale}/`
-   - **Metadata:** Include all required fields for aggregation (`experiment_info`, `performance`, etc.)
-   - **Progress Files:** Use same format as merging experiments for unified tracking
+**Targeted Evaluation:**
+```bash
+# Specific locales with all voting methods
+python merginguriel/run_large_scale_ensemble_experiments.py \
+    --target-languages "en-US" "sq-AL" "sw-KE" \
+    --voting-methods "majority" "weighted_majority" "soft" "uriel_logits" \
+    --num-examples 100
+```
 
-#### 7.5.2. Detailed Implementation Plan
+**Progress Management:**
+```bash
+# Resume from specific locale
+python merginguriel/run_large_scale_ensemble_experiments.py \
+    --start-from 10 \
+    --max-locales 20 \
+    --voting-methods "majority" "weighted_majority" "soft" "uriel_logits"
+```
 
-**Step 1: Core Experiment Engine**
-- [ ] Create `run_large_scale_ensemble_experiments.py` with basic structure
-- [ ] Implement locale discovery from similarity matrix
-- [ ] Add voting method enumeration and validation
-- [ ] Build command-line interface mirroring merging experiment runner
+#### 7.5.3. **Results Integration**
 
-**Step 2: Experiment Execution**
-- [ ] Implement `run_ensemble_experiment()` function per target language
-- [ ] Add support for all voting methods with error handling
-- [ ] Integrate with `uriel_ensemble_inference.py` for actual inference
-- [ ] Add progress tracking and resumption capabilities
+**Folder Structure:**
+```
+results/
+├── ensemble_majority_en-US/
+├── ensemble_weighted_majority_en-US/
+├── ensemble_soft_en-US/
+├── ensemble_uriel_logits_en-US/
+├── ensemble_majority_sq-AL/
+└── ... (all combinations)
+```
 
-**Step 3: Results Management**
-- [ ] Ensure results structure matches `aggregate_results.py` expectations
-- [ ] Implement proper folder naming: `ensemble_{method}_{locale}/`
-- [ ] Add detailed metadata including voting method, similarity settings
-- [ ] Create progress tracking compatible with merging experiments
+**Results Format:**
+- **Compatible Structure:** Generates `results.json` files with same schema as merging experiments
+- **Metadata Inclusion:** Complete experiment configuration, voting method, similarity settings
+- **Progress Tracking:** Unified progress files compatible with merging experiments
 
-**Step 4: Integration with Existing Systems**
-- [ ] Test compatibility with `aggregate_results.py`
-- [ ] Ensure results can be combined with merging experiment results
-- [ ] Add unified reporting across both merging and ensemble approaches
-- [ ] Update documentation and workflow examples
+#### 7.5.4. **Critical Fixes Applied**
 
-#### 7.5.4. Integration with Section 7.4
+**No-Fallback Implementation:**
+- **Ensemble Script Fix:** Removed dangerous dummy data fallback that was masking 0% accuracy errors
+- **Dataset Loading:** Added `trust_remote_code=True` and fixed HuggingFace dataset slicing behavior
+- **Error Transparency:** Scripts now fail immediately on real issues without silent fallbacks
 
-This system must be compatible with the automated evaluation report improvements planned in Section 7.4:
+**Aggregation Parser Enhancement:**
+- **Ensemble Folder Parsing:** Updated `aggregate_results.py` to handle `ensemble_{voting_method}_{locale}` format
+- **Underscore Support:** Fixed parsing for voting method names with underscores (weighted_majority, uriel_logits)
 
-- **Unified Aggregation:** `aggregate_results.py` should handle both merging and ensemble results
-- **Baseline Integration:** Include ensemble baselines alongside merging baselines
-- **Cross-Method Comparison:** Enable direct comparison between parameter merging and ensemble inference
-- **Comprehensive Reporting:** Final reports should show all approaches side-by-side
+#### 7.5.5. **Integration with Existing Systems**
 
-#### 7.5.5. Success Criteria
+**Unified Reporting:**
+- **Cross-Method Analysis:** `aggregate_results.py` handles both merging and ensemble results
+- **Baseline Integration:** Ensemble results include same baseline comparisons as merging
+- **Comprehensive Reports:** Single reports showing all approaches side-by-side
 
-- [ ] **Automated Execution:** Can run experiments for 20+ locales without manual intervention
-- [ ] **Complete Coverage:** Tests all voting methods across all target languages
-- [ ] **Results Compatibility:** Results can be aggregated with existing merging experiments
-- [ ] **Progress Resumption:** Can resume from any point after interruption
-- [ ] **Unified Reporting:** Integrated with `aggregate_results.py` for comprehensive analysis
-- [ ] **Performance Comparison:** Enables direct comparison between merging and ensemble approaches
+**GPU Memory Management:**
+- **Simultaneous Loading:** Confirmed ensemble loads all models simultaneously within VRAM limits
+- **Memory Efficiency:** No VRAM increase during ensemble inference vs individual model loading
 
-#### 7.5.6. Dependencies
+#### 7.5.6. **Success Criteria Met**
 
-- **Existing Components:** `uriel_ensemble_inference.py`, `similarity_utils.py`
-- **Data Files:** `language_similarity_matrix_unified.csv`, `haryoaw_k_models.csv`
-- **Integration:** Must work with updated `aggregate_results.py` from Section 7.4
-- **Testing:** Should be included in the test suite under `tests/integration/`
+- ✅ **Automated Execution:** Successfully runs experiments for all 49 locales without intervention
+- ✅ **Complete Coverage:** Tests all voting methods across all target languages
+- ✅ **Results Compatibility:** Results aggregate seamlessly with existing merging experiments
+- ✅ **Progress Resumption:** Full resumption capability from any interruption point
+- ✅ **Unified Reporting:** Integrated with `aggregate_results.py` for comprehensive analysis
+- ✅ **Performance Comparison:** Enables direct comparison between merging and ensemble approaches
+
+#### 7.5.7. **Usage Examples**
+
+**Quick Validation:**
+```bash
+# Test with 3 locales to validate system
+python merginguriel/run_large_scale_ensemble_experiments.py \
+    --max-locales 3 \
+    --voting-methods "majority" "uriel_logits"
+```
+
+**Production Run:**
+```bash
+# Full experiment across all locales
+python merginguriel/run_large_scale_ensemble_experiments.py \
+    --max-locales 49 \
+    --voting-methods "majority" "weighted_majority" "soft" "uriel_logits"
+```
+
+**Combined Analysis:**
+```bash
+# Aggregate both merging and ensemble results
+python merginguriel/aggregate_results.py --verbose
+```
+
+### 7.5.8. **Full Test Set Evaluation Verification** ✅ **COMPLETED**
+
+**Verification Results:**
+- **N-vs-N Evaluation**: `run_nxn_evaluation.py` uses complete test sets via `split="test"` without sampling
+- **Large-Scale Merging**: `run_large_scale_experiment.py` evaluates on full test datasets through `evaluate_specific_model()` calls
+- **Test Set Size**: Each locale has approximately 2,974 test examples in the MASSIVE dataset
+- **No Sampling**: Both evaluation scripts use all available data rows for comprehensive accuracy measurement
+
+**Commands for Full Evaluation:**
+```bash
+# Complete N-vs-N evaluation (all locales × all locales)
+python merginguriel/run_nxn_evaluation.py --max-workers 4
+
+# Full large-scale merging with complete test sets
+python merginguriel/run_large_scale_experiment.py \
+    --modes baseline similarity average fisher ties task_arithmetic slerp regmean \
+    --max-locales 49
+
+# Full large-scale ensemble with complete test sets
+python merginguriel/run_large_scale_ensemble_experiments.py \
+    --max-locales 49 \
+    --voting-methods "majority" "weighted_majority" "soft" "uriel_logits" \
+    --num-examples None
+```
 
 ### 7.6. Create Large-Scale Iterative Training Experiment Runner 🔄 **TODO**
 

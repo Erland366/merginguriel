@@ -458,11 +458,17 @@ def main():
     print(f"\n--- Loading Test Data for {args.target_lang} ---")
     dataset = load_dataset("AmazonScience/massive", f"{args.target_lang}", split="test", trust_remote_code=True)
 
-    # Dataset slicing returns a dict, so we need to access fields correctly
-    subset = dataset[:args.num_examples]
-    test_texts = subset["utt"]
-    test_labels = subset["intent"]
-    print(f"Loaded {len(test_texts)} test examples")
+    # Use all examples if num_examples is None, otherwise use specified amount
+    if args.num_examples is None:
+        test_texts = dataset["utt"]
+        test_labels = dataset["intent"]
+        print(f"Loaded all {len(test_texts)} test examples")
+    else:
+        # Dataset slicing returns a dict, so we need to access fields correctly
+        subset = dataset[:args.num_examples]
+        test_texts = subset["utt"]
+        test_labels = subset["intent"]
+        print(f"Loaded {len(test_texts)} test examples")
 
     # Run ensemble inference
     predictions, metadata = run_ensemble_inference(
