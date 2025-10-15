@@ -77,6 +77,22 @@ def evaluate_specific_model(model_name: str, locale: str = "cy-GB", eval_folder:
         intent_labels = list(model.config.id2label.values())
         logger.info(f"✓ Model has {len(intent_labels)} intent classes")
 
+        # Determine label format for comparison
+        sample_labels = list(model.config.id2label.values())[:5]
+        uses_label_format = any(
+            isinstance(label, str) and not label.startswith('LABEL_') and not label.isdigit()
+            for label in sample_labels
+        )
+
+        if uses_label_format:
+            # Model uses string labels (intent names), dataset uses integers
+            # Create mapping from model label to integer
+            label_to_int = {label: idx for idx, label in model.config.id2label.items()}
+            logger.info("Model uses string labels, comparing predicted class directly with true intent")
+        else:
+            # Model uses LABEL_0, LABEL_1 format
+            logger.info("Model uses LABEL_N format, using standard comparison")
+
         # Quick sample preview
         logger.info("Previewing first 5 examples...")
         for i in range(min(5, len(dataset))):
@@ -86,9 +102,13 @@ def evaluate_specific_model(model_name: str, locale: str = "cy-GB", eval_folder:
             with torch.no_grad():
                 outputs = model(**inputs)
                 cls = int(torch.argmax(outputs.logits, dim=1)[0].item())
-            pred = model.config.id2label.get(cls, str(cls))
-            if isinstance(pred, str) and pred.startswith('LABEL_'):
-                pred = pred.replace('LABEL_', '')
+
+            if uses_label_format:
+                pred = model.config.id2label.get(cls, str(cls))
+            else:
+                pred = model.config.id2label.get(cls, str(cls))
+                if isinstance(pred, str) and pred.startswith('LABEL_'):
+                    pred = pred.replace('LABEL_', '')
             logger.info(f"  [{i}] → {pred}")
 
         # Full evaluation
@@ -105,11 +125,18 @@ def evaluate_specific_model(model_name: str, locale: str = "cy-GB", eval_folder:
                 preds = torch.argmax(outputs.logits, dim=1)
             for pred_id, true_intent in zip(preds, true_intents):
                 cls = int(pred_id.item())
-                pred = model.config.id2label.get(cls, str(cls))
-                if isinstance(pred, str) and pred.startswith('LABEL_'):
-                    pred = pred.replace('LABEL_', '')
-                if str(pred) == str(true_intent):
-                    correct += 1
+
+                if uses_label_format:
+                    # Model uses string labels, compare predicted class directly with true intent
+                    if cls == true_intent:
+                        correct += 1
+                else:
+                    # Model uses LABEL_N format
+                    pred = model.config.id2label.get(cls, str(cls))
+                    if isinstance(pred, str) and pred.startswith('LABEL_'):
+                        pred = pred.replace('LABEL_', '')
+                    if str(pred) == str(true_intent):
+                        correct += 1
                 total += 1
 
         accuracy = correct / total if total else 0.0

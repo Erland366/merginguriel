@@ -408,15 +408,15 @@ class IterativeTrainingOrchestrator:
         try:
             # Get active locales (those that have been trained)
             active_locales = trained_locales.copy()
-            target_locales = self.config.merge_config.target_locales
+            target_languages = self.config.merge_config.target_languages
 
-            if not target_locales:
-                target_locales = active_locales
+            if not target_languages:
+                target_languages = active_locales
 
             # Execute merge
             success, merged_model_path = self.merge_coordinator.execute_merge(
                 active_locales=active_locales,
-                target_locales=target_locales,
+                target_locales=target_languages,
                 merge_metadata={
                     "trained_models": len(active_locales),
                     "merge_type": "sequential_training",
@@ -428,7 +428,7 @@ class IterativeTrainingOrchestrator:
                 logger.info(f"Merge cycle completed successfully: {merged_model_path}")
 
                 # Optional: Update remaining trainers with merged weights
-                self._update_remaining_trainers_with_merge(merged_model_path, active_locales, target_locales)
+                self._update_remaining_trainers_with_merge(merged_model_path, active_locales, target_languages)
             else:
                 logger.error("Merge cycle failed")
 
@@ -505,15 +505,15 @@ class IterativeTrainingOrchestrator:
 
             # Get active locales (those currently training)
             active_locales = list(self.trainers.keys())
-            target_locales = self.config.merge_config.target_locales
+            target_languages = self.config.merge_config.target_languages
 
-            if not target_locales:
-                target_locales = active_locales
+            if not target_languages:
+                target_languages = active_locales
 
             # Execute merge
             success, merged_model_path = self.merge_coordinator.execute_merge(
                 active_locales=active_locales,
-                target_locales=target_locales,
+                target_locales=target_languages,
                 merge_metadata={
                     "epoch": max(self.epoch_progress.values()),
                     "step": max(self.step_progress.values()),

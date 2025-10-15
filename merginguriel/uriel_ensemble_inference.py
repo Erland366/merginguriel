@@ -43,9 +43,6 @@ if submodule_path not in sys.path:
 
 
 
-def get_subfolder_for_language(locale: str, subfolder_pattern: str = "alpha_0.5_{locale}_epoch-9"):
-    """Generate subfolder pattern based on locale."""
-    return subfolder_pattern.format(locale=locale)
 
 
 def load_similarity_weights(similarity_matrix_path: str, available_locales: List[str], target_lang: str,
@@ -381,12 +378,6 @@ def main():
         help="Target language/locale (e.g., 'en-US', 'sq-AL')"
     )
     parser.add_argument(
-        "--subfolder-pattern",
-        type=str,
-        default="alpha_0.5_{locale}_epoch-9",
-        help="Subfolder pattern for model loading"
-    )
-    parser.add_argument(
         "--num-languages",
         type=int,
         default=5,
@@ -402,8 +393,8 @@ def main():
     parser.add_argument(
         "--num-examples",
         type=int,
-        default=100,
-        help="Number of test examples to evaluate"
+        default=None,
+        help="Number of test examples to evaluate (default: all available examples)"
     )
     parser.add_argument(
         "--top-k",
@@ -494,8 +485,7 @@ def main():
             "target_language": args.target_lang,
             "voting_method": args.voting_method,
             "num_models": len(models_and_weights),
-            "num_examples": len(test_texts),
-            "subfolder_pattern": args.subfolder_pattern
+            "num_examples": len(test_texts)
         },
         "models": models_and_weights,
         "metadata": metadata,

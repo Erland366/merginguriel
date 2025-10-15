@@ -203,8 +203,6 @@ def main():
                        help="Number of Sinkhorn normalization iterations")
     parser.add_argument("--output-dir", type=str, default="urie_ensemble_results",
                        help="Output directory for ensemble results")
-    parser.add_argument("--subfolder-pattern", type=str, default="alpha_0.5_{locale}_epoch-9",
-                       help="Subfolder pattern for model loading")
 
     args = parser.parse_args()
 
@@ -248,8 +246,7 @@ def main():
         "--num-languages", str(args.num_languages),
         "--top-k", str(args.top_k),
         "--sinkhorn-iters", str(args.sinkhorn_iters),
-        "--output-dir", args.output_dir,
-        "--subfolder-pattern", args.subfolder_pattern
+        "--output-dir", args.output_dir
     ]
 
     # Only add num-examples if specified (for full test set evaluation)

@@ -219,3 +219,248 @@ Sometimes iterative training can become unresponsive or you may need to stop it.
 - Monitor GPU memory usage with `nvidia-smi` during training
 - Consider using `--max-epochs 1` for testing before full training runs
 - Use `--sequential-training` (enabled by default) to prevent OOM issues
+
+**Results Analysis and Visualization**
+
+The project includes a comprehensive analysis and plotting system that processes experiment results and generates publication-ready visualizations with fair comparisons.
+
+**Features:**
+- **Advanced Merging Methods Analysis**: TIES, Task Arithmetic, SLERP, RegMean, DARE, Fisher
+- **Ensemble Inference Analysis**: majority, weighted_majority, soft, uriel_logits voting methods
+- **Fair Comparison Framework**: Compares methods against best performance from actual source languages used
+- **Multiple Baseline Comparisons**: vs average zero-shot, vs best zero-shot, vs best source (fair)
+- **Individual Method Plots**: Separate plots for each method to avoid crowding
+- **Comprehensive CSV Output**: All results with comparison metrics and source language details
+
+**Running the Analysis System:**
+
+1. **Quick Analysis (Recommended):**
+   ```bash
+   # Automatically finds latest results and generates all plots
+   python plot_results.py
+   ```
+
+2. **Use Specific CSV File:**
+   ```bash
+   # Plot from a specific results file
+   python plot_results.py --csv-file results_comprehensive_20251015_064211.csv
+   ```
+
+3. **Interactive Interface:**
+   ```bash
+   # User-friendly interactive plot generator
+   python quick_plot.py
+   ```
+
+4. **List Available Data:**
+   ```bash
+   # See all available CSV files
+   python plot_results.py --list-csv
+   ```
+
+**What the System Generates:**
+
+**CSV Files:**
+- `advanced_analysis_summary_YYYYMMDD_HHMMSS.csv`: Complete analysis with:
+  - Pure performance scores for all methods
+  - Source languages used (extracted from merge_details.txt)
+  - Comparison metrics: vs avg zero-shot, vs best zero-shot, vs best source
+  - Fair comparison baselines
+
+**Plot Files (in `plots/` directory):**
+- **Pure Scores**: `pure_scores_[method]_YYYYMMDD_HHMMSS.png`
+  - Shows method performance vs all 4 baselines (baseline, avg zero-shot, best zero-shot, best source)
+- **vs Avg Zero-shot**: `vs_avg_zero_[method]_YYYYMMDD_HHMMSS.png`
+  - Improvement/degradation over average zero-shot baseline
+- **vs Best Zero-shot**: `vs_best_zero_[method]_YYYYMMDD_HHMMSS.png`
+  - Improvement/degradation over best individual source model (all languages)
+- **vs Best Source**: `vs_best_source_[method]_YYYYMMDD_HHMMSS.png`
+  - **FAIR COMPARISON**: Improvement/degradation over best performance from actual source languages used
+
+**Understanding the Fair Comparison Framework:**
+
+The system implements a fair comparison methodology that resolves the paradox where ensemble methods appeared to perform poorly:
+
+- **Traditional vs Best Zero-shot**: Compares against best individual model from ALL possible source languages (unfair)
+- **Fair vs Best Source**: Compares against best individual model from ONLY the source languages actually used in the merge
+
+**Example:**
+- Target: `af-ZA`
+- Source languages used: `['id-ID', 'hy-AM', 'hu-HU', 'ka-GE', 'nl-NL']`
+- Best source performance: `0.705` (best among these 5 languages)
+- Ensemble performance: `0.494`
+- Fair comparison: `-0.211` (realistic performance gap)
+
+**Requirements:**
+- Main results CSV (from `aggregate_results.py` or large-scale experiments)
+- N-x-N evaluation matrix (from `run_nxn_evaluation.py`)
+- Merge details files (in `merged_models/*/merge_details.txt`)
+
+**Output Structure:**
+```
+plots/
+├── pure_scores_similarity_20251015_072835.png
+├── pure_scores_average_20251015_072835.png
+├── vs_avg_zero_similarity_20251015_072835.png
+├── vs_best_zero_similarity_20251015_072835.png
+├── vs_best_source_similarity_20251015_072835.png
+└── ... (one plot per method)
+
+advanced_analysis_summary_20251015_072835.csv
+```
+
+**Usage Workflow:**
+1. Run experiments (individual or large-scale)
+2. Generate results with `aggregate_results.py` if needed
+3. Run analysis: `python plot_results.py`
+4. Find plots in `plots/` directory for presentations
+5. Use CSV data for detailed analysis and reporting
+
+This system provides comprehensive, fair, and publication-ready analysis of all your MergingUriel experiments!
+
+**Results Aggregation System**
+
+The project includes a powerful aggregation system (`merginguriel/aggregate_results.py`) that processes experiment results from multiple folders and creates comprehensive reports with baseline comparisons.
+
+**What It Does:**
+- Scans all experiment result folders in the `results/` directory
+- Extracts metadata from `merge_details.txt` files and folder names
+- Integrates N-x-N evaluation matrices for baseline comparisons
+- Creates pivot tables comparing all methods side-by-side
+- Generates comprehensive reports in multiple formats
+
+**Key Features:**
+
+1. **Dynamic Experiment Parsing:**
+   - Automatically detects experiment types (similarity, average, task_arithmetic, ties, slerp, regmean, fisher, ensemble methods)
+   - Extracts source languages and weights from merge details
+   - Handles complex folder naming patterns (e.g., `task_arithmetic_merge_af-ZA`, `ensemble_uriel_logits_sq-AL`)
+
+2. **Baseline Integration:**
+   - **Best Source Language**: Best performing individual source model among those actually used
+   - **Best Overall Zero-shot**: Best performing model from all available languages (excluding target)
+   - **Native Baseline**: Target language's native model performance
+
+3. **Comprehensive Analysis:**
+   - Win rate analysis for each method vs baselines
+   - Improvement calculations (method - baseline)
+   - Statistical summaries for all experiment types
+   - Missing experiment detection
+
+**Running the Aggregation:**
+
+1. **Basic Aggregation:**
+   ```bash
+   # Process all experiments and generate comprehensive report
+   python merginguriel/aggregate_results.py
+   ```
+
+2. **With Filtering Options:**
+   ```bash
+   # Filter to specific locales
+   python merginguriel/aggregate_results.py --locales af-ZA sq-AL th-TH
+
+   # Filter to specific experiment types
+   python merginguriel/aggregate_results.py --experiment-types similarity average fisher
+
+   # Combine filters
+   python merginguriel aggregate_results.py --locales af-ZA sq-AL --experiment-types similarity average baseline
+   ```
+
+3. **Advanced Options:**
+   ```bash
+   # Use specific evaluation matrix
+   python merginguriel/aggregate_results.py --evaluation-matrix nxn_results/nxn_eval_20251014_231051/evaluation_matrix.csv
+
+   # Skip baseline integration (faster processing)
+   python merginguriel/aggregate_results.py --no-baselines
+
+   # Show missing/failed experiments
+   python merginguriel/aggregate_results.py --show-missing
+
+   # Enable verbose logging
+   python merginguriel/aggregate_results.py --verbose
+   ```
+
+**What It Generates:**
+
+**CSV Files:**
+- `results_aggregated_YYYYMMDD_HHMMSS.csv`: Raw experiment data with metadata
+- `results_comparison_YYYYMMDD_HHMMSS.csv`: Pivot table with methods as columns
+- `results_comprehensive_YYYYMMDD_HHMMSS.csv**: Main comparison table (used by plotting system)
+
+**JSON Files:**
+- `results_summary_YYYYMMDD_HHMMSS.json`: Statistical summaries for each method
+- `results_win_analysis_YYYYMMDD_HHMMSS.json`: Win rate analysis and comparisons
+
+**Markdown Report:**
+- `results_report_YYYYMMDD_HHMMSS.md`: Comprehensive human-readable report with:
+  - Executive summary
+  - Method statistics
+  - Win rate analysis
+  - Detailed comparison tables
+  - Methodology explanation
+
+**Example Output:**
+```
+Loading evaluation matrix: nxn_results/nxn_eval_20251014_231051/evaluation_matrix.csv
+Loaded evaluation matrix with shape (49, 49)
+Aggregating experiment results...
+Processing 156 experiment results
+Creating comparison table...
+Generating summary statistics...
+Analyzing win rates...
+
+Summary Statistics:
+  similarity: 49 experiments, mean accuracy = 0.5422
+  average: 49 experiments, mean accuracy = 0.5440
+  task_arithmetic: 49 experiments, mean accuracy = 0.5415
+  ties: 49 experiments, mean accuracy = 0.5568
+
+Win Rate Analysis Summary:
+  similarity: 73.5% win rate vs baseline (36/49)
+  average: 75.5% win rate vs baseline (37/49)
+  task_arithmetic: 69.4% win rate vs baseline (34/49)
+
+Files generated:
+  raw_filename: results_aggregated_20251015_072718.csv
+  comparison_filename: results_comparison_20251015_072718.csv
+  comprehensive_filename: results_comprehensive_20251015_072718.csv
+  summary_filename: results_summary_20251015_072718.json
+  win_analysis_filename: results_win_analysis_20251015_072718.json
+  markdown_filename: results_report_20251015_072718.md
+```
+
+**Integration with Plotting System:**
+
+The aggregation system outputs `results_comprehensive_*.csv` files that are:
+- **Automatically detected** by the plotting system
+- **Used as input** for generating all visualization plots
+- **Essential** for the fair comparison framework
+
+**Required Data Structure:**
+
+The aggregation system expects experiment results in this structure:
+```
+results/
+├── similarity_merge_af-ZA/
+│   ├── results.json (experiment performance data)
+│   └── merge_details.txt (source languages, weights, metadata)
+├── average_merge_af-ZA/
+│   ├── results.json
+│   └── merge_details.txt
+├── task_arithmetic_merge_af-ZA/
+│   ├── results.json
+│   └── merge_details.txt
+└── ensemble_uriel_logits_af-ZA/
+    ├── results.json
+    └── merge_details.txt
+```
+
+**Complete Workflow:**
+1. **Run Experiments**: Large-scale or individual experiments create result folders
+2. **Aggregate Results**: `python merginguriel/aggregate_results.py` processes all folders
+3. **Generate Plots**: `python plot_results.py` uses aggregated CSV for visualization
+4. **Present Results**: Use plots and reports for analysis and presentations
+
+The aggregation system transforms hundreds of individual experiment results into a unified, analyzable dataset perfect for research presentations! 📊

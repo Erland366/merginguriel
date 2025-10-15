@@ -145,10 +145,36 @@ def parse_experiment_metadata(folder_name: str, folder_path: str) -> ExperimentM
     # 3. "average_sq-AL" -> type="average", locale="sq-AL"
     # 4. "xlm-roberta-base_massive_k_sq-AL_alpha_0.5_sq-AL_epoch-9_sq-AL" -> type="baseline", locale="sq-AL"
 
-    if parts[0] in ['baseline', 'similarity', 'average', 'fisher', 'ties', 'task_arithmetic', 'slerp', 'regmean']:
+    # Check for two-part experiment types like task_arithmetic
+    if len(parts) >= 3 and f"{parts[0]}_{parts[1]}" in ['task_arithmetic']:
+        # Handle three-part experiment types: task_arithmetic_merge_af-ZA -> type="task_arithmetic", locale="af-ZA"
+        exp_type = f"{parts[0]}_{parts[1]}"
+        locale = parts[-1]  # Last part should be the locale
+    elif len(parts) >= 2 and f"{parts[0]}_{parts[1]}" in ['task_arithmetic']:
+        # Handle two-part experiment types: task_arithmetic_af-ZA -> type="task_arithmetic", locale="af-ZA"
+        exp_type = f"{parts[0]}_{parts[1]}"
+        locale = parts[-1]  # Last part should be the locale
+    elif parts[0] in ['baseline', 'similarity', 'average', 'fisher', 'ties', 'slerp', 'regmean']:
         # Simple case: prefix_locale
         exp_type = parts[0]
         locale = '_'.join(parts[1:])
+    elif parts[0] == 'iterative':
+        # Handle iterative training folder: iterative_{mode}_{locale}
+        # Need to handle mode names with underscores (like fisher_dataset)
+        if len(parts) >= 3:
+            # Try to identify the locale (last part should be locale like sq-AL, en-US, etc.)
+            if len(parts[-1]) == 5 and '-' in parts[-1]:  # xx-YY format
+                locale = parts[-1]
+                mode = '_'.join(parts[1:-1])
+                exp_type = f"iterative_{mode}"
+            else:
+                # Fallback: assume locale is last 2 parts
+                locale = '_'.join(parts[-2:])
+                mode = '_'.join(parts[1:-2])
+                exp_type = f"iterative_{mode}"
+        else:
+            exp_type = 'iterative_unknown'
+            locale = '_'.join(parts[1:]) if len(parts) > 1 else 'unknown'
     elif parts[0] == 'ensemble':
         # Handle ensemble folder: ensemble_{voting_method}_{locale}
         # Need to handle voting methods with underscores (like uriel_logits)
@@ -172,6 +198,14 @@ def parse_experiment_metadata(folder_name: str, folder_path: str) -> ExperimentM
         # Find the locale part (usually the last part before the final underscore)
         if len(parts) >= 2:
             locale = parts[-1]  # Last part is usually the locale
+        else:
+            locale = 'unknown'
+    elif folder_name.startswith('test_'):
+        # Handle test folders: test_enUS_verification_en-US -> type='test', locale='en-US'
+        exp_type = 'test'
+        # For test folders, locale is usually the last part
+        if len(parts) >= 2:
+            locale = parts[-1]  # e.g., test_enUS_verification_en-US -> en-US
         else:
             locale = 'unknown'
     else:
@@ -279,51 +313,6 @@ def get_baseline_for_target(target_locale: str, source_locales: List[str], evalu
 
     return baseline
 
-def parse_folder_name(folder_name):
-    """Parse folder name to extract experiment type and locale."""
-    parts = folder_name.split('_')
-    
-    # Handle different patterns:
-    # 1. "baseline_sq-AL" -> type="baseline", locale="sq-AL"
-    # 2. "similarity_sq-AL" -> type="similarity", locale="sq-AL"
-    # 3. "average_sq-AL" -> type="average", locale="sq-AL"
-    # 4. "xlm-roberta-base_massive_k_sq-AL_alpha_0.5_sq-AL_epoch-9_sq-AL" -> type="baseline", locale="sq-AL"
-    
-    if parts[0] in ['baseline', 'similarity', 'average']:
-        # Simple case: prefix_locale
-        exp_type = parts[0]
-        locale = '_'.join(parts[1:])
-    elif parts[0] == 'ensemble':
-        # Handle ensemble folder: ensemble_{voting_method}_{locale}
-        # Need to handle voting methods with underscores (like uriel_logits)
-        if len(parts) >= 3:
-            # Try to identify the locale (last part should be locale like sq-AL, en-US, etc.)
-            if len(parts[-1]) == 5 and '-' in parts[-1]:  # xx-YY format
-                locale = parts[-1]
-                voting_method = '_'.join(parts[1:-1])
-                exp_type = f"ensemble_{voting_method}"
-            else:
-                # Fallback: assume locale is last 2 parts
-                locale = '_'.join(parts[-2:])
-                voting_method = '_'.join(parts[1:-2])
-                exp_type = f"ensemble_{voting_method}"
-        else:
-            exp_type = 'ensemble_unknown'
-            locale = '_'.join(parts[1:]) if len(parts) > 1 else 'unknown'
-    elif 'massive_k_' in folder_name:
-        # Complex case: baseline with full model name
-        exp_type = 'baseline'
-        # Find the locale part (usually the last part before the final underscore)
-        if len(parts) >= 2:
-            locale = parts[-1]  # Last part is usually the locale
-        else:
-            locale = 'unknown'
-    else:
-        # Fallback
-        exp_type = 'unknown'
-        locale = folder_name
-    
-    return exp_type, locale
 
 def aggregate_results(evaluation_matrix: Optional[pd.DataFrame] = None):
     """Aggregate results from all experiment folders with dynamic parsing."""
