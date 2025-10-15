@@ -58,16 +58,13 @@ def run_single_ensemble_experiment(target_lang: str,
         raise ValueError(f"Could not load models for target language {target_lang}")
 
     # Load test data from MASSIVE dataset
-    try:
-        dataset = load_dataset("AmazonScience/massive", f"{target_lang}", split="test")
-        test_texts = [example["utt"] for example in dataset[:num_examples]]
-        test_labels = [example["intent"] for example in dataset[:num_examples]]
-        dataset_source = "massive"
-    except Exception as e:
-        # Fallback to dummy data if dataset loading fails
-        test_texts = ["Test text " + str(i) for i in range(num_examples)]
-        test_labels = [0] * num_examples
-        dataset_source = "dummy"
+    dataset = load_dataset("AmazonScience/massive", f"{target_lang}", split="test", trust_remote_code=True)
+
+    # Dataset slicing returns a dict, so we need to access fields correctly
+    subset = dataset[:num_examples]
+    test_texts = subset["utt"]
+    test_labels = subset["intent"]
+    dataset_source = "massive"
 
     # Run ensemble inference
     predictions, metadata = run_ensemble_inference(

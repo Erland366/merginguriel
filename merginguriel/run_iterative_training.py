@@ -163,23 +163,17 @@ def auto_select_source_locales(target_languages: List[str], num_languages: int, 
     for target_lang in target_languages:
         print(f"Finding source languages for target: {target_lang}")
 
-        try:
-            # Get similar languages using same logic as main pipeline
-            similar_languages = load_and_process_similarity(
-                similarity_matrix_path, target_lang, num_languages,
-                top_k, sinkhorn_iters, verbose=False
-            )
+        # Get similar languages using same logic as main pipeline
+        similar_languages = load_and_process_similarity(
+            similarity_matrix_path, target_lang, num_languages,
+            top_k, sinkhorn_iters, verbose=False
+        )
 
-            # Extract just the locale codes
-            source_locales = [locale for locale, weight in similar_languages]
-            selected_locales.extend(source_locales)
+        # Extract just the locale codes
+        source_locales = [locale for locale, weight in similar_languages]
+        selected_locales.extend(source_locales)
 
-            print(f"  Auto-selected source languages: {source_locales}")
-
-        except Exception as e:
-            print(f"  Warning: Failed to auto-select sources for {target_lang}: {e}")
-            print(f"  Using fallback: English (en-US)")
-            selected_locales.append("en-US")
+        print(f"  Auto-selected source languages: {source_locales}")
 
     # Remove duplicates and limit to reasonable number
     unique_locales = list(dict.fromkeys(selected_locales))  # Preserve order, remove duplicates
