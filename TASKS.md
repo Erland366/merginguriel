@@ -1,0 +1,4 @@
+- [] Expose the num of model merging on the folder of model merging (eg. merged_models/average_merge_am-ET which I think I should merged_models/average_merge_am-ET_5merged)
+- [] Fix iterativemerging
+- [] Make sure XLMR is working
+- [] Support multi-language datasets 
