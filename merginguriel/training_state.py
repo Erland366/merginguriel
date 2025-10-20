@@ -363,6 +363,9 @@ class TrainingStateManager:
                  metrics.eval_accuracy > (state.best_metrics.eval_accuracy or 0))):
                 state.best_metrics = metrics
 
+        # Calculate and set checksum for integrity validation
+        state.checksum = state.calculate_checksum()
+
     def create_checkpoint(
         self,
         locale: str,
