@@ -101,6 +101,8 @@ def build_train_cmd(locale: str, args: argparse.Namespace) -> list[str]:
     ]
     if args.fp16:
         cmd += ['--fp16']
+    if args.bf16:
+        cmd += ['--bf16']
     if args.torch_compile:
         cmd += ['--torch_compile']
     if args.wandb:
@@ -124,6 +126,7 @@ def main():
     p.add_argument('--save-total-limit', type=int, default=15)
     p.add_argument('--early-stopping-patience', type=int, default=3)
     p.add_argument('--fp16', action='store_true')
+    p.add_argument('--bf16', action='store_true')
     p.add_argument('--torch-compile', dest='torch_compile', action='store_true')
     p.add_argument('--wandb', action='store_true')
     args = p.parse_args()
