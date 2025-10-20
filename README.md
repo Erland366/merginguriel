@@ -1,6 +1,7 @@
 **Project Overview**
 - Merge multiple fine-tuned models to introduce or improve a target language using language similarity (URIEL) and Fisher-based merging.
 - Core idea: compute per-parameter Fisher importance on a shared dataset slice (e.g., MASSIVE) and combine source models via a Fisher-weighted average, with optional URIEL pre-weights.
+- **Multi-Model Support**: Works with different base models including `xlm-roberta-base` and `xlm-roberta-large`, allowing you to choose the model size that best fits your computational resources and performance requirements.
 
 **Features**
 - Merging methods:
@@ -15,6 +16,19 @@
 - Merge count tracking: Output folders include the number of models merged (e.g., `similarity_merge_sq-AL_5merged`)
 - Evaluation: saves merged model, details, and runs evaluation after merging
 
+**Model Support**
+
+The system supports multiple pre-trained models as base architectures:
+
+**Supported Models:**
+- **`xlm-roberta-base`** (default): 270M parameters, good balance of performance and efficiency
+- **`xlm-roberta-large`**: 550M parameters, higher performance but requires more GPU memory and compute time
+- **Custom models**: Any HuggingFace model compatible with the XLM-RoBERTa architecture
+
+**Model Selection Trade-offs:**
+- **Base model**: Faster training/inference, lower memory usage (~8GB GPU), good for experimentation
+- **Large model**: Better performance on low-resource languages, higher memory requirements (~16GB GPU), better for final production models
+
 **Prerequisites**
 - Python 3.9+
 - Install packages (GPU recommended):
@@ -23,12 +37,16 @@
 - Hugging Face datasets access (for MASSIVE): `AmazonScience/massive`
 
 **Repository Layout**
-- `merginguriel/run_merging_pipeline_refactored.py`: main, composable CLI pipeline
+- `merginguriel/run_merging_pipeline_refactored.py`: main, composable CLI pipeline with multi-model support
 - `submodules/auto_merge_llm/auto_merge_llm/methods/fisher_dataset.py`: dataset-enabled Fisher wrapper (builds shared dataloader from locales)
 - `submodules/auto_merge_llm/auto_merge_llm/methods/fisher.py`: full Fisher core (gradient-based merging)
 - `submodules/auto_merge_llm/auto_merge_llm/methods/__init__.py`: merging method registry
 - `sparsed_language_similarity_matrix_unified.csv`: cosine similarities between locales
 - `merginguriel/`: utilities and evaluation
+- `haryos_model/`: trained models with subdirectories by base model:
+  - `haryos_model/xlm-roberta-base_massive_k_{locale}/` (default)
+  - `haryos_model/xlm-roberta-large_massive_k_{locale}/` (large models)
+  - `haryos_model/{custom-model}_massive_k_{locale}/` (other models)
 
 **Data Source: MASSIVE**
 - Dataset: `AmazonScience/massive`
@@ -40,6 +58,8 @@
 - Use `fisher_dataset` to compute Fisher on target-only, sources-only, or both.
 
 **Examples**
+
+**XLMR-Base Examples (Default):**
 - Equal-weight Fisher on target-only data (recommended when target text available):
   - `python merginguriel/run_merging_pipeline_refactored.py --mode fisher_dataset --target-lang af-ZA --num-languages 5 --dataset-name AmazonScience/massive --dataset-split train --text-column utt --num-fisher-examples 1000 --fisher-data-mode target --preweight equal`
 - URIEL-weighted Fisher on target + sources:
@@ -49,11 +69,20 @@
 - Average (equal) merge without Fisher (baseline):
   - `python merginguriel/run_merging_pipeline_refactored.py --mode average --target-lang af-ZA --num-languages 5`
 
+**XLMR-Large Examples (Higher Performance):**
+- XLMR-Large similarity merge:
+  - `python merginguriel/run_merging_pipeline_refactored.py --mode similarity --target-lang af-ZA --base-model xlm-roberta-large --num-languages 5`
+- XLMR-Large Fisher merge (target-only):
+  - `python merginguriel/run_merging_pipeline_refactored.py --mode fisher_dataset --target-lang af-ZA --base-model xlm-roberta-large --num-languages 5 --dataset-name AmazonScience/massive --dataset-split train --text-column utt --num-fisher-examples 500 --fisher-data-mode target --preweight equal`
+- XLMR-Large ensemble inference:
+  - `python merginguriel/uriel_ensemble_inference.py --target-lang af-ZA --base-model xlm-roberta-large --voting-method uriel_logits --num-languages 5`
+
 Additional locale examples (swap `--target-lang`):
 - `--target-lang th-TH` (Thai), `--target-lang sq-AL` (Albanian), `--target-lang id-ID` (Indonesian)
 
 **Key Flags**
 - `--mode`: `average` | `similarity` | `manual` | `fisher_dataset`
+- `--base-model`: base model architecture (default: `xlm-roberta-base`, options: `xlm-roberta-large`, `FacebookAI/xlm-roberta-large`)
 - `--target-lang`: target locale (e.g., `af-ZA`)
 - `--num-languages`: number of source languages to include (top-K by similarity)
 - Similarity options: `--similarity-source {sparse|dense}`, `--top-k`, `--sinkhorn-iters`
@@ -279,14 +308,18 @@ The `--dataset_config_name` argument now accepts:
 - If some locales are missing under `haryos_model/`, train them from MASSIVE using the helper:
   - Dry-run (print commands):
     - `python merginguriel/train_missing_models.py --dry-run`
-  - Train a subset with defaults (xlm-roberta-base, 3 epochs):
+  - Train XLMR-Base models (default, 3 epochs):
     - `python merginguriel/train_missing_models.py --locales af-ZA sq-AL --fp16`
+  - Train XLMR-Large models (higher performance):
+    - `python merginguriel/train_missing_models.py --base-model FacebookAI/xlm-roberta-large --locales af-ZA sq-AL --train-bs 16 --eval-bs 16 --fp16`
+  - Train individual locale with XLMR-Large:
+    - `python merginguriel/training_bert.py --model_name_or_path FacebookAI/xlm-roberta-large --dataset_config_name af-ZA --per_device_train_batch_size 16 --per_device_eval_batch_size 16 --fp16`
   - Options:
-    - `--mapping-csv model_mapping_unified.csv` (source of locales)
-    - `--base-model xlm-roberta-base` (HF base)
-    - `--train-bs 32 --eval-bs 64 --epochs 3 --lr 5e-5`
+    - `--mapping-csv model_mapping_unified.csv` or `available_locales.txt` (source of locales)
+    - `--base-model` (HF base model: `xlm-roberta-base`, `FacebookAI/xlm-roberta-large`)
+    - `--train-bs 32 --eval-bs 64 --epochs 3 --lr 5e-5` (training hyperparameters)
     - `--max 5` to limit how many to train this run
-    - Outputs to `haryos_model/xlm-roberta-base_massive_k_{locale}` per locale
+    - Outputs to `haryos_model/{base-model}_massive_k_{locale}` per locale
 
 - If your training saved into `checkpoint_results/` (e.g., due to wandb auto-naming), copy runs into `haryos_model/`:
   - Dry-run to preview copies:

@@ -13,20 +13,50 @@ from pathlib import Path
 import pandas as pd
 
 
-def expected_local_dir(locale: str) -> Path:
-    return Path(f"haryos_model/xlm-roberta-base_massive_k_{locale}")
+def expected_local_dir(locale: str, base_model: str = "xlm-roberta-base") -> Path:
+    # Convert model name to directory-friendly format
+    model_name = base_model.replace("FacebookAI/", "")
+    return Path(f"haryos_model/{model_name}_massive_k_{locale}")
 
 
-def find_missing_locales(mapping_csv: str, restrict_locales=None) -> list[str]:
-    df = pd.read_csv(mapping_csv)
-    if 'locale' not in df.columns:
-        raise ValueError(f"'{mapping_csv}' must contain a 'locale' column")
-    locales = df['locale'].tolist()
+def find_missing_locales(mapping_csv: str, restrict_locales=None, base_model: str = "xlm-roberta-base") -> list[str]:
+    # Handle both CSV format and simple text format (like available_locales.txt)
+    try:
+        df = pd.read_csv(mapping_csv)
+        if 'locale' not in df.columns:
+            # Try to read as simple text file with locales
+            with open(mapping_csv, 'r') as f:
+                lines = f.readlines()
+            locales = []
+            for line in lines:
+                # Handle numbered format like "1→af-ZA" or simple "af-ZA"
+                locale = line.strip()
+                if '→' in locale:
+                    locale = locale.split('→')[1] if '→' in locale else locale
+                # Remove any leading numbers/characters
+                locale = ''.join(c for c in locale if c.isalnum() or c == '-')
+                if locale and len(locale) > 2:  # Basic validation
+                    locales.append(locale)
+        else:
+            locales = df['locale'].tolist()
+    except Exception as e:
+        # Fallback: try to read as simple text file
+        with open(mapping_csv, 'r') as f:
+            lines = f.readlines()
+        locales = []
+        for line in lines:
+            locale = line.strip()
+            if '→' in locale:
+                locale = locale.split('→')[1] if '→' in locale else locale
+            locale = ''.join(c for c in locale if c.isalnum() or c == '-')
+            if locale and len(locale) > 2:
+                locales.append(locale)
+
     if restrict_locales:
         locales = [l for l in locales if l in restrict_locales]
     missing = []
     for loc in locales:
-        out_dir = expected_local_dir(loc)
+        out_dir = expected_local_dir(loc, base_model)
         if not out_dir.exists():
             missing.append(loc)
     return missing
@@ -47,7 +77,7 @@ def find_missing_locales(mapping_csv: str, restrict_locales=None) -> list[str]:
 #     --do_predict
 
 def build_train_cmd(locale: str, args: argparse.Namespace) -> list[str]:
-    out_dir = expected_local_dir(locale)
+    out_dir = expected_local_dir(locale, args.base_model)
     script_path = Path(__file__).resolve().parent / 'training_bert.py'
     cmd = [
         os.environ.get('PYTHON', 'python'), str(script_path),
@@ -83,7 +113,7 @@ def build_train_cmd(locale: str, args: argparse.Namespace) -> list[str]:
 def main():
     p = argparse.ArgumentParser(description='Train missing MASSIVE locale models')
     p.add_argument('--mapping-csv', default='model_mapping_unified.csv', help='CSV with a locale column')
-    p.add_argument('--base-model', default='xlm-roberta-base', help='Pretrained base model')
+    p.add_argument('--base-model', default='xlm-roberta-base', help='Pretrained base model (e.g., xlm-roberta-base, FacebookAI/xlm-roberta-large)')
     p.add_argument('--locales', nargs='+', default=None, help='Subset of locales to consider')
     p.add_argument('--max', type=int, default=None, help='Max number of missing locales to train')
     p.add_argument('--dry-run', action='store_true', help='Print commands without running')
@@ -98,17 +128,17 @@ def main():
     p.add_argument('--wandb', action='store_true')
     args = p.parse_args()
 
-    missing = find_missing_locales(args.mapping_csv, args.locales)
+    missing = find_missing_locales(args.mapping_csv, args.locales, args.base_model)
     if args.max:
         missing = missing[:args.max]
 
     if not missing:
-        print('No missing locales found. All expected models exist in haryos_model.')
+        print(f'No missing locales found for base model {args.base_model}. All expected models exist in haryos_model.')
         return
 
-    print(f"Found {len(missing)} missing locales:")
+    print(f"Found {len(missing)} missing locales for {args.base_model}:")
     for loc in missing:
-        print(f"  - {loc} -> {expected_local_dir(loc)}")
+        print(f"  - {loc} -> {expected_local_dir(loc, args.base_model)}")
 
     for loc in missing:
         cmd = build_train_cmd(loc, args)
