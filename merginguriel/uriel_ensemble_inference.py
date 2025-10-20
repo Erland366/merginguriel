@@ -101,14 +101,14 @@ def load_similarity_weights(similarity_matrix_path: str, available_locales: List
         return None
 
 
-def load_model_from_local(locale: str):
+def load_model_from_local(locale: str, base_model: str = "xlm-roberta-base"):
     """Load model directly from local haryos_model directory."""
     try:
         print(f"Loading model for locale: {locale}")
 
         # Construct the local model path
         model_dir = os.path.join("/home/coder/Python_project/MergingUriel/haryos_model",
-                                f"xlm-roberta-base_massive_k_{locale}")
+                                f"{base_model}_massive_k_{locale}")
 
         if not os.path.exists(model_dir):
             print(f"Model directory not found: {model_dir}")
@@ -206,7 +206,7 @@ def uriel_weighted_logits(logits_list: List[torch.Tensor], weights: List[float],
 
 
 def run_ensemble_inference(models_and_weights: Dict, test_data: List[str],
-                          voting_method: str = "majority") -> Tuple[List[int], Dict]:
+                          voting_method: str = "majority", base_model: str = "xlm-roberta-base") -> Tuple[List[int], Dict]:
     """
     Run ensemble inference on multiple models using various voting methods.
 
@@ -234,7 +234,7 @@ def run_ensemble_inference(models_and_weights: Dict, test_data: List[str],
 
         print(f"\nLoading model for locale: {locale} (weight: {weight:.6f})")
 
-        model, tokenizer = load_model_from_local(locale)
+        model, tokenizer = load_model_from_local(locale, base_model)
 
         if model is not None and tokenizer is not None:
             models.append(model)
@@ -378,6 +378,12 @@ def main():
         help="Target language/locale (e.g., 'en-US', 'sq-AL')"
     )
     parser.add_argument(
+        "--base-model",
+        type=str,
+        default="xlm-roberta-base",
+        help="Base model name for model path construction (e.g., xlm-roberta-base, xlm-roberta-large)"
+    )
+    parser.add_argument(
         "--num-languages",
         type=int,
         default=5,
@@ -429,9 +435,10 @@ def main():
     # Check what models are actually available locally
     local_models_dir = "/home/coder/Python_project/MergingUriel/haryos_model"
     available_locales = []
+    model_prefix = f"{args.base_model}_massive_k_"
     for item in os.listdir(local_models_dir):
-        if os.path.isdir(os.path.join(local_models_dir, item)) and item.startswith("xlm-roberta-base_massive_k_"):
-            locale = item.replace("xlm-roberta-base_massive_k_", "")
+        if os.path.isdir(os.path.join(local_models_dir, item)) and item.startswith(model_prefix):
+            locale = item.replace(model_prefix, "")
             available_locales.append(locale)
 
     print(f"Found {len(available_locales)} local models: {sorted(available_locales)}")
@@ -463,7 +470,7 @@ def main():
 
     # Run ensemble inference
     predictions, metadata = run_ensemble_inference(
-        models_and_weights, test_texts, args.voting_method
+        models_and_weights, test_texts, args.voting_method, args.base_model
     )
 
     # Evaluate predictions

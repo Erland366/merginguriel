@@ -145,7 +145,7 @@ class SimilarityWeightCalculator(WeightCalculator):
         # Create model mapping using the haryos_model structure
         models_and_weights = {}
         for locale, weight in similar_languages:
-            model_path = f"/home/coder/Python_project/MergingUriel/haryos_model/xlm-roberta-base_massive_k_{locale}"
+            model_path = f"/home/coder/Python_project/MergingUriel/haryos_model/{config.base_model}_massive_k_{locale}"
 
             # Check if model exists locally
             if not os.path.exists(model_path):
@@ -888,7 +888,7 @@ def create_config_from_args(args) -> MergeConfig:
         text_column=args.text_column,
         label_column=args.label_column,
         num_fisher_examples=args.num_fisher_examples,
-        base_model="xlm-roberta-base",
+        base_model=args.base_model,
         similarity_source=args.similarity_source,
         top_k=args.top_k,
         sinkhorn_iters=args.sinkhorn_iters,
@@ -915,6 +915,12 @@ def main():
         type=str,
         default="sq-AL",
         help="Target language/locale for similarity-based merging (e.g., sq-AL, th-TH, af-ZA)"
+    )
+    parser.add_argument(
+        "--base-model",
+        type=str,
+        default="xlm-roberta-base",
+        help="Base model name for model path construction (e.g., xlm-roberta-base, xlm-roberta-large)"
     )
     parser.add_argument(
         "--subfolder-pattern",
