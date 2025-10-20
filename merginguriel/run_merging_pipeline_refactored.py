@@ -775,10 +775,12 @@ class OutputManager:
         self.project_root = project_root
 
     def save_model_and_details(self, merged_model: Any, tokenizer: Any, config: MergeConfig,
-                              models_and_weights: Dict[str, ModelInfo], base_model_info: ModelInfo):
+                              models_and_weights: Dict[str, ModelInfo], base_model_info: ModelInfo) -> str:
         """Save the merged model and merge details."""
+        # Get the number of models merged
+        num_models = len(models_and_weights)
         output_dir = os.path.join(self.project_root, "merged_models",
-                                 f"{config.mode}_merge_{config.target_lang}")
+                                 f"{config.mode}_merge_{config.target_lang}_{num_models}merged")
 
         os.makedirs(output_dir, exist_ok=True)
         merged_model.save_pretrained(output_dir)
@@ -786,6 +788,8 @@ class OutputManager:
         print(f"Model saved successfully to: {output_dir}")
 
         self._save_merge_details(output_dir, config, models_and_weights, base_model_info)
+
+        return output_dir
 
     def _save_merge_details(self, output_dir: str, config: MergeConfig,
                            models_and_weights: Dict[str, ModelInfo], base_model_info: ModelInfo):
@@ -862,13 +866,11 @@ class MergingPipeline:
         merged_model, tokenizer = self.model_merger.merge_models(models_and_weights, base_model_info)
 
         # Step 3: Save results
-        self.output_manager.save_model_and_details(
+        output_dir = self.output_manager.save_model_and_details(
             merged_model, tokenizer, self.config, models_and_weights, base_model_info
         )
 
         # Step 4: Evaluate
-        output_dir = os.path.join(self.project_root, "merged_models",
-                                 f"{self.config.mode}_merge_{self.config.target_lang}")
         self.evaluator.evaluate_model(output_dir)
 
         print("\n*****************************************************")

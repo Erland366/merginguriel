@@ -117,9 +117,22 @@ def run_experiment_for_locale(
         print(f"\n--- {mode} Merge for {locale} ---")
         merge_success = run_merge(mode, locale, merge_extra_args)
         if merge_success:
-            merged_model_path = os.path.join(REPO_ROOT, "merged_models", f"{mode}_merge_{locale}")
-            eval_success = run_evaluation(merged_model_path, locale, mode)
-            results[mode] = eval_success
+            # Find the actual merged model directory with the new naming convention
+            merged_models_dir = os.path.join(REPO_ROOT, "merged_models")
+            merged_model_path = None
+
+            # Look for the directory that matches our pattern (e.g., similarity_merge_sq-AL_5merged)
+            for entry in os.listdir(merged_models_dir):
+                if entry.startswith(f"{mode}_merge_{locale}_") and entry.endswith("merged"):
+                    merged_model_path = os.path.join(merged_models_dir, entry)
+                    break
+
+            if merged_model_path and os.path.exists(merged_model_path):
+                eval_success = run_evaluation(merged_model_path, locale, mode)
+                results[mode] = eval_success
+            else:
+                print(f"❌ Could not find merged model directory for {mode} merge of {locale}")
+                results[mode] = False
         else:
             results[mode] = False
 
