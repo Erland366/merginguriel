@@ -12,6 +12,7 @@
 - URIEL cosine weighting:
   - Pre-weight source models by similarity to the target language
   - Alternatively use equal pre-weights for fairness baselines
+- Merge count tracking: Output folders include the number of models merged (e.g., `similarity_merge_sq-AL_5merged`)
 - Evaluation: saves merged model, details, and runs evaluation after merging
 
 **Prerequisites**
@@ -85,7 +86,7 @@ Presets (for Fisher configs):
     - Computes Fisher per model over the shared dataloader.
     - Normalizes/aggregates Fisher; applies `fisher_scaling_coefficients` (from preweights).
     - Merges parameters and returns merged model + tokenizer.
-  - Saves to `merged_models/fisher_dataset_merge_{target_lang}` and runs evaluation.
+  - Saves to `merged_models/fisher_dataset_merge_{target_lang}_{N}merged` (where N is the number of models merged) and runs evaluation.
 
 Flow overview:
 `CLI` → `select locales + preweights` → `build shared dataloader` → `FisherMerging.merge()` → `save + eval`
@@ -156,9 +157,12 @@ Advanced methods (available in the underlying library):
 - Methods like `regmean`, `slerp`, `breadcrumbs`, `task_arithmetic`, `ties`, `widen`, `stock` are registered in `submodules/auto_merge_llm`. Some require extra `method_params` (e.g., trainers or dataset batches). If you want to expose these in the refactored CLI, we can wire them similarly to `fisher_dataset` and add documented flags.
 
 **Outputs**
-- Merged model + tokenizer: `merged_models/{mode}_merge_{target_lang}`
-- Merge details file with model list and weights
+- Merged model + tokenizer: `merged_models/{mode}_merge_{target_lang}_{N}merged` (where N is the number of models merged)
+  - Examples: `merged_models/similarity_merge_sq-AL_5merged`, `merged_models/average_merge_am-ET_3merged`
+- Merge details file with model list, weights, and configuration
 - Evaluation runs post-merge
+
+**Merge Count Feature**: The output folder naming now includes the number of models merged, providing immediate insight into merge complexity and making it easy to compare different merge configurations at a glance.
 
 **Single-Model Evaluation**
 - Evaluate a single local model on a MASSIVE locale using `evaluate_specific_model.py`.

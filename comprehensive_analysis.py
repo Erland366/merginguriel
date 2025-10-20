@@ -42,7 +42,19 @@ class CrossLingualAnalyzer:
 
     def find_merge_locales(self, target_locale, merge_type="similarity"):
         """Find which locales were used for merging a target language"""
-        merge_path = os.path.join(self.merged_models_path, f"{merge_type}_merge_{target_locale}", "merge_details.txt")
+        # Try to find merge directory with new naming convention first
+        merge_path = None
+
+        # Look for directories matching pattern: {merge_type}_merge_{target_locale}_{N}merged
+        pattern = os.path.join(self.merged_models_path, f"{merge_type}_merge_{target_locale}_*merged")
+        matching_dirs = glob.glob(pattern)
+
+        if matching_dirs:
+            merge_path = os.path.join(matching_dirs[0], "merge_details.txt")
+
+        # Fallback to old naming convention
+        if merge_path is None or not os.path.exists(merge_path):
+            merge_path = os.path.join(self.merged_models_path, f"{merge_type}_merge_{target_locale}", "merge_details.txt")
 
         if not os.path.exists(merge_path):
             return []
@@ -57,7 +69,19 @@ class CrossLingualAnalyzer:
 
     def get_merge_weights(self, target_locale, merge_type="similarity"):
         """Extract merge weights for a target language"""
-        merge_path = os.path.join(self.merged_models_path, f"{merge_type}_merge_{target_locale}", "merge_details.txt")
+        # Try to find merge directory with new naming convention first
+        merge_path = None
+
+        # Look for directories matching pattern: {merge_type}_merge_{target_locale}_{N}merged
+        pattern = os.path.join(self.merged_models_path, f"{merge_type}_merge_{target_locale}_*merged")
+        matching_dirs = glob.glob(pattern)
+
+        if matching_dirs:
+            merge_path = os.path.join(matching_dirs[0], "merge_details.txt")
+
+        # Fallback to old naming convention
+        if merge_path is None or not os.path.exists(merge_path):
+            merge_path = os.path.join(self.merged_models_path, f"{merge_type}_merge_{target_locale}", "merge_details.txt")
 
         if not os.path.exists(merge_path):
             return {}

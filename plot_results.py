@@ -187,8 +187,21 @@ class AdvancedResultsAnalyzer:
 
     def find_merge_locales(self, target_locale: str, merge_type: str = "similarity") -> List[str]:
         """Find which locales were used for merging a target language"""
-        merge_dir = self.merged_models_path / f"{merge_type}_merge_{target_locale}"
-        merge_details_file = merge_dir / "merge_details.txt"
+        # Try to find the merge directory with the new naming convention
+        merge_dir = None
+        merge_details_file = None
+
+        # Look for directories that match the pattern: {merge_type}_merge_{target_locale}_{N}merged
+        for exp_dir in self.merged_models_path.glob(f"{merge_type}_merge_{target_locale}_*merged"):
+            if exp_dir.is_dir():
+                merge_dir = exp_dir
+                merge_details_file = merge_dir / "merge_details.txt"
+                break
+
+        # Fallback to old naming convention if new one not found
+        if merge_dir is None:
+            merge_dir = self.merged_models_path / f"{merge_type}_merge_{target_locale}"
+            merge_details_file = merge_dir / "merge_details.txt"
 
         if not merge_details_file.exists():
             return []
@@ -226,7 +239,11 @@ class AdvancedResultsAnalyzer:
     def extract_source_locales_from_details(self, target_locale: str) -> List[str]:
         """Extract source locales from merge_details.txt files for any merge type"""
         # Try to find merge_details.txt from any merge type for this target locale
+        # Support both new naming convention (with merge count) and old naming
         merge_patterns = [
+            f"merged_models/*merge_{target_locale}_*merged/merge_details.txt",
+            f"merged_models/similarity_merge_{target_locale}_*merged/merge_details.txt",
+            f"merged_models/average_merge_{target_locale}_*merged/merge_details.txt",
             f"merged_models/similarity_merge_{target_locale}/merge_details.txt",
             f"merged_models/average_merge_{target_locale}/merge_details.txt",
             f"merged_models/*merge_{target_locale}/merge_details.txt"
