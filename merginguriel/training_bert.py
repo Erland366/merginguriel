@@ -417,8 +417,9 @@ def load_and_combine_datasets(
         if combined_test is not None:
             combined_test = combined_test.shuffle(seed=shuffle_seed)
 
-    # Create combined dataset dictionary
-    combined_dataset = {}
+    # Create combined dataset dictionary as DatasetDict
+    from datasets import DatasetDict
+    combined_dataset = DatasetDict()
     combined_dataset['train'] = combined_train
     if combined_validation is not None:
         combined_dataset['validation'] = combined_validation
@@ -802,7 +803,13 @@ def main():
 
               # Map labels to IDs (not necessary for GLUE tasks)
         if label_to_id is not None and "labels" in examples:
-            result["labels"] = [(label_to_id[l] if l != -1 else -1) for l in examples["labels"]]
+            # Check if labels are already integers (MASSIVE dataset) or strings
+            if isinstance(examples["labels"][0], str):
+                # Labels are strings, need to map to IDs
+                result["labels"] = [(label_to_id[l] if l != -1 else -1) for l in examples["labels"]]
+            else:
+                # Labels are already integers, use them directly
+                result["labels"] = examples["labels"]
         return result
 
     with training_args.main_process_first(desc="dataset map pre-processing"):
