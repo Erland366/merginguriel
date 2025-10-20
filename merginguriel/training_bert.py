@@ -39,12 +39,12 @@ import random
 import sys
 from collections import Counter
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Optional, List, Union
 
 import datasets
 import evaluate
 import numpy as np
-from datasets import load_dataset
+from datasets import load_dataset, concatenate_datasets
 
 import transformers
 from transformers import (
@@ -99,8 +99,24 @@ def generate_wandb_run_name(model_args, data_args, training_args):
         # Extract dataset name (remove organization prefixes)
         dataset_name = data_args.dataset_name.split('/')[-1]
 
-        # Get dataset config
-        dataset_config = data_args.dataset_config_name
+        # Get dataset config(s) - handle both single and multi-language cases
+        if isinstance(data_args.dataset_config_name, str):
+            if ',' in data_args.dataset_config_name:
+                # Multi-language case
+                configs = [lang.strip() for lang in data_args.dataset_config_name.split(',')]
+                if len(configs) <= 3:
+                    dataset_config = '-'.join(configs)
+                else:
+                    dataset_config = f"{len(configs)}langs-{configs[0]}"
+            else:
+                # Single language case
+                dataset_config = data_args.dataset_config_name
+        else:
+            # List case
+            if len(data_args.dataset_config_name) <= 3:
+                dataset_config = '-'.join(data_args.dataset_config_name)
+            else:
+                dataset_config = f"{len(data_args.dataset_config_name)}langs-{data_args.dataset_config_name[0]}"
 
         # Format learning rate (e.g., 5e-5 instead of 0.00005)
         lr = training_args.learning_rate
@@ -150,9 +166,9 @@ class DataTrainingArguments:
         default="AmazonScience/massive",
         metadata={"help": "The name of the dataset to use (via the datasets library)."}
     )
-    dataset_config_name: str = field(
+    dataset_config_name: Union[str, List[str]] = field(
         default="en-US",
-        metadata={"help": "The configuration name of the dataset to use (via the datasets library). Examples: en-US, af-ZA, sw-KE, fr-FR, etc."}
+        metadata={"help": "The configuration name(s) of the dataset to use (via the datasets library). Can be a single language (e.g., en-US) or a comma-separated list of languages for multi-language training (e.g., fr-FR,de-DE,es-ES)."}
     )
     max_seq_length: int = field(
         default=128,
@@ -283,23 +299,176 @@ class ModelArguments:
     )
 
 
+def parse_dataset_configs(dataset_config_name: Union[str, List[str]]) -> List[str]:
+    """
+    Parse dataset configuration names to support both single language and multiple languages.
+
+    Args:
+        dataset_config_name: Either a string (single language or comma-separated languages) or list of strings
+
+    Returns:
+        List of language configuration names
+    """
+    if isinstance(dataset_config_name, str):
+        # Check if it's a comma-separated list
+        if ',' in dataset_config_name:
+            return [lang.strip() for lang in dataset_config_name.split(',')]
+        else:
+            return [dataset_config_name]
+    elif isinstance(dataset_config_name, list):
+        # Handle case where HfArgumentParser creates a list with comma-separated strings
+        if len(dataset_config_name) == 1 and ',' in dataset_config_name[0]:
+            return [lang.strip() for lang in dataset_config_name[0].split(',')]
+        else:
+            # Return the list as-is (assuming it's already a list of language codes)
+            return dataset_config_name
+    else:
+        raise ValueError(f"dataset_config_name must be str or list, got {type(dataset_config_name)}")
+
+
+def load_and_combine_datasets(
+    dataset_name: str,
+    dataset_configs: List[str],
+    cache_dir: Optional[str] = None,
+    token: Optional[str] = None,
+    trust_remote_code: bool = False,
+    shuffle_seed: Optional[int] = None
+):
+    """
+    Load and combine multiple language datasets.
+
+    Args:
+        dataset_name: Name of the dataset
+        dataset_configs: List of language configuration names
+        cache_dir: Cache directory
+        token: HuggingFace token
+        trust_remote_code: Whether to trust remote code
+        shuffle_seed: Seed for shuffling the combined dataset
+
+    Returns:
+        Combined dataset dictionary with train/validation/test splits
+    """
+    logger.info(f"Loading and combining {len(dataset_configs)} language configurations: {dataset_configs}")
+
+    combined_datasets = {}
+
+    # Initialize lists to collect datasets for each split
+    train_datasets = []
+    validation_datasets = []
+    test_datasets = []
+
+    # Load each language dataset
+    for lang_config in dataset_configs:
+        try:
+            logger.info(f"Loading {lang_config}...")
+            lang_dataset = load_dataset(
+                dataset_name,
+                lang_config,
+                cache_dir=cache_dir,
+                token=token,
+                trust_remote_code=trust_remote_code,
+            )
+
+            # Rename 'intent' column to 'labels' for compatibility
+            lang_dataset = lang_dataset.rename_column("intent", "labels")
+
+            # Add to respective split collections
+            if 'train' in lang_dataset:
+                train_datasets.append(lang_dataset['train'])
+                logger.info(f"✓ {lang_config}: {len(lang_dataset['train'])} training samples")
+
+            if 'validation' in lang_dataset:
+                validation_datasets.append(lang_dataset['validation'])
+                logger.info(f"✓ {lang_config}: {len(lang_dataset['validation'])} validation samples")
+
+            if 'test' in lang_dataset:
+                test_datasets.append(lang_dataset['test'])
+                logger.info(f"✓ {lang_config}: {len(lang_dataset['test'])} test samples")
+
+        except Exception as e:
+            logger.error(f"Failed to load {lang_config}: {e}")
+            continue
+
+    if not train_datasets:
+        raise ValueError("No training datasets could be loaded")
+
+    # Combine datasets for each split
+    logger.info("Combining datasets...")
+
+    combined_train = concatenate_datasets(train_datasets)
+    logger.info(f"Combined training set: {len(combined_train)} samples")
+
+    combined_validation = None
+    if validation_datasets:
+        combined_validation = concatenate_datasets(validation_datasets)
+        logger.info(f"Combined validation set: {len(combined_validation)} samples")
+
+    combined_test = None
+    if test_datasets:
+        combined_test = concatenate_datasets(test_datasets)
+        logger.info(f"Combined test set: {len(combined_test)} samples")
+
+    # Shuffle the combined datasets if seed is provided
+    if shuffle_seed is not None:
+        logger.info(f"Shuffling datasets with seed {shuffle_seed}")
+        combined_train = combined_train.shuffle(seed=shuffle_seed)
+        if combined_validation is not None:
+            combined_validation = combined_validation.shuffle(seed=shuffle_seed)
+        if combined_test is not None:
+            combined_test = combined_test.shuffle(seed=shuffle_seed)
+
+    # Create combined dataset dictionary as DatasetDict
+    from datasets import DatasetDict
+    combined_dataset = DatasetDict()
+    combined_dataset['train'] = combined_train
+    if combined_validation is not None:
+        combined_dataset['validation'] = combined_validation
+    if combined_test is not None:
+        combined_dataset['test'] = combined_test
+
+    return combined_dataset
+
+
 def main():
     # See all possible arguments in src/transformers/training_args.py
     # or by passing the --help flag to this script.
     # We now keep distinct sets of args, for a cleaner separation of concerns.
 
+    # Preprocess command line arguments to handle comma-separated dataset configs
+    argv = sys.argv[1:]
+    processed_argv = []
+
+    i = 0
+    while i < len(argv):
+        arg = argv[i]
+        if arg == '--dataset_config_name' and i + 1 < len(argv):
+            # Keep the flag
+            processed_argv.append(arg)
+            # Process the value (don't split here, just pass through)
+            # We'll handle the splitting in parse_dataset_configs()
+            processed_argv.append(argv[i + 1])
+            i += 2
+        else:
+            processed_argv.append(arg)
+            i += 1
+
     parser = HfArgumentParser((ModelArguments, DataTrainingArguments, TrainingArguments))
-    if len(sys.argv) == 2 and sys.argv[1].endswith(".json"):
+    if len(processed_argv) == 1 and processed_argv[0].endswith(".json"):
         # If we pass only one argument to the script and it's the path to a json file,
         # let's parse it to get our arguments.
-        model_args, data_args, training_args = parser.parse_json_file(json_file=os.path.abspath(sys.argv[1]))
+        model_args, data_args, training_args = parser.parse_json_file(json_file=os.path.abspath(processed_argv[0]))
     else:
-        model_args, data_args, training_args = parser.parse_args_into_dataclasses()
+        # Temporarily modify sys.argv for parsing
+        original_argv = sys.argv
+        sys.argv = ['training_bert.py'] + processed_argv
+        try:
+            model_args, data_args, training_args = parser.parse_args_into_dataclasses()
+        finally:
+            sys.argv = original_argv
 
     # Apply opinionated defaults matching project conventions unless explicitly provided
-    argv = sys.argv[1:]
     def _has_flag(name: str) -> bool:
-        return any(arg == name for arg in argv)
+        return any(arg == name for arg in processed_argv)
 
     # Model default
     if not _has_flag('--model_name_or_path'):
@@ -484,18 +653,32 @@ def main():
     # Set seed before initializing model.
     set_seed(training_args.seed)
 
-    # Load the MASSIVE dataset for intent classification
-    logger.info(f"Loading dataset {data_args.dataset_name} with config {data_args.dataset_config_name}")
-    raw_datasets = load_dataset(
-        data_args.dataset_name,
-        data_args.dataset_config_name,
-        cache_dir=model_args.cache_dir,
-        token=model_args.token,
-        trust_remote_code=model_args.trust_remote_code,
-    )
+    # Parse dataset configurations to support multi-language training
+    dataset_configs = parse_dataset_configs(data_args.dataset_config_name)
 
-    # Rename 'intent' column to 'labels' for compatibility with transformers
-    raw_datasets = raw_datasets.rename_column("intent", "labels")
+    if len(dataset_configs) == 1:
+        # Single language loading (original behavior)
+        logger.info(f"Loading single language dataset {data_args.dataset_name} with config {dataset_configs[0]}")
+        raw_datasets = load_dataset(
+            data_args.dataset_name,
+            dataset_configs[0],
+            cache_dir=model_args.cache_dir,
+            token=model_args.token,
+            trust_remote_code=model_args.trust_remote_code,
+        )
+        # Rename 'intent' column to 'labels' for compatibility with transformers
+        raw_datasets = raw_datasets.rename_column("intent", "labels")
+    else:
+        # Multi-language loading with concatenation and shuffling
+        logger.info(f"Loading multi-language dataset {data_args.dataset_name} with configs {dataset_configs}")
+        raw_datasets = load_and_combine_datasets(
+            dataset_name=data_args.dataset_name,
+            dataset_configs=dataset_configs,
+            cache_dir=model_args.cache_dir,
+            token=model_args.token,
+            trust_remote_code=model_args.trust_remote_code,
+            shuffle_seed=training_args.seed,
+        )
 
     # Labels - MASSIVE dataset has 60 intent classes
     is_regression = False
@@ -508,7 +691,9 @@ def main():
         wandb_config = {
             "dataset": {
                 "name": data_args.dataset_name,
-                "config": data_args.dataset_config_name,
+                "configs": dataset_configs,
+                "num_languages": len(dataset_configs),
+                "multi_language": len(dataset_configs) > 1,
                 "num_labels": num_labels,
                 "label_list": label_list,
                 "max_seq_length": data_args.max_seq_length
@@ -616,9 +801,15 @@ def main():
         )
         result = tokenizer(*args, padding=padding, max_length=max_seq_length, truncation=True)
 
-        # Map labels to IDs (not necessary for GLUE tasks)
-        if label_to_id is not None and "label" in examples:
-            result["label"] = [(label_to_id[l] if l != -1 else -1) for l in examples["label"]]
+              # Map labels to IDs (not necessary for GLUE tasks)
+        if label_to_id is not None and "labels" in examples:
+            # Check if labels are already integers (MASSIVE dataset) or strings
+            if isinstance(examples["labels"][0], str):
+                # Labels are strings, need to map to IDs
+                result["labels"] = [(label_to_id[l] if l != -1 else -1) for l in examples["labels"]]
+            else:
+                # Labels are already integers, use them directly
+                result["labels"] = examples["labels"]
         return result
 
     with training_args.main_process_first(desc="dataset map pre-processing"):
@@ -629,11 +820,14 @@ def main():
             desc="Running tokenizer on dataset",
         )
 
-    def print_class_distribution(dataset, split_name):
+    def print_class_distribution(dataset, split_name, languages_info=None):
         label_counts = Counter(dataset["labels"])
         total = sum(label_counts.values())
         logger.info(f"Class distribution in {split_name} set:")
-        for label, count in label_counts.items():
+        if languages_info:
+            logger.info(f"  Languages: {languages_info}")
+        logger.info(f"  Total samples: {total}")
+        for label, count in sorted(label_counts.items()):
             logger.info(f"  Label {label}: {count} ({count / total:.2%})")
 
     if training_args.do_train:
@@ -643,7 +837,9 @@ def main():
         if data_args.max_train_samples is not None:
             max_train_samples = min(len(train_dataset), data_args.max_train_samples)
             train_dataset = train_dataset.select(range(max_train_samples))
-        print_class_distribution(train_dataset, "train")
+
+        languages_info = f"{len(dataset_configs)} languages: {dataset_configs}" if len(dataset_configs) > 1 else dataset_configs[0]
+        print_class_distribution(train_dataset, "train", languages_info)
 
     if training_args.do_eval:
         if "validation" not in raw_datasets:
@@ -652,7 +848,12 @@ def main():
         if data_args.max_eval_samples is not None:
             max_eval_samples = min(len(eval_dataset), data_args.max_eval_samples)
             eval_dataset = eval_dataset.select(range(max_eval_samples))
-        print_class_distribution(eval_dataset, "validation")
+        if training_args.do_train:  # languages_info was defined in the training block
+            print_class_distribution(eval_dataset, "validation", languages_info)
+        else:
+            # Define languages_info if we're not doing training
+            languages_info = f"{len(dataset_configs)} languages: {dataset_configs}" if len(dataset_configs) > 1 else dataset_configs[0]
+            print_class_distribution(eval_dataset, "validation", languages_info)
 
     if training_args.do_predict:
         if "test" not in raw_datasets:
@@ -661,7 +862,12 @@ def main():
         if data_args.max_predict_samples is not None:
             max_predict_samples = min(len(predict_dataset), data_args.max_predict_samples)
             predict_dataset = predict_dataset.select(range(max_predict_samples))
-        print_class_distribution(predict_dataset, "test")
+        if training_args.do_train:  # languages_info was defined in the training block
+            print_class_distribution(predict_dataset, "test", languages_info)
+        else:
+            # Define languages_info if we're not doing training
+            languages_info = f"{len(dataset_configs)} languages: {dataset_configs}" if len(dataset_configs) > 1 else dataset_configs[0]
+            print_class_distribution(predict_dataset, "test", languages_info)
 
     # Log dataset statistics to wandb if available
     if wandb_available and not model_args.wandb_offline:
@@ -825,13 +1031,21 @@ def main():
                     item = label_list[item]
                     writer.write(f"{index}\t{item}\n")
 
+    # Create model card with multi-language support
+    if len(dataset_configs) == 1:
+        language_info = dataset_configs[0]
+        dataset_info = f"MASSIVE {dataset_configs[0]}"
+    else:
+        language_info = f"{len(dataset_configs)} languages"
+        dataset_info = f"MASSIVE Multi-Language ({len(dataset_configs)} languages)"
+
     kwargs = {
         "finetuned_from": model_args.model_name_or_path,
         "tasks": "text-classification",
-        "language": "en",
+        "language": language_info,
         "dataset_tags": "AmazonScience/massive",
-        "dataset_args": data_args.dataset_config_name,
-        "dataset": f"MASSIVE {data_args.dataset_config_name}"
+        "dataset_args": ",".join(dataset_configs) if len(dataset_configs) > 1 else dataset_configs[0],
+        "dataset": dataset_info
     }
 
     if training_args.push_to_hub:
@@ -846,7 +1060,10 @@ def main():
                 "training_completed": True,
                 "output_dir": training_args.output_dir,
                 "final_model_path": os.path.join(training_args.output_dir),
-                "dataset_used": f"{data_args.dataset_name}/{data_args.dataset_config_name}",
+                "dataset_used": f"{data_args.dataset_name}/{dataset_configs}",
+                "dataset_configs": dataset_configs,
+                "num_languages": len(dataset_configs),
+                "multi_language": len(dataset_configs) > 1,
                 "model_used": model_args.model_name_or_path
             }
 

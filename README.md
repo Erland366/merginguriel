@@ -132,6 +132,149 @@ Flow overview:
   - Sources‑only: `python merginguriel/run_merging_pipeline_refactored.py --mode fisher_dataset --target-lang th-TH --num-languages 5 --dataset-name AmazonScience/massive --dataset-split train --text-column utt --num-fisher-examples 1000 --fisher-data-mode sources --preweight uriel`
   - Both: `python merginguriel/run_merging_pipeline_refactored.py --mode fisher_dataset --target-lang th-TH --num-languages 5 --dataset-name AmazonScience/massive --dataset-split train --text-column utt --num-fisher-examples 1000 --fisher-data-mode both --preweight uriel`
 
+**Multi-Language Training with Leave-One-Language-Out Support**
+
+**NEW FEATURE**: The training script now supports multi-language datasets for training models on multiple languages simultaneously, with automatic dataset concatenation and shuffling.
+
+**Key Features:**
+- ✅ **Backward Compatible**: Single language training works exactly as before
+- ✅ **Multi-Language Support**: Train on multiple languages by providing comma-separated language codes
+- ✅ **Leave-One-Language-Out**: Train on multiple languages, evaluate on a held-out language
+- ✅ **Automatic Processing**: Datasets are concatenated, shuffled, and processed automatically
+- ✅ **Enhanced Logging**: Detailed information about language composition and dataset sizes
+
+**Usage Examples:**
+
+1. **Single Language Training (Original functionality):**
+   ```bash
+   python merginguriel/training_bert.py --dataset_config_name fr-FR --output_dir results/fr_french
+   ```
+
+2. **Multi-Language Training (NEW):**
+   ```bash
+   # Train on multiple European languages
+   CUDA_VISIBLE_DEVICES=1 python merginguriel/training_bert.py \
+       --dataset_config_name fr-FR,de-DE,es-ES,it-IT \
+       --output_dir results/multilang_european \
+       --model_name_or_path xlm-roberta-base \
+       --num_train_epochs 10 \
+       --do_train --do_eval --do_predict
+   ```
+
+3. **Large Multi-Language Training:**
+   ```bash
+   # Train on 7 languages from different families
+   python merginguriel/training_bert.py \
+       --dataset_config_name fr-FR,de-DE,es-ES,it-IT,nl-NL,pt-PT,ru-RU \
+       --output_dir results/multilang_7langs \
+       --max_train_samples 10000 \
+       --do_train --do_eval
+   ```
+
+4. **Leave-One-Language-Out Training:**
+   ```bash
+   # Train on multiple languages, then evaluate on a held-out language
+   # Step 1: Train on source languages
+   python merginguriel/training_bert.py \
+       --dataset_config_name fr-FR,de-DE,es-ES,it-IT,nl-NL \
+       --output_dir results/source_languages_only \
+       --do_train --do_eval --do_predict
+
+   # Step 2: Load the trained model and evaluate on held-out language (en-US)
+   python merginguriel/evaluate_specific_model.py \
+       --base-model results/source_languages_only \
+       --locale en-US
+   ```
+
+**Working Examples (✅ Tested):**
+
+   **Quick Test (Small Scale):**
+   ```bash
+   # Quick test with small dataset for validation
+   CUDA_VISIBLE_DEVICES=1 python merginguriel/training_bert.py \
+       --dataset_config_name fr-FR,de-DE,es-ES,it-IT \
+       --output_dir results/multilang_european_test \
+       --model_name_or_path xlm-roberta-base \
+       --num_train_epochs 1 \
+       --max_train_samples 50 \
+       --max_eval_samples 20 \
+       --max_predict_samples 20 \
+       --do_train --do_eval --do_predict \
+       --overwrite_output_dir
+   ```
+
+   **Full Training (Production Ready):**
+   ```bash
+   # Full 10-epoch training with 4 European languages - FULLY TESTED & WORKING
+   CUDA_VISIBLE_DEVICES=1 python merginguriel/training_bert.py \
+       --dataset_config_name fr-FR,de-DE,es-ES,it-IT \
+       --output_dir results/multilang_european_test \
+       --model_name_or_path xlm-roberta-base \
+       --num_train_epochs 10 \
+       --do_train --do_eval --do_predict
+   ```
+
+   **Results:** Successfully loads 46,056 training samples across 4 languages, combines and shuffles datasets, and trains XLM-RoBERTa without issues.
+
+**Supported Language Formats:**
+- **Single language**: `--dataset_config_name fr-FR`
+- **Comma-separated**: `--dataset_config_name fr-FR,de-DE,es-ES`
+- **List format**: The script automatically parses comma-separated strings into lists
+
+**Implementation Details:**
+
+1. **Automatic Dataset Processing:**
+   - Each language dataset is loaded separately
+   - Datasets are concatenated using `datasets.concatenate_datasets()`
+   - Combined dataset is shuffled to mix languages randomly
+   - All MASSIVE languages have consistent 60 intent classes
+
+2. **Enhanced Logging:**
+   ```
+   Loading and combining 4 language configurations: ['fr-FR', 'de-DE', 'es-ES', 'it-IT']
+   Loading fr-FR...
+   ✓ fr-FR: 11514 training samples
+   Loading de-DE...
+   ✓ de-DE: 11514 training samples
+   Combining datasets...
+   Combined training set: 46056 samples
+   Shuffling datasets with seed 42
+   Class distribution in train set:
+     Languages: 4 languages: ['fr-FR', 'de-DE', 'es-ES', 'it-IT']
+     Total samples: 46056
+   ```
+
+3. **Wandb Integration:**
+   - Multi-language experiments are properly tracked
+   - Dataset configuration includes number of languages and language list
+   - Run names automatically reflect multi-language nature
+
+**Dataset Configuration Argument:**
+The `--dataset_config_name` argument now accepts:
+- **String**: Single language code (e.g., `fr-FR`)
+- **Comma-separated string**: Multiple languages (e.g., `fr-FR,de-DE,es-ES`)
+
+**Common Use Cases:**
+
+1. **Cross-Lingual Transfer**: Train on related languages to improve performance on a target language
+2. **Multi-Lingual Models**: Create models that work well across multiple languages
+3. **Low-Resource Languages**: Boost performance by training on similar high-resource languages
+4. **Language Family Training**: Train on languages from the same family (e.g., Romance languages)
+
+**Training Workflow:**
+1. **Load Languages**: Each specified language dataset is loaded from MASSIVE
+2. **Combine Datasets**: All training sets are concatenated into one large dataset
+3. **Shuffle**: Combined dataset is shuffled to mix language examples
+4. **Process**: Tokenization and preprocessing applied to combined dataset
+5. **Train**: Model trained on multi-language data
+6. **Evaluate**: Evaluation on validation/test sets from all languages
+
+**Benefits:**
+- **Improved Zero-Shot Performance**: Better cross-lingual transfer capabilities
+- **Data Efficiency**: Leverage multiple languages for more robust training
+- **Language Diversification**: Models learn patterns across different languages
+- **Flexible Experiments**: Easy to experiment with different language combinations
+
 **Train Missing Locale Models**
 - If some locales are missing under `haryos_model/`, train them from MASSIVE using the helper:
   - Dry-run (print commands):
