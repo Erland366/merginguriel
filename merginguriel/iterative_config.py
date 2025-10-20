@@ -72,6 +72,7 @@ class IterativeMergeConfig:
     target_languages: List[str] = field(default_factory=list)
 
     # Similarity-based merging (if weight_calculation == "similarity")
+    similarity_source: str = "sparse"  # "sparse", "dense"
     top_k: int = 20
     sinkhorn_iters: int = 20
     num_languages: int = 5

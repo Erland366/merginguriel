@@ -141,6 +141,7 @@ class IterativeTrainingOrchestrator:
             "AmazonScience/massive",
             training_config.dataset_config_name,
             cache_dir=None,
+            trust_remote_code=True
         )
 
         # Rename 'intent' column to 'labels'
@@ -298,30 +299,34 @@ class IterativeTrainingOrchestrator:
         logger.info("Iterative training loop completed")
 
     def _run_sequential_training(self):
-        """Run training models one by one to prevent OOM."""
-        logger.info("Running sequential training to prevent GPU memory issues")
+        """Run training models with proper epoch-by-epoch iterative merging."""
+        logger.info("Running iterative training with epoch-level merging")
 
-        # Train models one by one to avoid OOM
         locales = list(self.trainers.keys())
-        total_models = len(locales)
+        max_epochs = self.config.training_configs[0].max_epochs
+        merge_frequency = self.config.merge_config.merge_frequency
 
-        for i, locale in enumerate(locales):
-            logger.info(f"Training model {i+1}/{total_models}: {locale}")
+        logger.info(f"Training {len(locales)} models for {max_epochs} epochs with merge every {merge_frequency} epochs")
 
-            try:
-                # Train this model to completion
-                self._run_single_trainer_sequential(locale, self.trainers[locale])
-                logger.info(f"Completed training for {locale}")
+        # Train epoch by epoch with merging
+        for epoch in range(max_epochs):
+            logger.info(f"=== EPOCH {epoch + 1}/{max_epochs} ===")
 
-                # Check if we should perform a merge after this model
-                if self._should_merge_after_model(locale, i, total_models):
-                    logger.info(f"Triggering merge after training {locale}")
-                    self._execute_merge_cycle_after_training(locales[:i+1])
+            # Train each model for one epoch
+            for locale in locales:
+                logger.info(f"Training {locale} for epoch {epoch}")
+                self._run_single_epoch(locale, epoch)
 
-            except Exception as e:
-                logger.error(f"Training failed for {locale}: {e}")
-                # Continue with other models even if one fails
-                continue
+            # Check if we should merge after this epoch
+            if (epoch + 1) % merge_frequency == 0:
+                logger.info(f"Triggering merge after epoch {epoch + 1}")
+                success = self._execute_merge_cycle_after_epoch(locales, epoch + 1)
+                if success:
+                    logger.info(f"✅ Merge #{(epoch + 1) // merge_frequency} completed successfully")
+                else:
+                    logger.error(f"❌ Merge #{(epoch + 1) // merge_frequency} failed")
+
+        logger.info("All iterative training completed")
 
     def _run_parallel_training(self):
         """Run training models in parallel (legacy method - may cause OOM)."""
@@ -371,6 +376,38 @@ class IterativeTrainingOrchestrator:
             trainer.save_model()
             trainer.save_state()
 
+            # Update state manager with final training state for merging
+            try:
+                # Get final training metrics
+                log_history = trainer.state.log_history
+                final_metrics = None
+                if log_history:
+                    final_log = log_history[-1]  # Get the last log entry
+                    final_metrics = TrainingMetrics(
+                        epoch=final_log.get('epoch', 0),
+                        step=trainer.state.global_step,
+                        train_loss=final_log.get('train_loss', 0.0),
+                        eval_loss=final_log.get('eval_loss'),
+                        eval_accuracy=final_log.get('eval_accuracy'),
+                        eval_f1=final_log.get('eval_f1'),
+                        learning_rate=final_log.get('learning_rate', 0.0)
+                    )
+
+                # Update the state manager with model weights and metrics
+                self.state_manager.update_state(
+                    locale=locale,
+                    epoch=trainer.state.epoch,
+                    step=trainer.state.global_step,
+                    model_state_dict=trainer.model.state_dict(),
+                    optimizer_state_dict=trainer.optimizer.state_dict(),
+                    metrics=final_metrics
+                )
+                logger.info(f"Updated training state for {locale}: epoch={trainer.state.epoch}, step={trainer.state.global_step}")
+
+            except Exception as state_error:
+                logger.warning(f"Failed to update training state for {locale}: {state_error}")
+                # Continue anyway - merge coordinator can use checkpoint fallback
+
             # Clear GPU memory after training
             self._clear_gpu_memory()
 
@@ -378,6 +415,90 @@ class IterativeTrainingOrchestrator:
 
         except Exception as e:
             logger.error(f"Training failed for {locale}: {e}")
+            # Clear GPU memory on error
+            self._clear_gpu_memory()
+            raise
+
+    def _run_single_epoch(self, locale: str, target_epoch: int):
+        """Run training for a single model for one specific epoch."""
+        logger.info(f"Starting epoch {target_epoch} for {locale}")
+        try:
+            # Clear GPU memory before training
+            self._clear_gpu_memory()
+
+            trainer = self.trainers[locale]
+
+            # Set model to training device
+            device = "cuda" if torch.cuda.is_available() else "cpu"
+            trainer.model.to(device)
+            logger.info(f"Training {locale} on device: {device}")
+
+            # Calculate how many epochs to train (from current to target)
+            current_epoch = int(trainer.state.epoch) if trainer.state.epoch is not None else 0
+            epochs_to_train = target_epoch - current_epoch + 1  # +1 because epochs are 0-indexed
+
+            if epochs_to_train <= 0:
+                logger.info(f"Skipping {locale} - already at epoch {current_epoch}")
+                return
+
+            # Modify training arguments for single epoch
+            original_max_epochs = trainer.args.num_train_epochs
+            trainer.args.num_train_epochs = target_epoch + 1  # Train up to target epoch
+
+            # Train for the required number of epochs
+            logger.info(f"Training {locale} from epoch {current_epoch} to {target_epoch} ({epochs_to_train} epochs)")
+            trainer.train()
+
+            # Restore original max epochs
+            trainer.args.num_train_epochs = original_max_epochs
+
+            # Save model state after this epoch
+            trainer.save_model()
+            trainer.save_state()
+
+            # Update state manager with training state for merging
+            try:
+                # Get latest training metrics
+                log_history = trainer.state.log_history
+                current_metrics = None
+                if log_history:
+                    # Find the log entry for the completed epoch (use the most recent)
+                    latest_log = log_history[-1]
+                    current_metrics = TrainingMetrics(
+                        epoch=latest_log.get('epoch', target_epoch),
+                        step=trainer.state.global_step,
+                        train_loss=latest_log.get('train_loss', 0.0),
+                        eval_loss=latest_log.get('eval_loss'),
+                        eval_accuracy=latest_log.get('eval_accuracy'),
+                        eval_f1=latest_log.get('eval_f1'),
+                        learning_rate=latest_log.get('learning_rate', 0.0)
+                    )
+
+                # Update the state manager with model weights and metrics
+                self.state_manager.update_state(
+                    locale=locale,
+                    epoch=trainer.state.epoch,
+                    step=trainer.state.global_step,
+                    model_state_dict=trainer.model.state_dict(),
+                    optimizer_state_dict=trainer.optimizer.state_dict(),
+                    metrics=current_metrics
+                )
+                logger.info(f"Updated training state for {locale}: epoch={trainer.state.epoch}, step={trainer.state.global_step}")
+
+            except Exception as state_error:
+                logger.warning(f"Failed to update training state for {locale}: {state_error}")
+
+            # Update progress tracking
+            self.epoch_progress[locale] = trainer.state.epoch
+            self.step_progress[locale] = trainer.state.global_step
+
+            # Clear GPU memory after training
+            self._clear_gpu_memory()
+
+            logger.info(f"Completed epoch {target_epoch} for {locale}")
+
+        except Exception as e:
+            logger.error(f"Training failed for {locale} epoch {target_epoch}: {e}")
             # Clear GPU memory on error
             self._clear_gpu_memory()
             raise
@@ -434,6 +555,77 @@ class IterativeTrainingOrchestrator:
 
         except Exception as e:
             logger.error(f"Merge cycle failed: {e}")
+
+    def _execute_merge_cycle_after_epoch(self, trained_locales: List[str], epoch: int) -> bool:
+        """Execute a merge cycle after completing a specific epoch."""
+        logger.info(f"Starting merge cycle after epoch {epoch} for models: {trained_locales}")
+
+        try:
+            # Clear GPU memory before merging
+            self._clear_gpu_memory()
+
+            # Get active locales
+            active_locales = trained_locales.copy()
+            target_languages = self.config.merge_config.target_languages
+
+            if not target_languages:
+                target_languages = active_locales
+
+            # Execute merge with current epoch information
+            success, merged_model_path = self.merge_coordinator.execute_merge(
+                active_locales=active_locales,
+                target_locales=target_languages,
+                merge_metadata={
+                    "epoch": epoch,
+                    "trained_models": len(active_locales),
+                    "merge_type": "iterative_epoch_merge",
+                    "timestamp": datetime.utcnow().isoformat()
+                }
+            )
+
+            if success:
+                logger.info(f"✅ Epoch {epoch} merge completed successfully: {merged_model_path}")
+
+                # Update all trainers with merged weights for next epoch
+                self._update_all_trainers_with_merge(merged_model_path, active_locales, epoch)
+
+                # Clear GPU memory after merge
+                self._clear_gpu_memory()
+
+                return True
+            else:
+                logger.error(f"❌ Epoch {epoch} merge failed")
+                return False
+
+        except Exception as e:
+            logger.error(f"Epoch {epoch} merge cycle failed: {e}")
+            return False
+
+    def _update_all_trainers_with_merge(self, merged_model_path: str, active_locales: List[str], epoch: int):
+        """Update all trainers with weights from the merged model for continued training."""
+        try:
+            if merged_model_path and os.path.exists(merged_model_path):
+                # Load merged model
+                logger.info("Loading merged model to update trainers")
+                merged_model = AutoModelForSequenceClassification.from_pretrained(merged_model_path)
+
+                # Update all trainers (not just the active ones)
+                for locale in self.trainers.keys():
+                    if locale in self.trainers:
+                        # Update the trainer's model with merged weights
+                        self.trainers[locale].model.load_state_dict(merged_model.state_dict())
+                        logger.info(f"Updated {locale} trainer with merged weights for epoch {epoch+1}")
+
+                # Clean up merged model from memory
+                del merged_model
+                self._clear_gpu_memory()
+
+                logger.info("Successfully updated all trainers with merged weights")
+            else:
+                logger.warning(f"Could not update trainers - merged model not found: {merged_model_path}")
+
+        except Exception as e:
+            logger.error(f"Failed to update trainers with merge weights: {e}")
 
     def _update_remaining_trainers_with_merge(self, merged_model_path: str, trained_locales: List[str], target_locales: List[str]):
         """Update remaining untrained models with weights from the merged model."""
@@ -650,17 +842,10 @@ class IterativeTrainingCallback(transformers.TrainerCallback):
         logger.info(f"{self.locale} - Training completed")
         logger.info(f"{self.locale} - Final epoch: {state.epoch}, Final step: {state.global_step}")
 
-        # Create final checkpoint
+        # Create final checkpoint - but let the main training loop handle state updates
         try:
-            checkpoint_path = self.state_manager.create_checkpoint(
-                self.locale,
-                metadata={
-                    "training_complete": True,
-                    "final_epoch": state.epoch,
-                    "final_step": state.global_step,
-                    "timestamp": datetime.utcnow().isoformat()
-                }
-            )
-            logger.info(f"{self.locale} - Created final checkpoint: {checkpoint_path}")
+            # Just save basic metadata, don't try to save model state here
+            # The model state is already handled by the main training loop
+            logger.info(f"{self.locale} - Training completed successfully")
         except Exception as e:
-            logger.error(f"{self.locale} - Failed to create final checkpoint: {e}")
+            logger.error(f"{self.locale} - Error in training completion: {e}")
