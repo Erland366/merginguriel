@@ -46,7 +46,8 @@ class IterativeTrainingConfig:
     output_dir: str = ""
 
     # Resource management
-    fp16: bool = True
+    fp16: bool = False
+    bf16: bool = True
     gradient_accumulation_steps: int = 1
     warmup_ratio: float = 0.1
     weight_decay: float = 0.01

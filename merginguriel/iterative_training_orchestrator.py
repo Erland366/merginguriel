@@ -66,6 +66,7 @@ class IterativeTrainingOrchestrator:
 
         # Training state
         self.trainers: Dict[str, Trainer] = {}
+        self.training_configs: Dict[str, IterativeTrainingConfig] = {}
         self.training_threads: Dict[str, threading.Thread] = {}
         self.training_futures: Dict[str, Future] = {}
         self.stop_event = threading.Event()
@@ -105,7 +106,7 @@ class IterativeTrainingOrchestrator:
         self.stop_event.set()
 
     def setup_trainers(self):
-        """Initialize all trainer instances for the configured locales."""
+        """Initialize trainer instances for the configured locales."""
         logger.info("Setting up trainers for all locales")
 
         for training_config in self.config.training_configs:
@@ -119,19 +120,40 @@ class IterativeTrainingOrchestrator:
                 # Create output directory
                 os.makedirs(training_config.output_dir, exist_ok=True)
 
-                # Initialize trainer
-                trainer = self._create_trainer(training_config)
-                self.trainers[locale] = trainer
-
-                # Initialize progress tracking
-                self.epoch_progress[locale] = 0
-                self.step_progress[locale] = 0
-
-                logger.info(f"Successfully set up trainer for {locale}")
+                # For sequential training, store configs and lazy-load trainers later
+                if self.config.sequential_training:
+                    # Store training config for lazy loading
+                    self.training_configs[locale] = training_config
+                    # Initialize progress tracking
+                    self.epoch_progress[locale] = 0
+                    self.step_progress[locale] = 0
+                    logger.info(f"Prepared config for {locale} (lazy loading)")
+                else:
+                    # Load trainer immediately for parallel training
+                    trainer = self._create_trainer(training_config)
+                    self.trainers[locale] = trainer
+                    # Initialize progress tracking
+                    self.epoch_progress[locale] = 0
+                    self.step_progress[locale] = 0
+                    logger.info(f"Successfully set up trainer for {locale}")
 
             except Exception as e:
                 logger.error(f"Failed to setup trainer for {locale}: {e}")
                 raise
+
+    def _lazy_load_trainer(self, locale: str) -> Trainer:
+        """Lazy load a trainer only when needed."""
+        if locale not in self.trainers:
+            if locale not in self.training_configs:
+                raise ValueError(f"No training config found for locale {locale}")
+
+            logger.info(f"Lazy loading trainer for {locale}")
+            training_config = self.training_configs[locale]
+            trainer = self._create_trainer(training_config)
+            self.trainers[locale] = trainer
+            logger.info(f"Successfully lazy loaded trainer for {locale}")
+
+        return self.trainers[locale]
 
     def _create_trainer(self, training_config: IterativeTrainingConfig) -> Trainer:
         """Create a trainer instance for the given configuration."""
@@ -302,7 +324,12 @@ class IterativeTrainingOrchestrator:
         """Run training models with proper epoch-by-epoch iterative merging."""
         logger.info("Running iterative training with epoch-level merging")
 
-        locales = list(self.trainers.keys())
+        # Use training_configs for sequential training (lazy loading)
+        if self.config.sequential_training:
+            locales = list(self.training_configs.keys())
+        else:
+            locales = list(self.trainers.keys())
+
         max_epochs = self.config.training_configs[0].max_epochs
         merge_frequency = self.config.merge_config.merge_frequency
 
@@ -376,37 +403,9 @@ class IterativeTrainingOrchestrator:
             trainer.save_model()
             trainer.save_state()
 
-            # Update state manager with final training state for merging
-            try:
-                # Get final training metrics
-                log_history = trainer.state.log_history
-                final_metrics = None
-                if log_history:
-                    final_log = log_history[-1]  # Get the last log entry
-                    final_metrics = TrainingMetrics(
-                        epoch=final_log.get('epoch', 0),
-                        step=trainer.state.global_step,
-                        train_loss=final_log.get('train_loss', 0.0),
-                        eval_loss=final_log.get('eval_loss'),
-                        eval_accuracy=final_log.get('eval_accuracy'),
-                        eval_f1=final_log.get('eval_f1'),
-                        learning_rate=final_log.get('learning_rate', 0.0)
-                    )
-
-                # Update the state manager with model weights and metrics
-                self.state_manager.update_state(
-                    locale=locale,
-                    epoch=trainer.state.epoch,
-                    step=trainer.state.global_step,
-                    model_state_dict=trainer.model.state_dict(),
-                    optimizer_state_dict=trainer.optimizer.state_dict(),
-                    metrics=final_metrics
-                )
-                logger.info(f"Updated training state for {locale}: epoch={trainer.state.epoch}, step={trainer.state.global_step}")
-
-            except Exception as state_error:
-                logger.warning(f"Failed to update training state for {locale}: {state_error}")
-                # Continue anyway - merge coordinator can use checkpoint fallback
+            # For iterative training, we don't store massive state dicts
+            # The merge coordinator reads model weights directly from checkpoints
+            logger.info(f"Final training completed for {locale}: epoch={trainer.state.epoch}, step={trainer.state.global_step}")
 
             # Clear GPU memory after training
             self._clear_gpu_memory()
@@ -426,10 +425,21 @@ class IterativeTrainingOrchestrator:
             # Clear GPU memory before training
             self._clear_gpu_memory()
 
-            trainer = self.trainers[locale]
+            # Lazy load trainer only when needed
+            trainer = self._lazy_load_trainer(locale)
 
-            # Set model to training device
+            # Set model to training device with memory optimization
             device = "cuda" if torch.cuda.is_available() else "cpu"
+
+            # Use gradient checkpointing to save memory
+            if hasattr(trainer.model, 'gradient_checkpointing_enable'):
+                trainer.model.gradient_checkpointing_enable()
+                logger.info(f"Enabled gradient checkpointing for {locale}")
+
+            # Use mixed precision if available to save memory
+            if hasattr(trainer.args, 'fp16') and trainer.args.fp16:
+                logger.info(f"Using FP16 mixed precision for {locale}")
+
             trainer.model.to(device)
             logger.info(f"Training {locale} on device: {device}")
 
@@ -456,37 +466,9 @@ class IterativeTrainingOrchestrator:
             trainer.save_model()
             trainer.save_state()
 
-            # Update state manager with training state for merging
-            try:
-                # Get latest training metrics
-                log_history = trainer.state.log_history
-                current_metrics = None
-                if log_history:
-                    # Find the log entry for the completed epoch (use the most recent)
-                    latest_log = log_history[-1]
-                    current_metrics = TrainingMetrics(
-                        epoch=latest_log.get('epoch', target_epoch),
-                        step=trainer.state.global_step,
-                        train_loss=latest_log.get('train_loss', 0.0),
-                        eval_loss=latest_log.get('eval_loss'),
-                        eval_accuracy=latest_log.get('eval_accuracy'),
-                        eval_f1=latest_log.get('eval_f1'),
-                        learning_rate=latest_log.get('learning_rate', 0.0)
-                    )
-
-                # Update the state manager with model weights and metrics
-                self.state_manager.update_state(
-                    locale=locale,
-                    epoch=trainer.state.epoch,
-                    step=trainer.state.global_step,
-                    model_state_dict=trainer.model.state_dict(),
-                    optimizer_state_dict=trainer.optimizer.state_dict(),
-                    metrics=current_metrics
-                )
-                logger.info(f"Updated training state for {locale}: epoch={trainer.state.epoch}, step={trainer.state.global_step}")
-
-            except Exception as state_error:
-                logger.warning(f"Failed to update training state for {locale}: {state_error}")
+            # For iterative training, we don't need to store massive state dicts
+            # The merge coordinator will use the current model directly
+            logger.info(f"Completed training for {locale}: epoch={trainer.state.epoch}, step={trainer.state.global_step}")
 
             # Update progress tracking
             self.epoch_progress[locale] = trainer.state.epoch
@@ -495,19 +477,71 @@ class IterativeTrainingOrchestrator:
             # Clear GPU memory after training
             self._clear_gpu_memory()
 
+            # For sequential training, unload the model to free memory
+            if self.config.sequential_training and locale in self.trainers:
+                logger.info(f"Unloading model for {locale} to free GPU memory")
+
+                # Move model to CPU first to ensure GPU memory is freed
+                if hasattr(trainer, 'model') and trainer.model is not None:
+                    trainer.model.cpu()
+
+                # Delete trainer and force garbage collection
+                del self.trainers[locale]
+                del trainer
+
+                # Force garbage collection and clear GPU cache multiple times
+                import gc
+                gc.collect()
+                self._clear_gpu_memory()
+
+                # Clear any cached states in state manager
+                if hasattr(self.state_manager, 'clear_model_cache'):
+                    self.state_manager.clear_model_cache(locale)
+                    logger.info(f"Cleared state manager cache for {locale}")
+
+                gc.collect()
+                self._clear_gpu_memory()
+                gc.collect()
+                self._clear_gpu_memory()
+
+                logger.info(f"Aggressively cleared GPU memory for {locale}")
+
             logger.info(f"Completed epoch {target_epoch} for {locale}")
 
         except Exception as e:
             logger.error(f"Training failed for {locale} epoch {target_epoch}: {e}")
             # Clear GPU memory on error
+            if self.config.sequential_training and locale in self.trainers:
+                trainer = self.trainers[locale]
+                if hasattr(trainer, 'model') and trainer.model is not None:
+                    trainer.model.cpu()
+                del self.trainers[locale]
+                del trainer
+
+                import gc
+                gc.collect()
+                self._clear_gpu_memory()
             self._clear_gpu_memory()
             raise
 
     def _clear_gpu_memory(self):
         """Clear GPU memory to prevent OOM errors."""
         if torch.cuda.is_available():
+            # Get current memory usage before clearing
+            if hasattr(torch.cuda, 'memory_allocated'):
+                allocated_before = torch.cuda.memory_allocated() / 1024**3  # GB
+                reserved_before = torch.cuda.memory_reserved() / 1024**3   # GB
+                logger.info(f"GPU memory before clearing: {allocated_before:.2f}GB allocated, {reserved_before:.2f}GB reserved")
+
             torch.cuda.empty_cache()
             torch.cuda.synchronize()
+
+            # Get memory usage after clearing
+            if hasattr(torch.cuda, 'memory_allocated'):
+                allocated_after = torch.cuda.memory_allocated() / 1024**3   # GB
+                reserved_after = torch.cuda.memory_reserved() / 1024**3    # GB
+                logger.info(f"GPU memory after clearing: {allocated_after:.2f}GB allocated, {reserved_after:.2f}GB reserved")
+
             logger.info("Cleared GPU cache")
 
     def _should_merge_after_model(self, locale: str, model_index: int, total_models: int) -> bool:
@@ -742,13 +776,8 @@ class IterativeTrainingOrchestrator:
         self.epoch_progress[locale] = epoch
         self.step_progress[locale] = step
 
-        # Update state manager
-        self.state_manager.update_state(
-            locale=locale,
-            epoch=epoch,
-            step=step,
-            metrics=metrics
-        )
+        # For iterative training, we don't need state manager updates
+        # Progress is tracked locally in epoch_progress/step_progress
 
         # Log progress
         if step % self.config.log_frequency == 0:

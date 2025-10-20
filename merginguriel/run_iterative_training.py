@@ -67,6 +67,7 @@ def create_training_configs_from_args(args) -> List[IterativeTrainingConfig]:
             eval_steps=args.eval_steps,
             early_stopping_patience=args.early_stopping_patience,
             fp16=args.fp16,
+            bf16=args.bf16,
             gradient_accumulation_steps=args.gradient_accumulation_steps,
             warmup_ratio=args.warmup_ratio,
             weight_decay=args.weight_decay
@@ -417,6 +418,11 @@ def main():
     )
     parser.add_argument(
         "--fp16",
+        action="store_true",
+        help="Use mixed precision training"
+    )
+    parser.add_argument(
+        "--bf16",
         action="store_true",
         help="Use mixed precision training"
     )

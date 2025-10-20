@@ -506,6 +506,8 @@ def main():
                        help="Number of epochs between merges")
     parser.add_argument("--fp16", action="store_true",
                        help="Use mixed precision training")
+    parser.add_argument("--bf16", action="store_true",
+                       help="Use mixed precision training")
     parser.add_argument("--enable-wandb", action="store_true",
                        help="Enable Weights & Biases logging")
     parser.add_argument("--output-dir", type=str, default="iterative_large_scale_results",

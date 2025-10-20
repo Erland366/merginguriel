@@ -99,6 +99,8 @@ def build_train_cmd(locale: str, args: argparse.Namespace) -> list[str]:
         '--logging_steps', '50',
         '--output_dir', str(out_dir),
     ]
+    if args.warmup_ratio > 0:
+        cmd += ['--warmup_ratio', str(args.warmup_ratio)]
     if args.fp16:
         cmd += ['--fp16']
     if args.bf16:
@@ -129,6 +131,7 @@ def main():
     p.add_argument('--bf16', action='store_true')
     p.add_argument('--torch-compile', dest='torch_compile', action='store_true')
     p.add_argument('--wandb', action='store_true')
+    p.add_argument('--warmup-ratio', type=float, default=0, help='Warmup ratio for learning rate scheduler')
     args = p.parse_args()
 
     missing = find_missing_locales(args.mapping_csv, args.locales, args.base_model)
