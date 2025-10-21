@@ -26,6 +26,7 @@ import json
 import warnings
 from datetime import datetime
 from typing import Dict, List, Tuple, Optional, Any
+import argparse
 
 warnings.filterwarnings('ignore')
 
@@ -41,10 +42,11 @@ class AdvancedResultsAnalyzer:
     enhanced_analysis.py and comprehensive_analysis.py
     """
 
-    def __init__(self, results_dir: str = "."):
+    def __init__(self, results_dir: str = ".", num_languages_filter: Optional[List[int]] = None):
         self.results_dir = Path(results_dir)
         self.merged_models_path = self.results_dir / "merged_models"
         self.ensemble_results_path = self.results_dir / "ensemble_results"
+        self.num_languages_filter = num_languages_filter
 
         # Data storage
         self.results_dfs = {}
@@ -236,6 +238,35 @@ class AdvancedResultsAnalyzer:
             return max(zero_shot_scores.values())
         return 0.0
 
+    def extract_num_languages_from_details(self, target_locale: str, merge_type: str) -> Optional[int]:
+        """Extract number of languages from merge_details.txt files"""
+        # Try to find merge_details.txt for this specific merge type and target locale
+        merge_patterns = [
+            f"merged_models/{merge_type}_merge_{target_locale}_*merged/merge_details.txt",
+            f"merged_models/{merge_type}_merge_{target_locale}/merge_details.txt",
+        ]
+
+        merge_details_file = None
+        for pattern in merge_patterns:
+            matches = glob.glob(pattern)
+            if matches:
+                merge_details_file = matches[0]
+                break
+
+        if not merge_details_file:
+            return None
+
+        try:
+            with open(merge_details_file, 'r') as f:
+                content = f.read()
+
+            # Count the number of models using the pattern
+            model_pattern = re.compile(r"^\s*\d+\.\s*Model:", re.MULTILINE)
+            matches = model_pattern.findall(content)
+            return len(matches) if matches else None
+        except Exception:
+            return None
+
     def extract_source_locales_from_details(self, target_locale: str) -> List[str]:
         """Extract source locales from merge_details.txt files for any merge type"""
         # Try to find merge_details.txt from any merge type for this target locale
@@ -315,6 +346,21 @@ class AdvancedResultsAnalyzer:
             source_locales = self.extract_source_locales_from_details(locale)
             zero_shot_scores = self.get_zero_shot_scores(locale, source_locales)
 
+            # Extract num_languages for filtering - check similarity as representative
+            num_languages = self.extract_num_languages_from_details(locale, 'similarity')
+            if num_languages is None:
+                # Fallback: try other methods
+                for method in ['average', 'fisher', 'ties']:
+                    num_languages = self.extract_num_languages_from_details(locale, method)
+                    if num_languages is not None:
+                        break
+
+            # Apply num_languages filter if specified
+            if self.num_languages_filter is not None:
+                if num_languages not in self.num_languages_filter:
+                    print(f"Skipping {locale} - has {num_languages} languages, not in filter {self.num_languages_filter}")
+                    continue
+
             if zero_shot_scores:
                 locale_data['avg_zero_shot'] = np.mean(list(zero_shot_scores.values()))
                 locale_data['best_zero_shot'] = max(zero_shot_scores.values())
@@ -326,6 +372,8 @@ class AdvancedResultsAnalyzer:
                 locale_data['best_source'] = 0
                 locale_data['source_locales'] = []
 
+            # Add num_languages info
+            locale_data['num_languages'] = num_languages
             results.append(locale_data)
 
         return results
@@ -934,6 +982,10 @@ class AdvancedResultsAnalyzer:
             self.generate_vs_best_zero_plots(summary_df, plots_dir, timestamp)
             self.generate_vs_best_source_plots(summary_df, plots_dir, timestamp)
 
+            # Generate num_languages separated plots if filtering is enabled
+            if self.num_languages_filter is not None or len(merging_results) > 0:
+                self.generate_num_languages_separated_plots(merging_results, plots_dir, timestamp)
+
         print(f"\nAdvanced analysis complete!")
         print(f"Generated files:")
         print(f"- advanced_analysis_summary_{timestamp}.csv")
@@ -945,10 +997,178 @@ class AdvancedResultsAnalyzer:
 
         return summary_df
 
+    def generate_num_languages_separated_plots(self, merging_results: List[Dict], plots_dir: Path, timestamp: str):
+        """Generate separate plots grouped by num_languages"""
+        print("Generating num_languages separated plots...")
+
+        # Group results by num_languages
+        grouped_results = {}
+        for result in merging_results:
+            num_lang = result.get('num_languages', 'unknown')
+            if num_lang not in grouped_results:
+                grouped_results[num_lang] = []
+            grouped_results[num_lang].append(result)
+
+        if len(grouped_results) <= 1:
+            print("Only one num_languages group found, skipping separate plots")
+            return
+
+        # Generate plots for each num_languages group
+        for num_lang, results in grouped_results.items():
+            print(f"Generating plots for {num_lang} languages ({len(results)} locales)...")
+
+            # Create a mini-summary for this group
+            locales = [r['target_locale'] for r in results]
+            methods = ['similarity', 'average', 'ties', 'task_arithmetic', 'slerp', 'regmean', 'fisher']
+
+            # Create DataFrame for this group
+            group_data = {'locale': locales}
+            for method in methods:
+                group_data[method] = [r.get(method, 0) for r in results]
+            if 'baseline' in results[0]:
+                group_data['baseline'] = [r.get('baseline', 0) for r in results]
+
+            group_df = pd.DataFrame(group_data)
+            group_df = group_df.set_index('locale')
+
+            # Generate pure scores plot for this group
+            self._generate_group_pure_scores_plot(group_df, num_lang, plots_dir, timestamp)
+
+            # Generate comparison plot if baseline available
+            if 'baseline' in group_df.columns:
+                self._generate_group_improvement_plot(group_df, num_lang, plots_dir, timestamp)
+
+        print(f"Generated plots for {len(grouped_results)} num_languages groups")
+
+    def _generate_group_pure_scores_plot(self, df: pd.DataFrame, num_lang: int, plots_dir: Path, timestamp: str):
+        """Generate pure scores plot for a specific num_languages group"""
+        available_methods = [col for col in df.columns if col not in ['locale', 'baseline'] and df[col].notna().any()]
+
+        if not available_methods:
+            return
+
+        fig, ax = plt.subplots(figsize=(14, 8))
+
+        locales = df.index.tolist()
+        x = np.arange(len(locales))
+        width = 0.1
+
+        colors = plt.cm.Set3(np.linspace(0, 1, len(available_methods)))
+
+        for i, method in enumerate(available_methods):
+            scores = [df.loc[locale, method] if method in df.columns and pd.notna(df.loc[locale, method]) else 0
+                     for locale in locales]
+
+            bars = ax.bar(x + i * width, scores, width, label=method.replace('_', ' ').title(),
+                         alpha=0.8, color=colors[i])
+
+        ax.set_xlabel('Target Languages')
+        ax.set_ylabel('Accuracy')
+        ax.set_title(f'Method Performance Comparison ({num_lang} Languages Used)')
+        ax.set_xticks(x + width * len(available_methods) / 2)
+        ax.set_xticklabels(locales, rotation=45, ha='right')
+        ax.legend()
+        ax.grid(True, alpha=0.3)
+        ax.set_ylim(0, 1)
+
+        plt.tight_layout()
+        filename = f'num_languages_{num_lang}_pure_scores_{timestamp}.png'
+        plt.savefig(plots_dir / filename, dpi=300, bbox_inches='tight')
+        plt.close()
+        print(f"  Saved: {filename}")
+
+    def _generate_group_improvement_plot(self, df: pd.DataFrame, num_lang: int, plots_dir: Path, timestamp: str):
+        """Generate improvement over baseline plot for a specific num_languages group"""
+        available_methods = [col for col in df.columns if col not in ['locale', 'baseline'] and df[col].notna().any()]
+
+        if not available_methods or 'baseline' not in df.columns:
+            return
+
+        fig, ax = plt.subplots(figsize=(14, 8))
+
+        locales = df.index.tolist()
+        x = np.arange(len(locales))
+        width = 0.1
+
+        colors = plt.cm.Set3(np.linspace(0, 1, len(available_methods)))
+
+        for i, method in enumerate(available_methods):
+            improvements = []
+            for locale in locales:
+                method_score = df.loc[locale, method] if method in df.columns and pd.notna(df.loc[locale, method]) else 0
+                baseline_score = df.loc[locale, 'baseline'] if 'baseline' in df.columns and pd.notna(df.loc[locale, 'baseline']) else 0
+                improvements.append(method_score - baseline_score)
+
+            bars = ax.bar(x + i * width, improvements, width, label=method.replace('_', ' ').title(),
+                         alpha=0.8, color=colors[i])
+
+            # Color bars: green for positive, red for negative
+            for bar in bars:
+                if bar.get_height() >= 0:
+                    bar.set_alpha(0.8)
+                else:
+                    bar.set_alpha(0.6)
+
+        ax.axhline(y=0, color='black', linestyle='-', alpha=0.7, linewidth=2)
+        ax.set_xlabel('Target Languages')
+        ax.set_ylabel('Improvement over Baseline')
+        ax.set_title(f'Improvement over Baseline ({num_lang} Languages Used)')
+        ax.set_xticks(x + width * len(available_methods) / 2)
+        ax.set_xticklabels(locales, rotation=45, ha='right')
+        ax.legend()
+        ax.grid(True, alpha=0.3)
+
+        plt.tight_layout()
+        filename = f'num_languages_{num_lang}_improvement_{timestamp}.png'
+        plt.savefig(plots_dir / filename, dpi=300, bbox_inches='tight')
+        plt.close()
+        print(f"  Saved: {filename}")
+
+
 def main():
-    """Main function to run the advanced analysis system"""
+    """Main function to run the advanced analysis system with num_languages support"""
+    parser = argparse.ArgumentParser(description='Enhanced Results Analysis with num_languages Support')
+    parser.add_argument('--num-languages', type=str,
+                       help='Filter by number of languages (comma-separated, e.g., "3,5")')
+    parser.add_argument('--list-num-languages', action='store_true',
+                       help='List available num_languages values in data')
+
+    args = parser.parse_args()
+
+    # Parse num_languages filter
+    num_languages_filter = None
+    if args.num_languages:
+        try:
+            num_languages_filter = [int(x.strip()) for x in args.num_languages.split(',')]
+            print(f"Filtering experiments with num_languages: {num_languages_filter}")
+        except ValueError:
+            print("Error: num_languages must be comma-separated integers")
+            return None
+
+    # If listing num_languages, create analyzer and show available values
+    if args.list_num_languages:
+        try:
+            analyzer = AdvancedResultsAnalyzer()
+            # Find available num_languages from merge details
+            available_num_langs = set()
+            for locale in analyzer.main_results_df['locale'].unique():
+                for method in ['similarity', 'average', 'fisher']:
+                    num_lang = analyzer.extract_num_languages_from_details(locale, method)
+                    if num_lang is not None:
+                        available_num_langs.add(num_lang)
+                        break
+
+            if available_num_langs:
+                print(f"Available num_languages in data: {sorted(list(available_num_langs))}")
+            else:
+                print("No num_languages information found in merge details")
+            return None
+        except Exception as e:
+            print(f"Error analyzing data: {e}")
+            return None
+
     try:
-        analyzer = AdvancedResultsAnalyzer()
+        analyzer = AdvancedResultsAnalyzer(num_languages_filter=num_languages_filter)
         summary_df = analyzer.generate_advanced_analysis()
         return summary_df
     except Exception as e:

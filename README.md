@@ -94,15 +94,38 @@ Additional locale examples (swap `--target-lang`):
 **Large-Scale Experiments**
 - Run sweeps across locales with an explicit list of modes using `merginguriel/run_large_scale_experiment.py`.
 - Discover available merge methods: `python merginguriel/run_large_scale_experiment.py --list-modes`
+- List all available locales: `python merginguriel/run_large_scale_experiment.py --list-locales`
+
+**Basic Usage:**
+- Run for all locales with default settings (5 languages per merge):
+  - `python merginguriel/run_large_scale_experiment.py`
+
+**3-Language Merging (Recommended for efficiency):**
+- To merge 3 languages per target language (more computationally efficient):
+  - `python merginguriel/run_large_scale_experiment.py --num-languages 3`
+- Specific modes with 3 languages:
+  - `python merginguriel/run_large_scale_experiment.py --num-languages 3 --modes baseline similarity average fisher`
+
+**Advanced Options:**
 - Run over selected locales and modes (baseline evaluates the base model):
   - `python merginguriel/run_large_scale_experiment.py --locales af-ZA sq-AL --modes baseline similarity average fisher_dataset --dataset-name AmazonScience/massive --dataset-split train --text-column utt --num-fisher-examples 1000 --fisher-data-mode target --preweight equal`
 
 Presets (for Fisher configs):
 - `--preset fairness`: sources-only Fisher + equal preweights (fair baseline)
   - `python merginguriel/run_large_scale_experiment.py --locales th-TH --modes fisher_dataset --preset fairness --num-languages 5`
+  - **3-language version**: `python merginguriel/run_large_scale_experiment.py --locales th-TH --modes fisher_dataset --preset fairness --num-languages 3`
 - `--preset target`: target-only Fisher + URIEL preweights (biased toward target)
   - `python merginguriel/run_large_scale_experiment.py --locales th-TH --modes fisher_dataset --preset target --num-languages 5`
+  - **3-language version**: `python merginguriel/run_large_scale_experiment.py --locales th-TH --modes fisher_dataset --preset target --num-languages 3`
 - Explicit flags (e.g., `--preweight`, `--fisher-data-mode`) override presets.
+
+**Additional 3-Language Examples:**
+- Test with limited locales first:
+  - `python merginguriel/run_large_scale_experiment.py --num-languages 3 --max-locales 5`
+- Resume from specific locale if interrupted:
+  - `python merginguriel/run_large_scale_experiment.py --num-languages 3 --start-from 25`
+- Using sparse similarities:
+  - `python merginguriel/run_large_scale_experiment.py --num-languages 3 --similarity-source sparse`
 
 **How `fisher_dataset` Works**
 - `merginguriel/run_merging_pipeline_refactored.py --mode fisher_dataset`
