@@ -204,12 +204,17 @@ class MergeCoordinator:
 
         for locale in locales:
             state = self.state_manager.get_state(locale)
-            if state and state.model_state_dict:
-                # Validate state integrity
-                if state.validate_integrity():
+            if state and (state.model_state_dict or state.checkpoint_path):
+                # For disk-based state management, checkpoint_path is sufficient
+                if state.checkpoint_path and os.path.exists(state.checkpoint_path):
+                    logger.info(f"Found valid state for {locale} with checkpoint path: {state.checkpoint_path}")
+                    model_states[locale] = state
+                elif state.model_state_dict:
+                    # Legacy in-memory state (should not happen with new approach)
+                    logger.info(f"Found valid in-memory state for {locale}")
                     model_states[locale] = state
                 else:
-                    logger.warning(f"Skipping {locale} due to state integrity check failure")
+                    logger.warning(f"State exists for {locale} but no valid model found")
             else:
                 logger.warning(f"No valid state found for locale: {locale}")
 
@@ -322,22 +327,22 @@ class MergeCoordinator:
         actual_models_and_weights = {}
 
         for locale, state in model_states.items():
-            # Use haryos_model path structure like in run_merging_pipeline_refactored.py (line 148)
-            model_path = f"/home/coder/Python_project/MergingUriel/haryos_model/xlm-roberta-base_massive_k_{locale}"
+            # Priority 1: Use checkpoint path from state (for iterative training)
+            if state.checkpoint_path and os.path.exists(state.checkpoint_path):
+                model_path = state.checkpoint_path
+                logger.info(f"  ✓ Using checkpoint path from state: {model_path}")
+            else:
+                # Priority 2: Use haryos_model path structure (for pre-trained models)
+                model_path = f"/home/coder/Python_project/MergingUriel/haryos_model/xlm-roberta-base_massive_k_{locale}"
 
-            # Check if model exists locally
-            if not os.path.exists(model_path):
-                logger.warning(f"  ✗ Model path not found: {model_path}")
-                # Fallback to checkpoint path if available
-                if state.checkpoint_path and os.path.exists(state.checkpoint_path):
-                    model_path = state.checkpoint_path
-                    logger.info(f"  ✓ Using checkpoint path: {model_path}")
-                else:
+                # Check if model exists locally
+                if not os.path.exists(model_path):
+                    logger.warning(f"  ✗ Model path not found: {model_path}")
                     logger.warning(f"  ✗ No valid model found for {locale}")
                     continue
-            else:
-                logger.info(f"  ✓ Found model: {model_path}")
-
+                else:
+                    logger.info(f"  ✓ Using haryos_model path: {model_path}")
+            
             # Use similarity weight if available, otherwise equal weight
             if similarity_weights and locale in similarity_weights:
                 weight = similarity_weights[locale]

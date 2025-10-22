@@ -19,7 +19,8 @@ import json
 import argparse
 from datetime import datetime
 from pathlib import Path
-from typing import List, Dict
+from typing import List, Dict, Optional
+import re
 
 # Ensure project root on sys.path for method discovery
 # When this script is inside merginguriel/, repo root is one level up
@@ -71,21 +72,68 @@ def run_merge(mode: str, target_lang: str, extra_args: List[str]) -> bool:
         print(f"✗ {mode} merge failed for {target_lang}: {e}")
         return False
 
+
+def detect_num_languages_from_model_path(model_path: Optional[str]) -> Optional[int]:
+    """Infer how many source languages were merged for a model directory."""
+    if not model_path:
+        return None
+
+    normalized_path = model_path.rstrip("/\\")
+    base_name = os.path.basename(normalized_path)
+
+    match = re.search(r'_(\d+)merged$', base_name)
+    if match:
+        try:
+            return int(match.group(1))
+        except ValueError:
+            print(f"Warning: could not parse merged count from {base_name}")
+
+    merge_details_path = os.path.join(normalized_path, "merge_details.txt")
+    if os.path.exists(merge_details_path):
+        try:
+            with open(merge_details_path, "r", encoding="utf-8") as f:
+                content = f.read()
+            matches = re.findall(r'^\s*\d+\.\s*Model:', content, re.MULTILINE)
+            if matches:
+                return len(matches)
+        except Exception as exc:
+            print(f"Warning: unable to count languages in {merge_details_path}: {exc}")
+
+    if "merged_models" in normalized_path:
+        # Legacy merges default to 4 merged sources when unspecified.
+        return 4
+
+    return None
+
+
 def run_evaluation(model_path, locale, prefix):
     """Run evaluation for a specific model using the consolidated model path."""
     print(f"Running evaluation for {model_path} with locale {locale}...")
 
+    # Extract num_languages from the model path (e.g., similarity_merge_az-AZ_5merged -> 5)
+    num_languages = detect_num_languages_from_model_path(model_path)
+    if num_languages is not None:
+        print(f"Detected {num_languages} merged languages for {model_path}")
+
+    # Create enhanced prefix with num_languages
+    if num_languages is not None:
+        enhanced_prefix = f"{prefix}_{num_languages}lang"
+    else:
+        enhanced_prefix = prefix
+
+    print(f"Using enhanced prefix: {enhanced_prefix}")
+
     cmd = [sys.executable, os.path.join(REPO_ROOT, "merginguriel", "evaluate_specific_model.py"),
            "--base-model", model_path,
            "--locale", locale,
-           "--prefix", prefix]
+           "--prefix", enhanced_prefix]
 
     try:
         result = subprocess.run(cmd, check=True, capture_output=True, text=True)
-        print(f"✓ Evaluation completed for {locale} ({prefix})")
+        print(f"✓ Evaluation completed for {locale} ({enhanced_prefix})")
         return True
     except subprocess.CalledProcessError as e:
-        print(f"✗ Evaluation failed for {locale} ({prefix}): {e}")
+        print(f"✗ Evaluation failed for {locale} ({enhanced_prefix}): {e}")
         return False
 
 def run_experiment_for_locale(

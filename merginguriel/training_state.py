@@ -89,6 +89,12 @@ class ModelState:
 
     def validate_integrity(self) -> bool:
         """Validate the integrity of the model state."""
+        # For disk-based states, check if checkpoint path exists
+        if self.checkpoint_path:
+            if not os.path.exists(self.checkpoint_path):
+                logger.warning(f"Checkpoint path does not exist: {self.checkpoint_path}")
+                return False
+
         if not self.checksum:
             return True  # No checksum to validate against
 
@@ -337,7 +343,8 @@ class TrainingStateManager:
         model_state_dict: Optional[Dict[str, torch.Tensor]] = None,
         optimizer_state_dict: Optional[Dict[str, Any]] = None,
         scheduler_state_dict: Optional[Dict[str, Any]] = None,
-        metrics: Optional[TrainingMetrics] = None
+        metrics: Optional[TrainingMetrics] = None,
+        checkpoint_path: Optional[str] = None
     ):
         """Update the training state for a model."""
         if locale not in self.states:
@@ -347,6 +354,10 @@ class TrainingStateManager:
         state.epoch = epoch
         state.step = step
         state.current_metrics = metrics
+
+        # Update checkpoint path if provided (for disk-based state management)
+        if checkpoint_path:
+            state.checkpoint_path = checkpoint_path
 
         if model_state_dict:
             state.model_state_dict = model_state_dict

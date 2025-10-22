@@ -22,6 +22,7 @@ def create_results_folder(base_model: str = None, locale: str = None, prefix: st
     results_dir = "results"
     os.makedirs(results_dir, exist_ok=True)
     if prefix:
+        # The prefix already includes num_languages (e.g., similarity_3lang)
         folder_name = f"{prefix}_{locale}"
     elif base_model:
         base_name = base_model.split('/')[-1] if '/' in base_model else base_model

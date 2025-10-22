@@ -978,4 +978,131 @@ results/
 3. **Generate Plots**: `python plot_results.py` uses aggregated CSV for visualization
 4. **Present Results**: Use plots and reports for analysis and presentations
 
+---
+
+## 🌍 Multi-Language Training
+
+For simpler multi-language model training without complex merging, use the `run_multilang_training.py` script. This provides three main approaches:
+
+### 🚀 Quick Start
+
+```bash
+# Train on all languages except English (LOLO mode)
+uv run merginguriel/run_multilang_training.py --exclude en-US
+
+# Train on all 49 languages at once (Super Model)
+uv run merginguriel/run_multilang_training.py --super-model
+
+# Run LOLO training for all 49 languages (Batch Mode)
+uv run merginguriel/run_multilang_training.py --all-lolo
+```
+
+### 📋 Training Modes
+
+#### 1. LOLO (Leave One Language Out)
+Train on all languages except one. Useful for:
+- Understanding language contribution
+- Creating language-specific models
+- Testing cross-lingual transfer
+
+```bash
+uv run merginguriel/run_multilang_training.py --exclude fr-FR
+uv run merginguriel/run_multilang_training.py --exclude sq-AL
+```
+
+#### 2. Super Model
+Train on all 49 languages simultaneously for maximum multilingual capability:
+
+```bash
+uv run merginguriel/run_multilang_training.py --super-model
+```
+
+#### 3. All LOLO (Batch Mode)
+Run LOLO training for all 49 languages in sequence. This creates 49 separate models, each trained on all languages except one:
+
+```bash
+uv run merginguriel/run_multilang_training.py --all-lolo
+```
+
+**Features:**
+- **Batch Processing**: Automatically runs LOLO training for all 49 languages
+- **Progress Tracking**: Shows progress bar and detailed logging for each run
+- **Error Resilience**: Continues with remaining languages even if some runs fail
+- **Summary Report**: Displays success/failure statistics upon completion
+
+**Output Models Created:**
+- `xlm-roberta-base_massive_LOLO_without_af_ZA`
+- `xlm-roberta-base_massive_LOLO_without_am_ET`
+- `xlm-roberta-base_massive_LOLO_without_ar_SA`
+- ... (49 total models, one for each language)
+
+### ⚙️ Configuration Options
+
+```bash
+# Custom output directory
+uv run merginguriel/run_multilang_training.py --exclude de-DE --output_dir my_model
+
+# Custom training parameters
+uv run merginguriel/run_multilang_training.py --super-model \
+  --additional-args --learning_rate 1e-4 --batch_size 32 --num_train_epochs 10
+```
+
+### 📊 Supported Languages
+
+All 49 MASSIVE languages:
+```
+af-ZA, am-ET, ar-SA, az-AZ, bn-BD, ca-ES, cy-GB, da-DK, de-DE, el-GR,
+en-US, es-ES, fa-IR, fi-FI, fr-FR, hi-IN, hu-HU, hy-AM, id-ID, is-IS,
+it-IT, ja-JP, jv-ID, ka-GE, km-KH, kn-IN, ko-KR, lv-LV, ml-IN, mn-MN,
+ms-MY, my-MM, nb-NO, nl-NL, pl-PL, pt-PT, ro-RO, ru-RU, sl-SL, sq-AL,
+sw-KE, ta-IN, te-IN, th-TH, tl-PH, tr-TR, ur-PK, vi-VN, zh-TW
+```
+
+### 🎯 Output Naming
+
+Models are saved in the `haryos_model/` directory following this naming convention:
+
+- **LOLO Mode**: `haryos_model/xlm-roberta-base_massive_LOLO_without_{language}` (e.g., `xlm-roberta-base_massive_LOLO_without_en_US`)
+- **Super Model**: `haryos_model/xlm-roberta-base_massive_LOLO_all_languages`
+- **All LOLO Mode**: Creates 49 models with naming `haryos_model/xlm-roberta-base_massive_LOLO_without_{language}` for each language
+- **Custom**: Whatever you specify with `--output-dir` (still placed in `haryos_model/`)
+
+### 🔧 Default Settings
+
+- **Model**: `xlm-roberta-base`
+- **Epochs**: 15
+- **Training**: `--do_train --do_eval --do_predict`
+- **Other parameters**: Use defaults from `training_bert.py`
+
+### 💡 When to Use Multi-Language Training
+
+**Multi-Language Training** is ideal when you want:
+- **Simplicity**: Single training run vs complex iterative merging
+- **Speed**: No sequential training and merging cycles
+- **Cross-lingual Transfer**: Languages learn from each other during training
+- **Memory Efficiency**: Only one model in memory
+- **Batch Experiments**: `--all-lolo` for comprehensive LOLO experiments across all languages
+
+**Iterative Training** is better when you need:
+- **Sophisticated Merging**: Advanced merging strategies and weight calculations
+- **Research Experiments**: Comparing different merging approaches
+- **Incremental Training**: Building models step-by-step with intermediate checkpoints
+
+### 🏆 Example Workflow
+
+```bash
+# 1. Train a super model on all languages
+uv run merginguriel/run_multilang_training.py --super-model
+
+# 2. Run comprehensive LOLO experiments (creates 49 models)
+uv run merginguriel/run_multilang_training.py --all-lolo
+
+# 3. Compare with specific LOLO models
+uv run merginguriel/run_multilang_training.py --exclude en-US
+uv run merginguriel/run_multilang_training.py --exclude fr-FR
+uv run merginguriel/run_multilang_training.py --exclude sq-AL
+
+# 4. Choose the best approach for your use case
+```
+
 The aggregation system transforms hundreds of individual experiment results into a unified, analyzable dataset perfect for research presentations! 📊

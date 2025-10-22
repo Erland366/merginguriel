@@ -43,6 +43,61 @@ class BaselineData:
     best_overall_accuracy: Optional[float] = None
     best_overall_language: Optional[str] = None
 
+
+def is_merge_model_path(model_path: Optional[str]) -> bool:
+    """Return True if the given model path corresponds to a merged model."""
+    return bool(model_path and "merged_models" in model_path)
+
+
+def parse_num_languages_from_model_path(model_path: Optional[str]) -> Optional[int]:
+    """Extract the merged language count from a merged model path if encoded."""
+    if not model_path:
+        return None
+
+    base_name = os.path.basename(os.path.normpath(model_path))
+    match = re.search(r'_(\d+)merged$', base_name)
+    if match:
+        try:
+            return int(match.group(1))
+        except ValueError:
+            logger.debug(f"Failed to parse num_languages from {base_name}")
+    return None
+
+
+def count_languages_in_merge_details(model_path: Optional[str]) -> Optional[int]:
+    """Count languages listed in merge_details.txt for a merged model."""
+    if not model_path:
+        return None
+
+    merge_details_path = os.path.join(model_path, "merge_details.txt")
+    if not os.path.exists(merge_details_path):
+        return None
+
+    try:
+        with open(merge_details_path, 'r') as f:
+            content = f.read()
+        matches = re.findall(r'^\s*\d+\.\s*Model:', content, re.MULTILINE)
+        if matches:
+            return len(matches)
+    except Exception as e:
+        logger.warning(f"Error counting languages in {merge_details_path}: {e}")
+    return None
+
+
+def determine_experiment_variant(experiment_type: str,
+                                 num_languages: Optional[int],
+                                 model_path: Optional[str]) -> str:
+    """Build a display key that differentiates merges by language count."""
+    base_type = experiment_type or "unknown"
+
+    if not is_merge_model_path(model_path):
+        return base_type
+
+    if num_languages:
+        return f"{base_type}_{int(num_languages)}lang"
+
+    return f"{base_type}_unknownlang"
+
 def load_results_from_folder(folder_path):
     """Load results.json from a folder."""
     results_file = os.path.join(folder_path, "results.json")
@@ -87,140 +142,108 @@ def extract_locale_from_model_path(model_path: str) -> Optional[str]:
     return None
 
 
-def parse_experiment_metadata(folder_name: str, folder_path: str) -> ExperimentMetadata:
-    """Parse experiment metadata from folder name and merge_details.txt if available."""
+def parse_experiment_metadata(folder_name: str,
+                              folder_path: str,
+                              model_path: Optional[str] = None) -> ExperimentMetadata:
+    """Parse experiment metadata using merge_details if present, otherwise use heuristics."""
 
-    # First, try to parse from merge_details.txt
-    merge_details_path = os.path.join(folder_path, "merge_details.txt")
-    merge_details = parse_merge_details(merge_details_path)
+    # Prefer merge_details that live alongside the actual merged model directory
+    merge_details_path = None
+    if model_path and os.path.isdir(model_path):
+        merge_details_path = os.path.join(model_path, "merge_details.txt")
+    else:
+        merge_details_path = os.path.join(folder_path, "merge_details.txt")
 
-    if merge_details:
-        # Extract metadata from merge_details.txt
+    merge_details = None
+    details_content = None
+    if merge_details_path and os.path.exists(merge_details_path):
+        merge_details = parse_merge_details(merge_details_path)
+        try:
+            with open(merge_details_path, 'r') as f:
+                details_content = f.read()
+        except Exception as e:
+            logger.warning(f"Unable to read merge details content from {merge_details_path}: {e}")
+            details_content = None
+
+    if merge_details and details_content:
         experiment_type = merge_details.get('Merge Mode', 'unknown').lower()
-        target_lang = merge_details.get('Target Language', '')
+        target_lang = merge_details.get('Target Language', '') or merge_details.get('Locale', '')
 
-        # Extract source languages and weights from the models section
-        source_languages = []
-        weights = {}
+        # Extract source locales and weights
+        locale_pattern = re.compile(r'^\s*- Locale:\s*([a-zA-Z]{2}-[a-zA-Z]{2})', re.MULTILINE)
+        weight_pattern = re.compile(
+            r'^\s*- Locale:\s*([a-zA-Z]{2}-[a-zA-Z]{2}).*?Weight:\s*([0-9.]+)',
+            re.MULTILINE | re.DOTALL
+        )
 
-        # Find the "--- Merged Models and Weights ---" section
-        content = open(merge_details_path, 'r').read()
-        models_section = re.split(r'--- Merged Models and Weights ---', content, flags=re.MULTILINE)
-        if len(models_section) > 1:
-            models_content = models_section[1]
-
-            # Parse each model entry
-            model_pattern = r'\d+\.\s*Model:\s*(.+)\s*-?\s*(?:Subfolder:\s*(.+)\s*)?-?\s*(?:Language:\s*(.+)\s*)?-?\s*(?:Locale:\s*(.+)\s*)?-?\s*Weight:\s*([\d.]+)\s*\(([\d.]+)%\s*of total\)'
-            matches = re.findall(model_pattern, models_content, re.MULTILINE)
-
-            for model_path, subfolder, language, locale, weight, weight_percent in matches:
-                if locale:
-                    source_languages.append(locale)
-                    weights[locale] = float(weight)
-                else:
-                    # Try to extract locale from model path
-                    extracted_locale = extract_locale_from_model_path(model_path)
-                    if extracted_locale:
-                        source_languages.append(extracted_locale)
-                        weights[extracted_locale] = float(weight)
+        source_languages = locale_pattern.findall(details_content)
+        weights = {locale: float(weight) for locale, weight in weight_pattern.findall(details_content)}
+        num_languages = len(source_languages) if source_languages else None
 
         return ExperimentMetadata(
             experiment_type=experiment_type,
             locale=target_lang,
             target_lang=target_lang,
-            source_languages=source_languages,
-            weights=weights,
+            source_languages=source_languages or None,
+            weights=weights or None,
             merge_mode=experiment_type,
-            num_languages=len(source_languages) if source_languages else None,
+            num_languages=num_languages,
             timestamp=merge_details.get('Timestamp (UTC)', ''),
             folder_name=folder_name
         )
 
-    # Fallback: parse from folder name
-    parts = folder_name.split('_')
+    # Fallback heuristics using model path or folder name
+    experiment_type = 'baseline' if model_path and not is_merge_model_path(model_path) else 'unknown'
+    locale = None
+    num_languages = None
 
-    # Handle different patterns:
-    # 1. "baseline_sq-AL" -> type="baseline", locale="sq-AL"
-    # 2. "similarity_sq-AL" -> type="similarity", locale="sq-AL"
-    # 3. "average_sq-AL" -> type="average", locale="sq-AL"
-    # 4. "xlm-roberta-base_massive_k_sq-AL_alpha_0.5_sq-AL_epoch-9_sq-AL" -> type="baseline", locale="sq-AL"
+    if model_path:
+        base_name = os.path.basename(os.path.normpath(model_path))
+        merge_match = re.match(r'([a-zA-Z0-9]+)_merge_([a-z]{2}-[A-Z]{2})(?:_(\d+)merged)?', base_name)
+        if merge_match:
+            experiment_type = merge_match.group(1)
+            locale = merge_match.group(2)
+            if merge_match.group(3):
+                try:
+                    num_languages = int(merge_match.group(3))
+                except ValueError:
+                    num_languages = None
+        else:
+            extracted_locale = extract_locale_from_model_path(model_path)
+            if extracted_locale:
+                locale = extracted_locale
 
-    # Check for two-part experiment types like task_arithmetic
-    if len(parts) >= 3 and f"{parts[0]}_{parts[1]}" in ['task_arithmetic']:
-        # Handle three-part experiment types: task_arithmetic_merge_af-ZA -> type="task_arithmetic", locale="af-ZA"
-        exp_type = f"{parts[0]}_{parts[1]}"
-        locale = parts[-1]  # Last part should be the locale
-    elif len(parts) >= 2 and f"{parts[0]}_{parts[1]}" in ['task_arithmetic']:
-        # Handle two-part experiment types: task_arithmetic_af-ZA -> type="task_arithmetic", locale="af-ZA"
-        exp_type = f"{parts[0]}_{parts[1]}"
-        locale = parts[-1]  # Last part should be the locale
-    elif parts[0] in ['baseline', 'similarity', 'average', 'fisher', 'ties', 'slerp', 'regmean']:
-        # Simple case: prefix_locale
-        exp_type = parts[0]
-        locale = '_'.join(parts[1:])
-    elif parts[0] == 'iterative':
-        # Handle iterative training folder: iterative_{mode}_{locale}
-        # Need to handle mode names with underscores (like fisher_dataset)
-        if len(parts) >= 3:
-            # Try to identify the locale (last part should be locale like sq-AL, en-US, etc.)
-            if len(parts[-1]) == 5 and '-' in parts[-1]:  # xx-YY format
+    if not locale:
+        # Handle naming like method_5lang_locale or method_locale
+        num_lang_match = re.match(r'(.+?)_(\d+)lang_(.+)', folder_name)
+        if num_lang_match:
+            experiment_type = num_lang_match.group(1)
+            try:
+                num_languages = int(num_lang_match.group(2))
+            except ValueError:
+                num_languages = None
+            locale = num_lang_match.group(3)
+        elif '_' in folder_name:
+            parts = folder_name.split('_')
+            if len(parts[-1]) == 5 and '-' in parts[-1]:
                 locale = parts[-1]
-                mode = '_'.join(parts[1:-1])
-                exp_type = f"iterative_{mode}"
+                experiment_type = '_'.join(parts[:-1]) if len(parts) > 1 else folder_name
             else:
-                # Fallback: assume locale is last 2 parts
-                locale = '_'.join(parts[-2:])
-                mode = '_'.join(parts[1:-2])
-                exp_type = f"iterative_{mode}"
-        else:
-            exp_type = 'iterative_unknown'
-            locale = '_'.join(parts[1:]) if len(parts) > 1 else 'unknown'
-    elif parts[0] == 'ensemble':
-        # Handle ensemble folder: ensemble_{voting_method}_{locale}
-        # Need to handle voting methods with underscores (like uriel_logits)
-        if len(parts) >= 3:
-            # Try to identify the locale (last part should be locale like sq-AL, en-US, etc.)
-            if len(parts[-1]) == 5 and '-' in parts[-1]:  # xx-YY format
+                # Fallback to last token as locale even if it does not exactly match xx-YY
                 locale = parts[-1]
-                voting_method = '_'.join(parts[1:-1])
-                exp_type = f"ensemble_{voting_method}"
-            else:
-                # Fallback: assume locale is last 2 parts
-                locale = '_'.join(parts[-2:])
-                voting_method = '_'.join(parts[1:-2])
-                exp_type = f"ensemble_{voting_method}"
+                experiment_type = '_'.join(parts[:-1]) if len(parts) > 1 else folder_name
         else:
-            exp_type = 'ensemble_unknown'
-            locale = '_'.join(parts[1:]) if len(parts) > 1 else 'unknown'
-    elif 'massive_k_' in folder_name:
-        # Complex case: baseline with full model name
-        exp_type = 'baseline'
-        # Find the locale part (usually the last part before the final underscore)
-        if len(parts) >= 2:
-            locale = parts[-1]  # Last part is usually the locale
-        else:
-            locale = 'unknown'
-    elif folder_name.startswith('test_'):
-        # Handle test folders: test_enUS_verification_en-US -> type='test', locale='en-US'
-        exp_type = 'test'
-        # For test folders, locale is usually the last part
-        if len(parts) >= 2:
-            locale = parts[-1]  # e.g., test_enUS_verification_en-US -> en-US
-        else:
-            locale = 'unknown'
-    else:
-        # Fallback - try to extract experiment type from other patterns
-        exp_type = 'unknown'
-        locale = folder_name
+            locale = folder_name
+            experiment_type = folder_name
 
     return ExperimentMetadata(
-        experiment_type=exp_type,
+        experiment_type=experiment_type,
         locale=locale,
         target_lang=locale,
         source_languages=None,
         weights=None,
-        merge_mode=exp_type,
-        num_languages=None,
+        merge_mode=experiment_type,
+        num_languages=num_languages,
         timestamp=None,
         folder_name=folder_name
     )
@@ -325,41 +348,61 @@ def aggregate_results(evaluation_matrix: Optional[pd.DataFrame] = None):
         results = load_results_from_folder(folder_path)
 
         if results:
+            eval_info = results.get('evaluation_info', {})
+            perf_info = results.get('performance', {})
+            model_name = eval_info.get('model_name')
+
             # Use new dynamic metadata parsing
-            metadata = parse_experiment_metadata(folder, folder_path)
+            metadata = parse_experiment_metadata(folder, folder_path, model_name)
             accuracy = extract_accuracy(results)
 
-            # Extract additional info
-            model_info = results.get('evaluation_info', {})
-            perf_info = results.get('performance', {})
+            locale = eval_info.get('locale') or metadata.locale
+            target_lang = metadata.target_lang or locale
+
+            num_languages = metadata.num_languages
+            if num_languages is None and is_merge_model_path(model_name):
+                num_languages = parse_num_languages_from_model_path(model_name)
+            if num_languages is None and is_merge_model_path(model_name):
+                counted = count_languages_in_merge_details(model_name)
+                num_languages = counted if counted is not None else None
+            if num_languages is None and is_merge_model_path(model_name):
+                # Default legacy merges without explicit counts to 4
+                num_languages = 4
+
+            experiment_variant = determine_experiment_variant(
+                metadata.experiment_type,
+                num_languages,
+                model_name
+            )
 
             # Calculate baseline data if evaluation matrix is available
             baseline_data = None
             if evaluation_matrix is not None and metadata.source_languages:
                 baseline_data = get_baseline_for_target(
-                    metadata.locale,
+                    locale,
                     metadata.source_languages,
                     evaluation_matrix
                 )
 
             # Build the data row
             data_row = {
-                'locale': metadata.locale,
+                'locale': locale,
                 'experiment_type': metadata.experiment_type,
+                'experiment_variant': experiment_variant,
                 'folder_name': folder,
                 'accuracy': accuracy,
                 'correct_predictions': perf_info.get('correct_predictions'),
                 'total_predictions': perf_info.get('total_predictions'),
                 'error_rate': perf_info.get('error_rate'),
-                'model_name': model_info.get('model_name'),
-                'subfolder': model_info.get('subfolder'),
-                'timestamp': model_info.get('timestamp'),
+                'model_name': model_name,
+                'subfolder': eval_info.get('subfolder'),
+                'timestamp': eval_info.get('timestamp'),
                 # New metadata fields
-                'target_lang': metadata.target_lang,
+                'target_lang': target_lang,
                 'source_languages': metadata.source_languages,
                 'weights': metadata.weights,
                 'merge_mode': metadata.merge_mode,
-                'num_languages': metadata.num_languages,
+                'num_languages': num_languages,
                 'merge_timestamp': metadata.timestamp
             }
 
@@ -378,13 +421,15 @@ def aggregate_results(evaluation_matrix: Optional[pd.DataFrame] = None):
 
 def create_comparison_table(df):
     """Create a dynamic comparison table with all experiment types and baseline data."""
-    # Get unique experiment types dynamically
-    experiment_types = sorted(df['experiment_type'].unique())
+    column_field = 'experiment_variant' if 'experiment_variant' in df.columns else 'experiment_type'
+
+    # Get unique experiment variants dynamically
+    experiment_types = sorted(df[column_field].dropna().unique())
 
     # Pivot the data to have one row per locale
     pivot_df = df.pivot_table(
         index='locale',
-        columns='experiment_type',
+        columns=column_field,
         values='accuracy',
         aggfunc='first'
     ).reset_index()
@@ -453,23 +498,22 @@ def generate_summary_stats(df):
     """Generate dynamic summary statistics for all experiment types."""
     summary = {}
 
-    # Get unique experiment types dynamically
-    experiment_types = sorted(df['experiment_type'].unique())
+    column_field = 'experiment_variant' if 'experiment_variant' in df.columns else 'experiment_type'
+    experiment_types = sorted(df[column_field].dropna().unique())
 
     # Overall statistics by experiment type
     for exp_type in experiment_types:
-        if exp_type in df['experiment_type'].values:
-            type_df = df[df['experiment_type'] == exp_type]
-            valid_acc = type_df[type_df['accuracy'].notna()]
+        type_df = df[df[column_field] == exp_type]
+        valid_acc = type_df[type_df['accuracy'].notna()]
 
-            if len(valid_acc) > 0:
-                summary[exp_type] = {
-                    'count': len(valid_acc),
-                    'mean_accuracy': valid_acc['accuracy'].mean(),
-                    'std_accuracy': valid_acc['accuracy'].std(),
-                    'min_accuracy': valid_acc['accuracy'].min(),
-                    'max_accuracy': valid_acc['accuracy'].max()
-                }
+        if len(valid_acc) > 0:
+            summary[exp_type] = {
+                'count': len(valid_acc),
+                'mean_accuracy': valid_acc['accuracy'].mean(),
+                'std_accuracy': valid_acc['accuracy'].std(),
+                'min_accuracy': valid_acc['accuracy'].min(),
+                'max_accuracy': valid_acc['accuracy'].max()
+            }
 
     # Add baseline statistics if available
     baseline_types = ['best_source_accuracy', 'best_overall_accuracy']
@@ -813,7 +857,10 @@ def main():
 
     if args.experiment_types:
         original_count = len(df)
-        df = df[df['experiment_type'].isin(args.experiment_types)]
+        mask = df['experiment_type'].isin(args.experiment_types)
+        if 'experiment_variant' in df.columns:
+            mask = mask | df['experiment_variant'].isin(args.experiment_types)
+        df = df[mask]
         logger.info(f"Filtered to {len(df)} results for experiment types: {args.experiment_types}")
 
     logger.info(f"Processing {len(df)} experiment results")
@@ -833,7 +880,10 @@ def main():
     # Show missing experiments
     if args.show_missing:
         logger.info("Missing/failed experiments analysis:")
-        experiment_types = sorted(df['experiment_type'].unique())
+        if 'experiment_variant' in df.columns:
+            experiment_types = sorted(df['experiment_variant'].dropna().unique())
+        else:
+            experiment_types = sorted(df['experiment_type'].unique())
         for exp_type in experiment_types:
             if exp_type in comparison_df.columns:
                 missing = comparison_df[comparison_df[exp_type].isna()]

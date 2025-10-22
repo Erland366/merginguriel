@@ -80,6 +80,10 @@ class IterativeTrainingOrchestrator:
         self.epoch_progress: Dict[str, int] = {}
         self.step_progress: Dict[str, int] = {}
 
+        # Track pending merged checkpoints that should initialize next epoch
+        self.pending_merged_checkpoints: Dict[str, str] = {}
+        self.pending_resume_reset: Dict[str, bool] = {}
+
         # Register signal handlers for graceful shutdown
         signal.signal(signal.SIGINT, self._signal_handler)
         signal.signal(signal.SIGTERM, self._signal_handler)
@@ -150,6 +154,26 @@ class IterativeTrainingOrchestrator:
             logger.info(f"Lazy loading trainer for {locale}")
             training_config = self.training_configs[locale]
             trainer = self._create_trainer(training_config)
+
+            # If a merged checkpoint is pending, initialize model weights from it
+            pending_checkpoint = self.pending_merged_checkpoints.pop(locale, None)
+            if pending_checkpoint and os.path.exists(pending_checkpoint):
+                try:
+                    logger.info(f"Initializing {locale} trainer with merged weights from {pending_checkpoint}")
+                    merged_model = AutoModelForSequenceClassification.from_pretrained(
+                        pending_checkpoint,
+                        num_labels=trainer.model.config.num_labels
+                    )
+                    trainer.model.load_state_dict(merged_model.state_dict())
+                    self.pending_resume_reset[locale] = True
+                    del merged_model
+                except Exception as load_err:
+                    logger.warning(f"Failed to load merged weights for {locale}: {load_err}")
+                    self.pending_resume_reset[locale] = False
+            else:
+                # Ensure flag is set even when no merged weights are pending
+                self.pending_resume_reset.setdefault(locale, False)
+
             self.trainers[locale] = trainer
             logger.info(f"Successfully lazy loaded trainer for {locale}")
 
@@ -418,6 +442,78 @@ class IterativeTrainingOrchestrator:
             self._clear_gpu_memory()
             raise
 
+    def _ensure_tokenizer_files(self, locale: str, model_dir: str):
+        """Ensure tokenizer files exist by copying them from base model if needed."""
+        try:
+            # Find base model tokenizer files
+            base_tokenizer_dirs = [
+                "/home/coder/.cache/huggingface/hub/models--FacebookAI--xlm-roberta-base/snapshots/"
+            ]
+
+            base_tokenizer_path = None
+            for base_dir in base_tokenizer_dirs:
+                if os.path.exists(base_dir):
+                    # Find the latest snapshot
+                    snapshots = [d for d in os.listdir(base_dir) if os.path.isdir(os.path.join(base_dir, d))]
+                    if snapshots:
+                        base_tokenizer_path = os.path.join(base_dir, sorted(snapshots)[-1])
+                        break
+
+            if not base_tokenizer_path:
+                logger.error("Could not find base model tokenizer directory")
+                return
+
+            # Copy required tokenizer files
+            required_files = [
+                'tokenizer.json',
+                'tokenizer_config.json',
+                'sentencepiece.bpe.model',
+                'special_tokens_map.json'
+            ]
+
+            for token_file in required_files:
+                src_path = os.path.join(base_tokenizer_path, token_file)
+                dst_path = os.path.join(model_dir, token_file)
+
+                if os.path.exists(src_path) and not os.path.exists(dst_path):
+                    import shutil
+                    shutil.copy2(src_path, dst_path)
+                    logger.info(f"Copied {token_file} from base model to {locale}")
+                elif os.path.exists(dst_path):
+                    logger.info(f"Tokenizer file {token_file} already exists for {locale}")
+
+        except Exception as e:
+            logger.error(f"Failed to ensure tokenizer files for {locale}: {e}")
+
+    def _find_latest_checkpoint(self, locale: str) -> Optional[str]:
+        """Find the latest checkpoint directory for a given locale."""
+        try:
+            locale_output_dir = os.path.join(self.config.base_output_dir, locale)
+
+            if not os.path.exists(locale_output_dir):
+                return None
+
+            # Look for checkpoint directories
+            checkpoint_dirs = []
+            for item in os.listdir(locale_output_dir):
+                if item.startswith("checkpoint-") and os.path.isdir(os.path.join(locale_output_dir, item)):
+                    try:
+                        step_num = int(item.split("-")[1])
+                        checkpoint_dirs.append((step_num, os.path.join(locale_output_dir, item)))
+                    except (IndexError, ValueError):
+                        continue
+
+            if not checkpoint_dirs:
+                return None
+
+            # Return the checkpoint with the highest step number
+            latest_checkpoint = max(checkpoint_dirs, key=lambda x: x[0])
+            return latest_checkpoint[1]
+
+        except Exception as e:
+            logger.warning(f"Error finding checkpoint for {locale}: {e}")
+            return None
+
     def _run_single_epoch(self, locale: str, target_epoch: int):
         """Run training for a single model for one specific epoch."""
         logger.info(f"Starting epoch {target_epoch} for {locale}")
@@ -427,6 +523,15 @@ class IterativeTrainingOrchestrator:
 
             # Lazy load trainer only when needed
             trainer = self._lazy_load_trainer(locale)
+
+            # Determine target directory for this locale's artifacts
+            locale_output_path = getattr(trainer.args, "output_dir", None)
+            if not locale_output_path:
+                locale_output_path = os.path.join(self.config.base_output_dir, locale)
+            os.makedirs(locale_output_path, exist_ok=True)
+
+            # Check if we should reset resume checkpoint after merge
+            pending_reset = self.pending_resume_reset.get(locale, False)
 
             # Set model to training device with memory optimization
             device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -443,31 +548,113 @@ class IterativeTrainingOrchestrator:
             trainer.model.to(device)
             logger.info(f"Training {locale} on device: {device}")
 
-            # Calculate how many epochs to train (from current to target)
-            current_epoch = int(trainer.state.epoch) if trainer.state.epoch is not None else 0
-            epochs_to_train = target_epoch - current_epoch + 1  # +1 because epochs are 0-indexed
+            # Find the latest checkpoint to resume from
+            latest_checkpoint = None if pending_reset else self._find_latest_checkpoint(locale)
 
-            if epochs_to_train <= 0:
-                logger.info(f"Skipping {locale} - already at epoch {current_epoch}")
-                return
-
-            # Modify training arguments for single epoch
+            # Set training parameters for this epoch
             original_max_epochs = trainer.args.num_train_epochs
-            trainer.args.num_train_epochs = target_epoch + 1  # Train up to target epoch
+            original_resume_from_checkpoint = getattr(trainer.args, 'resume_from_checkpoint', None)
 
-            # Train for the required number of epochs
-            logger.info(f"Training {locale} from epoch {current_epoch} to {target_epoch} ({epochs_to_train} epochs)")
+            # Configure trainer to train for exactly one more epoch
+            # We use the current epoch + 1 to train exactly one epoch
+            current_epoch = int(trainer.state.epoch) if trainer.state.epoch is not None else 0
+            trainer.args.num_train_epochs = current_epoch + 1
+
+            logger.info(f"Debug: {locale} current_epoch={current_epoch}, target_epoch={target_epoch}, will train to epoch {current_epoch + 1}")
+
+            # Set resume checkpoint if available
+            if latest_checkpoint:
+                trainer.args.resume_from_checkpoint = latest_checkpoint
+                logger.info(f"Resuming {locale} from checkpoint: {latest_checkpoint}")
+            else:
+                # Remove any resume checkpoint to start fresh
+                trainer.args.resume_from_checkpoint = None
+                if pending_reset:
+                    logger.info(f"Starting {locale} training from merged weights (no checkpoint resume)")
+                else:
+                    logger.info(f"Starting {locale} training from scratch")
+
+            # Train for exactly one epoch
+            logger.info(f"Training {locale} for one epoch (current: {current_epoch} → target: {current_epoch + 1})")
             trainer.train()
 
-            # Restore original max epochs
+            # Restore original training arguments
             trainer.args.num_train_epochs = original_max_epochs
+            trainer.args.resume_from_checkpoint = original_resume_from_checkpoint
 
             # Save model state after this epoch
             trainer.save_model()
             trainer.save_state()
 
-            # For iterative training, we don't need to store massive state dicts
-            # The merge coordinator will use the current model directly
+            # Verify training completed to expected epoch
+            final_epoch = int(trainer.state.epoch) if trainer.state.epoch is not None else 0
+            logger.info(f"Debug: {locale} training completed. Expected epoch: {current_epoch + 1}, Actual epoch: {final_epoch}")
+
+            if final_epoch != current_epoch + 1:
+                logger.warning(f"Warning: {locale} training ended at epoch {final_epoch}, expected {current_epoch + 1}")
+            else:
+                logger.info(f"✅ {locale} training completed successfully to epoch {final_epoch}")
+
+            # CRITICAL: Always save the tokenizer explicitly for merging
+            # trainer.save_model() doesn't save the tokenizer by default
+            try:
+                # Use the same path where the model was saved
+                tokenizer_save_path = locale_output_path
+
+                # Get tokenizer from trainer
+                if hasattr(trainer, 'tokenizer') and trainer.tokenizer is not None:
+                    tokenizer = trainer.tokenizer
+                else:
+                    # Load tokenizer from the model config
+                    from transformers import AutoTokenizer
+                    tokenizer = AutoTokenizer.from_pretrained(trainer.args.model_name_or_path)
+
+                tokenizer.save_pretrained(tokenizer_save_path)
+                logger.info(f"✅ SAVED TOKENIZER to: {tokenizer_save_path}")
+
+            except Exception as e:
+                logger.error(f"Failed to save tokenizer: {e}")
+                # Copy from base model as fallback
+                self._ensure_tokenizer_files(locale, locale_output_path)
+
+                # Verify tokenizer files were saved
+                tokenizer_files = ['tokenizer.json', 'tokenizer_config.json', 'sentencepiece.bpe.model']
+                missing_files = []
+                for token_file in tokenizer_files:
+                    token_path = os.path.join(tokenizer_save_path, token_file)
+                    if not os.path.exists(token_path):
+                        missing_files.append(token_file)
+
+                if missing_files:
+                    logger.warning(f"Missing tokenizer files: {missing_files}")
+                    # Fallback: copy from base model if missing
+                    self._ensure_tokenizer_files(locale, tokenizer_save_path)
+                else:
+                    logger.info("✅ All tokenizer files verified successfully")
+
+            # Update state manager with lightweight metadata (no GPU tensors)
+            # Create basic metrics object
+            current_metrics = TrainingMetrics(
+                epoch=int(trainer.state.epoch) if trainer.state.epoch is not None else 0,
+                step=trainer.state.global_step,
+                train_loss=trainer.state.log_history[-1].get('train_loss', 0.0) if trainer.state.log_history else 0.0,
+                eval_loss=trainer.state.log_history[-1].get('eval_loss', None) if trainer.state.log_history else None,
+                eval_accuracy=trainer.state.log_history[-1].get('eval_accuracy', None) if trainer.state.log_history else None,
+                eval_f1=trainer.state.log_history[-1].get('eval_f1', None) if trainer.state.log_history else None
+            )
+
+            # Update state manager with metadata only (no GPU tensors)
+            self.state_manager.update_state(
+                locale=locale,
+                epoch=int(trainer.state.epoch) if trainer.state.epoch is not None else 0,
+                step=trainer.state.global_step,
+                model_state_dict=None,  # Don't store GPU tensors
+                optimizer_state_dict=None,  # Don't store optimizer state
+                scheduler_state_dict=None,  # Don't store scheduler state
+                metrics=current_metrics,
+                checkpoint_path=locale_output_path  # Store path to saved model
+            )
+
             logger.info(f"Completed training for {locale}: epoch={trainer.state.epoch}, step={trainer.state.global_step}")
 
             # Update progress tracking
@@ -507,6 +694,9 @@ class IterativeTrainingOrchestrator:
                 logger.info(f"Aggressively cleared GPU memory for {locale}")
 
             logger.info(f"Completed epoch {target_epoch} for {locale}")
+
+            # Clear pending reset flag after successful training
+            self.pending_resume_reset[locale] = False
 
         except Exception as e:
             logger.error(f"Training failed for {locale} epoch {target_epoch}: {e}")
@@ -642,16 +832,37 @@ class IterativeTrainingOrchestrator:
                 # Load merged model
                 logger.info("Loading merged model to update trainers")
                 merged_model = AutoModelForSequenceClassification.from_pretrained(merged_model_path)
+                merged_state_dict = merged_model.state_dict()
+                tokenizer = AutoTokenizer.from_pretrained(merged_model_path)
 
-                # Update all trainers (not just the active ones)
-                for locale in self.trainers.keys():
+                # Update persistent checkpoints for every locale
+                for locale, training_config in self.training_configs.items():
+                    locale_output_dir = training_config.output_dir or os.path.join(self.config.base_output_dir, locale)
+                    os.makedirs(locale_output_dir, exist_ok=True)
+
+                    # Save merged model and tokenizer so disk checkpoints reflect latest weights
+                    merged_model.save_pretrained(locale_output_dir)
+                    tokenizer.save_pretrained(locale_output_dir)
+
+                    # Update state manager tracking
+                    state = self.state_manager.get_state(locale)
+                    if state:
+                        state.checkpoint_path = locale_output_dir
+                        state.checkpoint_timestamp = datetime.utcnow().isoformat()
+                        state.model_state_dict = None  # Rely on disk-based checkpoint
+
+                    # Ensure next epoch loads from merged checkpoint
+                    self.pending_merged_checkpoints[locale] = locale_output_dir
+                    self.pending_resume_reset[locale] = True
+
+                    # Update trainer currently in memory, if any
                     if locale in self.trainers:
-                        # Update the trainer's model with merged weights
-                        self.trainers[locale].model.load_state_dict(merged_model.state_dict())
+                        self.trainers[locale].model.load_state_dict(merged_state_dict)
                         logger.info(f"Updated {locale} trainer with merged weights for epoch {epoch+1}")
 
-                # Clean up merged model from memory
+                # Clean up merged artifacts from memory
                 del merged_model
+                del tokenizer
                 self._clear_gpu_memory()
 
                 logger.info("Successfully updated all trainers with merged weights")
@@ -667,6 +878,8 @@ class IterativeTrainingOrchestrator:
             if merged_model_path and os.path.exists(merged_model_path):
                 # Load merged model
                 merged_model = AutoModelForSequenceClassification.from_pretrained(merged_model_path)
+                merged_state_dict = merged_model.state_dict()
+                tokenizer = AutoTokenizer.from_pretrained(merged_model_path)
 
                 # Update trainers for remaining untrained locales
                 all_locales = list(self.trainers.keys())
@@ -675,11 +888,29 @@ class IterativeTrainingOrchestrator:
                 for locale in remaining_locales:
                     if locale in self.trainers:
                         # Update the trainer's model with merged weights
-                        self.trainers[locale].model.load_state_dict(merged_model.state_dict())
+                        self.trainers[locale].model.load_state_dict(merged_state_dict)
                         logger.info(f"Updated {locale} trainer with merged weights")
+
+                    # Persist merged weights for locales that will train later
+                    training_config = self.training_configs.get(locale)
+                    if training_config:
+                        locale_output_dir = training_config.output_dir or os.path.join(self.config.base_output_dir, locale)
+                        os.makedirs(locale_output_dir, exist_ok=True)
+                        merged_model.save_pretrained(locale_output_dir)
+                        tokenizer.save_pretrained(locale_output_dir)
+
+                        state = self.state_manager.get_state(locale)
+                        if state:
+                            state.checkpoint_path = locale_output_dir
+                            state.checkpoint_timestamp = datetime.utcnow().isoformat()
+                            state.model_state_dict = None
+
+                        self.pending_merged_checkpoints[locale] = locale_output_dir
+                        self.pending_resume_reset[locale] = True
 
                 # Clean up
                 del merged_model
+                del tokenizer
                 self._clear_gpu_memory()
 
         except Exception as e:

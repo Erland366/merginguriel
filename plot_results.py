@@ -187,6 +187,23 @@ class AdvancedResultsAnalyzer:
             print(f"Error loading merge details from {exp_dir}: {e}")
             return None
 
+    def format_method_key_for_filename(self, method_key: str) -> str:
+        """Convert method keys like similarity_2lang to similarity_merged2 for file names."""
+        match = re.search(r'_(\d+)lang$', method_key)
+        if match:
+            base = method_key[:match.start()]
+            return f"{base}_merged{match.group(1)}"
+        return method_key
+
+    def format_method_key_for_display(self, method_key: str) -> str:
+        """Friendly display name for method keys with optional merged count."""
+        match = re.search(r'_(\d+)lang$', method_key)
+        display = method_key.replace('_', ' ').title()
+        if match:
+            base = method_key[:match.start()].replace('_', ' ').title()
+            return f"{base} (Merged {match.group(1)})"
+        return display
+
     def find_merge_locales(self, target_locale: str, merge_type: str = "similarity") -> List[str]:
         """Find which locales were used for merging a target language"""
         # Try to find the merge directory with the new naming convention
@@ -320,7 +337,13 @@ class AdvancedResultsAnalyzer:
         """Analyze results for advanced merging methods"""
         print("Analyzing advanced merging methods...")
 
-        advanced_methods = ['ties', 'task_arithmetic', 'slerp', 'regmean', 'dare', 'fisher']
+        # Identify all method columns (accuracy columns without improvement suffixes)
+        method_columns = [
+            col for col in self.main_results_df.columns
+            if col not in ['locale', 'baseline', 'best_source_accuracy', 'best_overall_accuracy']
+            and not col.endswith('_improvement')
+            and '_vs_' not in col
+        ]
         results = []
 
         for locale in self.main_results_df['locale'].unique():
@@ -333,14 +356,21 @@ class AdvancedResultsAnalyzer:
 
             main_data = locale_row.iloc[0]
             locale_data['baseline'] = main_data.get('baseline', 0)
-            locale_data['similarity'] = main_data.get('similarity', 0)
-            locale_data['average'] = main_data.get('average', 0)
 
-            # Look for advanced method results
-            for method in advanced_methods:
-                method_key = method if method in main_data else f'{method}_merge'
-                if method_key in main_data:
-                    locale_data[method] = main_data[method_key]
+            # Capture every method/variant column dynamically
+            num_lang_map = {}
+            for method_key in method_columns:
+                if method_key in main_data and pd.notna(main_data[method_key]):
+                    locale_data[method_key] = main_data[method_key]
+                    match = re.search(r'_(\d+)lang$', method_key)
+                    if match:
+                        try:
+                            num_lang_map[method_key] = int(match.group(1))
+                        except ValueError:
+                            continue
+
+            if num_lang_map:
+                locale_data['num_languages_map'] = num_lang_map
 
             # Extract source locales from merge details
             source_locales = self.extract_source_locales_from_details(locale)
@@ -355,10 +385,16 @@ class AdvancedResultsAnalyzer:
                     if num_languages is not None:
                         break
 
-            # Apply num_languages filter if specified
+            # Apply num_languages filter if specified (fallback to similarity count)
             if self.num_languages_filter is not None:
-                if num_languages not in self.num_languages_filter:
+                candidate_counts = set(num_lang_map.values()) if num_lang_map else set()
+                if num_languages is not None:
+                    candidate_counts.add(num_languages)
+                if not candidate_counts:
                     print(f"Skipping {locale} - has {num_languages} languages, not in filter {self.num_languages_filter}")
+                    continue
+                if not any(count in self.num_languages_filter for count in candidate_counts):
+                    print(f"Skipping {locale} - has {candidate_counts} languages, not in filter {self.num_languages_filter}")
                     continue
 
             if zero_shot_scores:
@@ -590,30 +626,48 @@ class AdvancedResultsAnalyzer:
         locale_data = {}
 
         # Process merging results
+        metadata_keys = {
+            'target_locale',
+            'baseline',
+            'avg_zero_shot',
+            'best_zero_shot',
+            'best_source',
+            'source_locales',
+            'num_languages',
+            'num_languages_map'
+        }
+
         for result in merging_results:
             locale = result['target_locale']
-            if locale not in locale_data:
-                locale_data[locale] = {
-                    'locale': locale,
-                    'baseline': result.get('baseline', 0),
-                    'avg_zero_shot': result.get('avg_zero_shot', 0),
-                    'best_zero_shot': result.get('best_zero_shot', 0),
-                    'best_source': result.get('best_source', 0),
-                    'source_locales': result.get('source_locales', [])
-                }
+            entry = locale_data.setdefault(locale, {
+                'locale': locale,
+                'baseline': result.get('baseline', 0),
+                'avg_zero_shot': result.get('avg_zero_shot', 0),
+                'best_zero_shot': result.get('best_zero_shot', 0),
+                'best_source': result.get('best_source', 0),
+                'source_locales': result.get('source_locales', [])
+            })
 
-            # Add basic and advanced merging methods
-            merging_methods = ['similarity', 'average', 'ties', 'task_arithmetic', 'slerp', 'regmean', 'dare', 'fisher']
-            for method in merging_methods:
-                if method in result:
-                    locale_data[locale][method] = result[method]
-                    # Calculate improvements vs all three baselines
-                    if locale_data[locale]['avg_zero_shot'] > 0:
-                        locale_data[locale][f'{method}_vs_avg_zero'] = result[method] - locale_data[locale]['avg_zero_shot']
-                    if locale_data[locale]['best_zero_shot'] > 0:
-                        locale_data[locale][f'{method}_vs_best_zero'] = result[method] - locale_data[locale]['best_zero_shot']
-                    if locale_data[locale]['best_source'] > 0:
-                        locale_data[locale][f'{method}_vs_best_source'] = result[method] - locale_data[locale]['best_source']
+            # Merge metadata fields if newly discovered
+            for key in ['baseline', 'avg_zero_shot', 'best_zero_shot', 'best_source']:
+                if key in result and (entry.get(key, 0) == 0 or entry.get(key) is None):
+                    entry[key] = result[key]
+            if 'source_locales' in result and not entry.get('source_locales'):
+                entry['source_locales'] = result['source_locales']
+            if 'num_languages_map' in result:
+                entry.setdefault('num_languages_map', {}).update(result['num_languages_map'])
+
+            # Add all method/variant scores dynamically
+            for method_key, value in result.items():
+                if method_key in metadata_keys:
+                    continue
+                entry[method_key] = value
+                if entry['avg_zero_shot'] > 0:
+                    entry[f'{method_key}_vs_avg_zero'] = value - entry['avg_zero_shot']
+                if entry['best_zero_shot'] > 0:
+                    entry[f'{method_key}_vs_best_zero'] = value - entry['best_zero_shot']
+                if entry['best_source'] > 0:
+                    entry[f'{method_key}_vs_best_source'] = value - entry['best_source']
 
         # Process ensemble results and merge into the same locale rows
         for result in ensemble_results:
@@ -641,7 +695,14 @@ class AdvancedResultsAnalyzer:
             if locale_data[locale]['best_source'] > 0:
                 locale_data[locale][f'{method}_vs_best_source'] = accuracy - locale_data[locale]['best_source']
 
-        summary_df = pd.DataFrame(list(locale_data.values()))
+        summary_records = []
+        for locale, data in locale_data.items():
+            record = dict(data)
+            if 'num_languages_map' in record and isinstance(record['num_languages_map'], dict):
+                record['num_languages_map'] = json.dumps(record['num_languages_map'])
+            summary_records.append(record)
+
+        summary_df = pd.DataFrame(summary_records)
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         summary_df.to_csv(f'advanced_analysis_summary_{timestamp}.csv', index=False)
 
@@ -657,7 +718,11 @@ class AdvancedResultsAnalyzer:
         print("Generating pure scores plots...")
 
         # Identify all method columns (pure performance, not comparisons)
-        method_cols = [col for col in summary_df.columns if col not in ['locale', 'baseline', 'avg_zero_shot', 'best_zero_shot', 'best_source', 'source_locales'] and not '_vs_' in col]
+        method_cols = [
+            col for col in summary_df.columns
+            if col not in ['locale', 'baseline', 'avg_zero_shot', 'best_zero_shot', 'best_source', 'source_locales', 'num_languages_map']
+            and '_vs_' not in col
+        ]
 
         if not method_cols:
             print("No method columns found for pure scores plots")
@@ -668,6 +733,8 @@ class AdvancedResultsAnalyzer:
         for method in method_cols:
             # Create individual plot for each method
             fig, ax = plt.subplots(figsize=(20, 8))
+            display_name = self.format_method_key_for_display(method)
+            file_method = self.format_method_key_for_filename(method)
 
             # Get method data
             method_data = summary_df[method].fillna(0).tolist()
@@ -686,7 +753,7 @@ class AdvancedResultsAnalyzer:
             bars2 = ax.bar(x - width, avg_zero_data, width, label='Avg Zero-shot', alpha=0.7, color='lightblue')
             bars3 = ax.bar(x, best_zero_data, width, label='Best Zero-shot', alpha=0.7, color='lightgreen')
             bars4 = ax.bar(x + width, best_source_data, width, label='Best Source', alpha=0.7, color='lightcoral')
-            bars5 = ax.bar(x + 2*width, method_data, width, label=method.replace('_', ' ').title(), alpha=0.8, color='royalblue')
+            bars5 = ax.bar(x + 2*width, method_data, width, label=display_name, alpha=0.8, color='royalblue')
 
             # Add value labels on method bars
             for i, bar in enumerate(bars5):
@@ -697,17 +764,17 @@ class AdvancedResultsAnalyzer:
 
             ax.set_xlabel('Target Languages')
             ax.set_ylabel('Performance Score')
-            ax.set_title(f'Pure Performance: {method.replace("_", " ").title()} vs All Baselines')
+            ax.set_title(f'Pure Performance: {display_name} vs All Baselines')
             ax.set_xticks(x)
             ax.set_xticklabels(locales, rotation=45, ha='right')
             ax.legend()
             ax.grid(True, alpha=0.3)
 
             plt.tight_layout()
-            output_file = output_dir / f"pure_scores_{method}_{timestamp}.png"
+            output_file = output_dir / f"pure_scores_{file_method}_{timestamp}.png"
             plt.savefig(output_file, dpi=300, bbox_inches='tight')
             plt.close()
-            print(f"  ✅ Pure scores plot for {method} saved to: {output_file}")
+            print(f"  ✅ Pure scores plot for {file_method} saved to: {output_file}")
 
     def generate_vs_avg_zero_plots(self, summary_df: pd.DataFrame, output_dir: Path, timestamp: str):
         """Generate individual plots showing improvement vs average zero-shot baseline for each method"""
@@ -725,6 +792,8 @@ class AdvancedResultsAnalyzer:
         for col in vs_avg_cols:
             method_name = col.replace('_vs_avg_zero', '')
             improvement_data = summary_df[col].fillna(0).tolist()
+            display_name = self.format_method_key_for_display(method_name)
+            file_method = self.format_method_key_for_filename(method_name)
 
             # Create individual plot for each method
             fig, ax = plt.subplots(figsize=(16, 8))
@@ -765,16 +834,16 @@ class AdvancedResultsAnalyzer:
 
             ax.set_xlabel('Target Languages')
             ax.set_ylabel('Improvement over Average Zero-shot')
-            ax.set_title(f'{method_name.replace("_", " ").title()} vs Average Zero-shot Baseline')
+            ax.set_title(f'{display_name} vs Average Zero-shot Baseline')
             ax.set_xticks(x)
             ax.set_xticklabels(locales, rotation=45, ha='right')
             ax.grid(True, alpha=0.3)
 
             plt.tight_layout()
-            output_file = output_dir / f"vs_avg_zero_{method_name}_{timestamp}.png"
+            output_file = output_dir / f"vs_avg_zero_{file_method}_{timestamp}.png"
             plt.savefig(output_file, dpi=300, bbox_inches='tight')
             plt.close()
-            print(f"  ✅ vs avg zero-shot plot for {method_name} saved to: {output_file}")
+            print(f"  ✅ vs avg zero-shot plot for {file_method} saved to: {output_file}")
 
     def generate_vs_best_zero_plots(self, summary_df: pd.DataFrame, output_dir: Path, timestamp: str):
         """Generate individual plots showing improvement vs best zero-shot baseline for each method"""
@@ -792,6 +861,8 @@ class AdvancedResultsAnalyzer:
         for col in vs_best_cols:
             method_name = col.replace('_vs_best_zero', '')
             improvement_data = summary_df[col].fillna(0).tolist()
+            display_name = self.format_method_key_for_display(method_name)
+            file_method = self.format_method_key_for_filename(method_name)
 
             # Create individual plot for each method
             fig, ax = plt.subplots(figsize=(16, 8))
@@ -832,16 +903,16 @@ class AdvancedResultsAnalyzer:
 
             ax.set_xlabel('Target Languages')
             ax.set_ylabel('Improvement over Best Zero-shot')
-            ax.set_title(f'{method_name.replace("_", " ").title()} vs Best Zero-shot Baseline')
+            ax.set_title(f'{display_name} vs Best Zero-shot Baseline')
             ax.set_xticks(x)
             ax.set_xticklabels(locales, rotation=45, ha='right')
             ax.grid(True, alpha=0.3)
 
             plt.tight_layout()
-            output_file = output_dir / f"vs_best_zero_{method_name}_{timestamp}.png"
+            output_file = output_dir / f"vs_best_zero_{file_method}_{timestamp}.png"
             plt.savefig(output_file, dpi=300, bbox_inches='tight')
             plt.close()
-            print(f"  ✅ vs best zero-shot plot for {method_name} saved to: {output_file}")
+            print(f"  ✅ vs best zero-shot plot for {file_method} saved to: {output_file}")
 
     def generate_vs_best_source_plots(self, summary_df: pd.DataFrame, output_dir: Path, timestamp: str):
         """Generate individual plots showing improvement vs best source baseline for each method"""
@@ -859,6 +930,8 @@ class AdvancedResultsAnalyzer:
         for col in vs_best_source_cols:
             method_name = col.replace('_vs_best_source', '')
             improvement_data = summary_df[col].fillna(0).tolist()
+            display_name = self.format_method_key_for_display(method_name)
+            file_method = self.format_method_key_for_filename(method_name)
 
             # Create individual plot for each method
             fig, ax = plt.subplots(figsize=(16, 8))
@@ -899,16 +972,16 @@ class AdvancedResultsAnalyzer:
 
             ax.set_xlabel('Target Languages')
             ax.set_ylabel('Improvement over Best Source')
-            ax.set_title(f'{method_name.replace("_", " ").title()} vs Best Source Baseline (Fair Comparison)')
+            ax.set_title(f'{display_name} vs Best Source Baseline (Fair Comparison)')
             ax.set_xticks(x)
             ax.set_xticklabels(locales, rotation=45, ha='right')
             ax.grid(True, alpha=0.3)
 
             plt.tight_layout()
-            output_file = output_dir / f"vs_best_source_{method_name}_{timestamp}.png"
+            output_file = output_dir / f"vs_best_source_{file_method}_{timestamp}.png"
             plt.savefig(output_file, dpi=300, bbox_inches='tight')
             plt.close()
-            print(f"  ✅ vs best source plot for {method_name} saved to: {output_file}")
+            print(f"  ✅ vs best source plot for {file_method} saved to: {output_file}")
 
     def print_summary_statistics(self, summary_df: pd.DataFrame):
         """Print comprehensive summary statistics"""
@@ -919,42 +992,55 @@ class AdvancedResultsAnalyzer:
         # Basic stats
         print(f"\nTotal locales analyzed: {len(summary_df)}")
 
-        # Basic methods analysis
-        print(f"\n--- BASIC METHODS ANALYSIS ---")
-        print(f"Average baseline: {summary_df['baseline'].mean():.4f}")
-        print(f"Average similarity merge: {summary_df['similarity'].mean():.4f}")
-        print(f"Average average merge: {summary_df['average'].mean():.4f}")
+        if 'baseline' in summary_df.columns:
+            print(f"\nAverage baseline: {summary_df['baseline'].mean():.4f}")
 
-        # Advanced merging methods analysis
-        print(f"\n--- ADVANCED MERGING METHODS ANALYSIS ---")
-        for method in ['ties', 'task_arithmetic', 'slerp', 'regmean', 'dare', 'fisher']:
-            if method in summary_df.columns:
+        static_fields = {'locale', 'baseline', 'avg_zero_shot', 'best_zero_shot', 'best_source', 'source_locales', 'num_languages_map'}
+
+        # Dynamic method analysis (merges + ensembles)
+        method_cols = [
+            col for col in summary_df.columns
+            if col not in static_fields and '_vs_' not in col
+        ]
+        if method_cols:
+            print(f"\n--- METHOD PERFORMANCE ---")
+            for method in sorted(method_cols):
                 avg_score = summary_df[method].mean()
                 print(f"Average {method}: {avg_score:.4f}")
 
-        if 'similarity_vs_avg_zero' in summary_df.columns:
-            avg_improvement = summary_df['similarity_vs_avg_zero'].mean()
-            print(f"Average similarity improvement vs avg zero-shot: {avg_improvement:.4f}")
+        # Improvements vs average zero-shot
+        improvement_cols = [col for col in summary_df.columns if col.endswith('_vs_avg_zero')]
+        if improvement_cols:
+            print(f"\n--- IMPROVEMENT VS AVG ZERO-SHOT ---")
+            for col in sorted(improvement_cols):
+                avg_improvement = summary_df[col].mean()
+                positive_count = (summary_df[col] > 0).sum()
+                print(f"{col}: avg {avg_improvement:+.4f}, positive in {positive_count}/{len(summary_df)} locales")
 
-        # Ensemble methods analysis
-        print(f"\n--- ENSEMBLE METHODS ANALYSIS ---")
-        ensemble_methods = ['ensemble_majority', 'ensemble_weighted_majority', 'ensemble_soft', 'ensemble_uriel_logits']
-        for method in ensemble_methods:
-            if method in summary_df.columns:
-                avg_score = summary_df[method].mean()
-                method_name = method.replace('ensemble_', '')
-                print(f"Average ensemble {method_name}: {avg_score:.4f}")
+        # Improvements vs best zero-shot
+        best_zero_cols = [col for col in summary_df.columns if col.endswith('_vs_best_zero')]
+        if best_zero_cols:
+            print(f"\n--- IMPROVEMENT VS BEST ZERO-SHOT ---")
+            for col in sorted(best_zero_cols):
+                avg_improvement = summary_df[col].mean()
+                positive_count = (summary_df[col] > 0).sum()
+                print(f"{col}: avg {avg_improvement:+.4f}, positive in {positive_count}/{len(summary_df)} locales")
 
-                improvement_col = f"{method_name}_vs_avg_zero"
-                if improvement_col in summary_df.columns:
-                    avg_improvement = summary_df[improvement_col].mean()
-                    print(f"Average {method_name} improvement vs avg zero-shot: {avg_improvement:.4f}")
+        # Improvements vs best source
+        best_source_cols = [col for col in summary_df.columns if col.endswith('_vs_best_source')]
+        if best_source_cols:
+            print(f"\n--- IMPROVEMENT VS BEST SOURCE ---")
+            for col in sorted(best_source_cols):
+                avg_improvement = summary_df[col].mean()
+                positive_count = (summary_df[col] > 0).sum()
+                print(f"{col}: avg {avg_improvement:+.4f}, positive in {positive_count}/{len(summary_df)} locales")
 
         # Zero-shot comparison
         if 'avg_zero_shot' in summary_df.columns:
             print(f"\n--- ZERO-SHOT COMPARISON ---")
             print(f"Average zero-shot performance: {summary_df['avg_zero_shot'].mean():.4f}")
             print(f"Best zero-shot performance: {summary_df['best_zero_shot'].max():.4f}")
+            print(f"Best source performance: {summary_df['best_source'].max():.4f}")
 
     def generate_advanced_analysis(self):
         """Main method to generate complete advanced analysis"""
@@ -982,9 +1068,10 @@ class AdvancedResultsAnalyzer:
             self.generate_vs_best_zero_plots(summary_df, plots_dir, timestamp)
             self.generate_vs_best_source_plots(summary_df, plots_dir, timestamp)
 
-            # Generate num_languages separated plots if filtering is enabled
+            # Generate comprehensive num_languages separated plots for ALL methods
             if self.num_languages_filter is not None or len(merging_results) > 0:
                 self.generate_num_languages_separated_plots(merging_results, plots_dir, timestamp)
+                self.generate_num_languages_method_plots(summary_df, plots_dir, timestamp)
 
         print(f"\nAdvanced analysis complete!")
         print(f"Generated files:")
@@ -1002,34 +1089,49 @@ class AdvancedResultsAnalyzer:
         print("Generating num_languages separated plots...")
 
         # Group results by num_languages
-        grouped_results = {}
+        grouped_results: Dict[int, Dict[str, Dict[str, float]]] = {}
         for result in merging_results:
-            num_lang = result.get('num_languages', 'unknown')
-            if num_lang not in grouped_results:
-                grouped_results[num_lang] = []
-            grouped_results[num_lang].append(result)
+            locale = result['target_locale']
+            baseline_score = result.get('baseline', 0)
+            num_lang_map = result.get('num_languages_map', {})
+
+            if not num_lang_map:
+                legacy_count = result.get('num_languages')
+                if legacy_count:
+                    locale_entry = grouped_results.setdefault(legacy_count, {}).setdefault(locale, {})
+                    locale_entry['baseline'] = baseline_score
+                continue
+
+            for method_key, num_lang in num_lang_map.items():
+                locale_entry = grouped_results.setdefault(num_lang, {}).setdefault(locale, {})
+                locale_entry[method_key] = result.get(method_key, 0)
+                locale_entry['baseline'] = baseline_score
 
         if len(grouped_results) <= 1:
             print("Only one num_languages group found, skipping separate plots")
             return
 
         # Generate plots for each num_languages group
-        for num_lang, results in grouped_results.items():
-            print(f"Generating plots for {num_lang} languages ({len(results)} locales)...")
+        for num_lang, locale_map in grouped_results.items():
+            print(f"Generating plots for {num_lang} languages ({len(locale_map)} locales)...")
 
-            # Create a mini-summary for this group
-            locales = [r['target_locale'] for r in results]
-            methods = ['similarity', 'average', 'ties', 'task_arithmetic', 'slerp', 'regmean', 'fisher']
+            locales = sorted(locale_map.keys())
+            method_keys = sorted({
+                key for locale_dict in locale_map.values()
+                for key in locale_dict.keys()
+                if key != 'baseline'
+            })
 
-            # Create DataFrame for this group
+            if not method_keys:
+                print(f"  ⚠️ No method variants found for {num_lang} languages, skipping")
+                continue
+
             group_data = {'locale': locales}
-            for method in methods:
-                group_data[method] = [r.get(method, 0) for r in results]
-            if 'baseline' in results[0]:
-                group_data['baseline'] = [r.get('baseline', 0) for r in results]
+            for method_key in method_keys:
+                group_data[method_key] = [locale_map[loc].get(method_key, 0) for loc in locales]
+            group_data['baseline'] = [locale_map[loc].get('baseline', 0) for loc in locales]
 
-            group_df = pd.DataFrame(group_data)
-            group_df = group_df.set_index('locale')
+            group_df = pd.DataFrame(group_data).set_index('locale')
 
             # Generate pure scores plot for this group
             self._generate_group_pure_scores_plot(group_df, num_lang, plots_dir, timestamp)
@@ -1039,6 +1141,487 @@ class AdvancedResultsAnalyzer:
                 self._generate_group_improvement_plot(group_df, num_lang, plots_dir, timestamp)
 
         print(f"Generated plots for {len(grouped_results)} num_languages groups")
+
+    def get_num_languages_from_merged_models(self, locale: str, method: str) -> Optional[int]:
+        """Extract num_languages from actual merged_models folder names"""
+        import re
+
+        # Look for merged model directories for this locale and method
+        merged_models_path = self.results_dir / "merged_models"
+
+        # Pattern: {method}_merge_{locale}_{num}merged
+        base_method = method
+        match = re.match(r'(.+?)_(\d+)lang$', method)
+        if match:
+            base_method = match.group(1)
+        pattern = f"{base_method}_merge_{locale}_(\\d+)merged"
+
+        for entry in merged_models_path.iterdir():
+            if entry.is_dir():
+                match = re.search(pattern, entry.name)
+                if match:
+                    return int(match.group(1))
+
+        return None
+
+    def generate_num_languages_method_plots(self, summary_df: pd.DataFrame, plots_dir: Path, timestamp: str):
+        """Generate separate plots for each method separated by num_languages using actual merged_models folders"""
+        print("Generating num_languages separated plots for ALL methods...")
+
+        # Get all methods from summary_df (excluding baseline and improvement columns)
+        methods = [col for col in summary_df.columns if col not in [
+            'locale', 'baseline', 'avg_zero_shot', 'best_zero_shot', 'best_source', 'source_locales', 'num_languages_map'
+        ] and not col.endswith('_vs_')]
+
+        # Collect all (locale, method, num_languages) combinations
+        locale_method_num_lang = {}
+
+        for _, row in summary_df.iterrows():
+            locale = row['locale']
+            for method in methods:
+                if pd.notna(row[method]) and row[method] > 0:  # Only if method has results
+                    num_lang = self.get_num_languages_from_merged_models(locale, method)
+                    if num_lang:
+                        locale_method_num_lang[(locale, method)] = num_lang
+
+        if not locale_method_num_lang:
+            print("❌ No num_languages information found in merged_models folder")
+            return
+
+        # Group by num_languages
+        grouped_dfs = {}
+        for (locale, method), num_lang in locale_method_num_lang.items():
+            if num_lang not in grouped_dfs:
+                grouped_dfs[num_lang] = []
+            # Get the row from summary_df for this locale
+            locale_row = summary_df[summary_df['locale'] == locale].iloc[0]
+            grouped_dfs[num_lang].append((locale, method, locale_row))
+
+        print(f"Found num_languages groups: {sorted(grouped_dfs.keys())}")
+
+        # For each num_languages group, generate plots for all methods
+        for num_lang, entries in grouped_dfs.items():
+            print(f"Generating plots for {num_lang} languages ({len(entries)} entries)...")
+
+            # Create a mini-summary for this group
+            locales_in_group = set()
+            method_data = {method: [] for method in methods}
+            baseline_data = []
+
+            for locale, method, row in entries:
+                locales_in_group.add(locale)
+                method_data[method].append((locale, row[method]))
+
+            # Generate plots for each method that has data in this group
+            for method in methods:
+                if not method_data[method]:
+                    continue
+
+                print(f"  Creating {method} plots for {num_lang} languages...")
+
+                # Prepare data for this method and num_languages group
+                locales = []
+                scores = []
+                baseline_scores = []
+                avg_zero_scores = []
+                best_zero_scores = []
+                best_source_scores = []
+
+                for locale, score in method_data[method]:
+                    # Get the full row for this locale
+                    locale_row = summary_df[summary_df['locale'] == locale].iloc[0]
+                    locales.append(locale)
+                    scores.append(score)
+                    baseline_scores.append(locale_row.get('baseline', 0))
+                    avg_zero_scores.append(locale_row.get('avg_zero_shot', 0))
+                    best_zero_scores.append(locale_row.get('best_zero_shot', 0))
+                    best_source_scores.append(locale_row.get('best_source', 0))
+
+                # Create pure scores plot
+                self._create_pure_scores_plot_for_group(locales, scores, baseline_scores,
+                                                       avg_zero_scores, best_zero_scores,
+                                                       best_source_scores, method, num_lang,
+                                                       plots_dir, timestamp)
+
+                # Create comparison plots if baseline data exists
+                self._create_comparison_plots_for_group(locales, scores, baseline_scores,
+                                                       avg_zero_scores, best_zero_scores,
+                                                       best_source_scores, method, num_lang,
+                                                       plots_dir, timestamp)
+
+        print(f"Generated method-specific plots for {len(grouped_dfs)} num_languages groups")
+
+    def _create_pure_scores_plot_for_group(self, locales, scores, baseline_scores,
+                                         avg_zero_scores, best_zero_scores, best_source_scores,
+                                         method, num_lang, plots_dir, timestamp):
+        """Create pure scores plot for a specific method and num_languages group"""
+        fig, ax = plt.subplots(figsize=(20, 8))
+        display_name = self.format_method_key_for_display(method)
+        file_method = self.format_method_key_for_filename(method)
+
+        x = np.arange(len(locales))
+        width = 0.16
+
+        # Plot all baselines and method
+        bars1 = ax.bar(x - 2*width, baseline_scores, width, label='Baseline', alpha=0.7, color='gray')
+        bars2 = ax.bar(x - width, avg_zero_scores, width, label='Avg Zero-shot', alpha=0.7, color='lightblue')
+        bars3 = ax.bar(x, best_zero_scores, width, label='Best Zero-shot', alpha=0.7, color='lightgreen')
+        bars4 = ax.bar(x + width, best_source_scores, width, label='Best Source', alpha=0.7, color='lightcoral')
+        bars5 = ax.bar(x + 2*width, scores, width, label=display_name, alpha=0.8, color='royalblue')
+
+        # Add value labels on method bars
+        for i, bar in enumerate(bars5):
+            height = bar.get_height()
+            if height > 0.01:
+                ax.text(bar.get_x() + bar.get_width()/2., height,
+                       f'{height:.3f}', ha='center', va='bottom', fontsize=8, fontweight='bold')
+
+        ax.set_xlabel('Target Languages')
+        ax.set_ylabel('Performance Score')
+        ax.set_title(f'Pure Performance: {display_name} vs All Baselines ({num_lang} Languages)')
+        ax.set_xticks(x)
+        ax.set_xticklabels(locales, rotation=45, ha='right')
+        ax.legend()
+        ax.grid(True, alpha=0.3)
+
+        plt.tight_layout()
+        output_file = plots_dir / f"pure_scores_{file_method}_{num_lang}lang_{timestamp}.png"
+        plt.savefig(output_file, dpi=300, bbox_inches='tight')
+        plt.close()
+        print(f"    ✅ Pure scores plot saved: {output_file}")
+
+    def _create_comparison_plots_for_group(self, locales, scores, baseline_scores,
+                                        avg_zero_scores, best_zero_scores, best_source_scores,
+                                        method, num_lang, plots_dir, timestamp):
+        """Create comparison plots (improvements) for a specific method and num_languages group"""
+
+        # Calculate improvements
+        avg_zero_improvements = [score - avg for score, avg in zip(scores, avg_zero_scores)]
+        best_zero_improvements = [score - best for score, best in zip(scores, best_zero_scores)]
+        best_source_improvements = [score - best for score, best in zip(scores, best_source_scores)]
+
+        # Create vs avg zero-shot plot
+        self._create_improvement_plot(locales, avg_zero_improvements, method, num_lang,
+                                    "Average Zero-shot", "vs_avg_zero", plots_dir, timestamp, 'green', 'lightcoral')
+
+        # Create vs best zero-shot plot
+        self._create_improvement_plot(locales, best_zero_improvements, method, num_lang,
+                                    "Best Zero-shot", "vs_best_zero", plots_dir, timestamp, 'royalblue', 'orange')
+
+        # Create vs best source plot
+        self._create_improvement_plot(locales, best_source_improvements, method, num_lang,
+                                    "Best Source", "vs_best_source", plots_dir, timestamp, 'forestgreen', 'indianred')
+
+    def _create_improvement_plot(self, locales, improvements, method, num_lang, baseline_name,
+                                prefix, plots_dir, timestamp, pos_color, neg_color):
+        """Create improvement plot for a specific baseline"""
+        fig, ax = plt.subplots(figsize=(16, 8))
+        display_name = self.format_method_key_for_display(method)
+        file_method = self.format_method_key_for_filename(method)
+
+        x = np.arange(len(locales))
+        width = 0.6
+
+        bars = ax.bar(x, improvements, width, alpha=0.8)
+
+        # Color bars: positive for improvement, negative for degradation
+        for i, bar in enumerate(bars):
+            height = bar.get_height()
+            if abs(height) > 0.001:
+                if height >= 0:
+                    bar.set_color(pos_color)
+                    ax.text(bar.get_x() + bar.get_width()/2., height,
+                           f'+{height:.3f}', ha='center', va='bottom', fontsize=8, fontweight='bold')
+                else:
+                    bar.set_color(neg_color)
+                    ax.text(bar.get_x() + bar.get_width()/2., height,
+                           f'{height:.3f}', ha='center', va='top', fontsize=8, fontweight='bold')
+
+        # Add reference line at y=0
+        ax.axhline(y=0, color='black', linestyle='-', alpha=0.7, linewidth=2)
+
+        # Add statistics
+        valid_improvements = [h for h in improvements if abs(h) > 0.001]
+        if valid_improvements:
+            mean_improvement = np.mean(valid_improvements)
+            positive_count = sum(1 for h in valid_improvements if h > 0)
+            win_rate = (positive_count / len(valid_improvements)) * 100
+
+            stats_text = f'Mean: {mean_improvement:+.4f}\nWin Rate: {win_rate:.1f}%\nCount: {len(valid_improvements)}'
+            ax.text(0.02, 0.98, stats_text, transform=ax.transAxes, fontsize=10,
+                   verticalalignment='top', bbox=dict(boxstyle='round', facecolor='lightblue', alpha=0.8))
+
+        ax.set_xlabel('Target Languages')
+        ax.set_ylabel(f'Improvement over {baseline_name}')
+        ax.set_title(f'{display_name} vs {baseline_name} ({num_lang} Languages)')
+        ax.set_xticks(x)
+        ax.set_xticklabels(locales, rotation=45, ha='right')
+        ax.grid(True, alpha=0.3)
+
+        plt.tight_layout()
+        output_file = plots_dir / f"{prefix}_{file_method}_{num_lang}lang_{timestamp}.png"
+        plt.savefig(output_file, dpi=300, bbox_inches='tight')
+        plt.close()
+        print(f"    ✅ {prefix} plot saved: {output_file}")
+
+    def generate_pure_scores_plots_for_group(self, group_df: pd.DataFrame, plots_dir: Path, timestamp: str, num_lang: int):
+        """Generate pure scores plots for a specific num_languages group"""
+        # Identify all method columns (pure performance, not comparisons)
+        method_cols = [col for col in group_df.columns if col not in ['locale', 'baseline', 'avg_zero_shot', 'best_zero_shot', 'best_source', 'source_locales'] and not '_vs_' in col]
+
+        if 'locale' in group_df.columns:
+            locales = group_df['locale'].tolist()
+        else:
+            locales = group_df.index.tolist()
+
+        for method in method_cols:
+            # Create individual plot for each method
+            fig, ax = plt.subplots(figsize=(20, 8))
+
+            # Get method data
+            method_data = group_df[method].fillna(0).tolist()
+
+            # Also include baseline and all three zero-shot baselines for reference
+            baseline_series = group_df['baseline'] if 'baseline' in group_df.columns else pd.Series([0]*len(locales), index=locales)
+            avg_series = group_df['avg_zero_shot'] if 'avg_zero_shot' in group_df.columns else pd.Series([0]*len(locales), index=locales)
+            best_zero_series = group_df['best_zero_shot'] if 'best_zero_shot' in group_df.columns else pd.Series([0]*len(locales), index=locales)
+            best_source_series = group_df['best_source'] if 'best_source' in group_df.columns else pd.Series([0]*len(locales), index=locales)
+
+            baseline_data = baseline_series.reindex(locales, fill_value=0).tolist()
+            avg_zero_data = avg_series.reindex(locales, fill_value=0).tolist()
+            best_zero_data = best_zero_series.reindex(locales, fill_value=0).tolist()
+            best_source_data = best_source_series.reindex(locales, fill_value=0).tolist()
+
+            x = np.arange(len(locales))
+            width = 0.16
+
+            # Plot all baselines and method
+            bars1 = ax.bar(x - 2*width, baseline_data, width, label='Baseline', alpha=0.7, color='gray')
+            bars2 = ax.bar(x - width, avg_zero_data, width, label='Avg Zero-shot', alpha=0.7, color='lightblue')
+            bars3 = ax.bar(x, best_zero_data, width, label='Best Zero-shot', alpha=0.7, color='lightgreen')
+            bars4 = ax.bar(x + width, best_source_data, width, label='Best Source', alpha=0.7, color='lightcoral')
+            display_name = self.format_method_key_for_display(method)
+            file_method = self.format_method_key_for_filename(method)
+            bars5 = ax.bar(x + 2*width, method_data, width, label=display_name, alpha=0.8, color='royalblue')
+
+            # Add value labels on method bars
+            for i, bar in enumerate(bars5):
+                height = bar.get_height()
+                if height > 0.01:  # Only show labels for non-zero values
+                    ax.text(bar.get_x() + bar.get_width()/2., height,
+                           f'{height:.3f}', ha='center', va='bottom', fontsize=8, fontweight='bold')
+
+            ax.set_xlabel('Target Languages')
+            ax.set_ylabel('Performance Score')
+            ax.set_title(f'Pure Performance: {display_name} vs All Baselines ({num_lang} Languages)')
+            ax.set_xticks(x)
+            ax.set_xticklabels(locales, rotation=45, ha='right')
+            ax.legend()
+            ax.grid(True, alpha=0.3)
+
+            plt.tight_layout()
+            output_file = plots_dir / f"pure_scores_{file_method}_{num_lang}lang_{timestamp}.png"
+            plt.savefig(output_file, dpi=300, bbox_inches='tight')
+            plt.close()
+            print(f"  ✅ Pure scores plot for {file_method} ({num_lang} lang) saved to: {output_file}")
+
+    def generate_vs_avg_zero_plots_for_group(self, group_df: pd.DataFrame, plots_dir: Path, timestamp: str, num_lang: int):
+        """Generate vs avg zero-shot plots for a specific num_languages group"""
+        # Identify all vs_avg_zero columns
+        vs_avg_cols = [col for col in group_df.columns if col.endswith('_vs_avg_zero')]
+
+        if 'locale' in group_df.columns:
+            locales = group_df['locale'].tolist()
+        else:
+            locales = group_df.index.tolist()
+
+        for col in vs_avg_cols:
+            method_name = col.replace('_vs_avg_zero', '')
+            improvement_data = group_df[col].reindex(locales, fill_value=0).tolist()
+            display_name = self.format_method_key_for_display(method_name)
+            file_method = self.format_method_key_for_filename(method_name)
+
+            # Create individual plot for each method
+            fig, ax = plt.subplots(figsize=(16, 8))
+
+            x = np.arange(len(locales))
+            width = 0.6
+
+            bars = ax.bar(x, improvement_data, width, alpha=0.8)
+
+            # Color bars: green for positive (improvement), red for negative (degradation)
+            for i, bar in enumerate(bars):
+                height = bar.get_height()
+                if abs(height) > 0.001:  # Only show significant differences
+                    if height >= 0:
+                        bar.set_color('green')
+                        ax.text(bar.get_x() + bar.get_width()/2., height,
+                               f'+{height:.3f}', ha='center', va='bottom', fontsize=8, fontweight='bold', color='darkgreen')
+                    else:
+                        bar.set_color('lightcoral')
+                        ax.text(bar.get_x() + bar.get_width()/2., height,
+                               f'{height:.3f}', ha='center', va='top', fontsize=8, fontweight='bold', color='darkred')
+
+            # Add reference line at y=0
+            ax.axhline(y=0, color='black', linestyle='-', alpha=0.7, linewidth=2)
+
+            # Add statistics
+            improvements = [h for h in improvement_data if abs(h) > 0.001]
+            if improvements:
+                mean_improvement = np.mean(improvements)
+                positive_count = sum(1 for h in improvements if h > 0)
+                total_count = len(improvements)
+                win_rate = (positive_count / total_count) * 100
+
+                # Add text box with statistics
+                stats_text = f'Mean: {mean_improvement:+.4f}\nWin Rate: {win_rate:.1f}%\nCount: {total_count}'
+                ax.text(0.02, 0.98, stats_text, transform=ax.transAxes, fontsize=10,
+                       verticalalignment='top', bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8))
+
+            ax.set_xlabel('Target Languages')
+            ax.set_ylabel('Improvement over Average Zero-shot')
+            ax.set_title(f'{display_name} vs Average Zero-shot Baseline ({num_lang} Languages)')
+            ax.set_xticks(x)
+            ax.set_xticklabels(locales, rotation=45, ha='right')
+            ax.grid(True, alpha=0.3)
+
+            plt.tight_layout()
+            output_file = plots_dir / f"vs_avg_zero_{file_method}_{num_lang}lang_{timestamp}.png"
+            plt.savefig(output_file, dpi=300, bbox_inches='tight')
+            plt.close()
+            print(f"  ✅ vs avg zero-shot plot for {file_method} ({num_lang} lang) saved to: {output_file}")
+
+    def generate_vs_best_zero_plots_for_group(self, group_df: pd.DataFrame, plots_dir: Path, timestamp: str, num_lang: int):
+        """Generate vs best zero-shot plots for a specific num_languages group"""
+        # Identify all vs_best_zero columns
+        vs_best_cols = [col for col in group_df.columns if col.endswith('_vs_best_zero')]
+
+        if 'locale' in group_df.columns:
+            locales = group_df['locale'].tolist()
+        else:
+            locales = group_df.index.tolist()
+
+        for col in vs_best_cols:
+            method_name = col.replace('_vs_best_zero', '')
+            improvement_data = group_df[col].reindex(locales, fill_value=0).tolist()
+            display_name = self.format_method_key_for_display(method_name)
+            file_method = self.format_method_key_for_filename(method_name)
+
+            # Create individual plot for each method
+            fig, ax = plt.subplots(figsize=(16, 8))
+
+            x = np.arange(len(locales))
+            width = 0.6
+
+            bars = ax.bar(x, improvement_data, width, alpha=0.8)
+
+            # Color bars: blue for positive (improvement), orange for negative (degradation)
+            for i, bar in enumerate(bars):
+                height = bar.get_height()
+                if abs(height) > 0.001:  # Only show significant differences
+                    if height >= 0:
+                        bar.set_color('royalblue')
+                        ax.text(bar.get_x() + bar.get_width()/2., height,
+                               f'+{height:.3f}', ha='center', va='bottom', fontsize=8, fontweight='bold', color='darkblue')
+                    else:
+                        bar.set_color('orange')
+                        ax.text(bar.get_x() + bar.get_width()/2., height,
+                               f'{height:.3f}', ha='center', va='top', fontsize=8, fontweight='bold', color='darkorange')
+
+            # Add reference line at y=0
+            ax.axhline(y=0, color='black', linestyle='-', alpha=0.7, linewidth=2)
+
+            # Add statistics
+            improvements = [h for h in improvement_data if abs(h) > 0.001]
+            if improvements:
+                mean_improvement = np.mean(improvements)
+                positive_count = sum(1 for h in improvements if h > 0)
+                total_count = len(improvements)
+                win_rate = (positive_count / total_count) * 100
+
+                # Add text box with statistics
+                stats_text = f'Mean: {mean_improvement:+.4f}\nWin Rate: {win_rate:.1f}%\nCount: {total_count}'
+                ax.text(0.02, 0.98, stats_text, transform=ax.transAxes, fontsize=10,
+                       verticalalignment='top', bbox=dict(boxstyle='round', facecolor='lightblue', alpha=0.8))
+
+            ax.set_xlabel('Target Languages')
+            ax.set_ylabel('Improvement over Best Zero-shot')
+            ax.set_title(f'{display_name} vs Best Zero-shot Baseline ({num_lang} Languages)')
+            ax.set_xticks(x)
+            ax.set_xticklabels(locales, rotation=45, ha='right')
+            ax.grid(True, alpha=0.3)
+
+            plt.tight_layout()
+            output_file = plots_dir / f"vs_best_zero_{file_method}_{num_lang}lang_{timestamp}.png"
+            plt.savefig(output_file, dpi=300, bbox_inches='tight')
+            plt.close()
+            print(f"  ✅ vs best zero-shot plot for {file_method} ({num_lang} lang) saved to: {output_file}")
+
+    def generate_vs_best_source_plots_for_group(self, group_df: pd.DataFrame, plots_dir: Path, timestamp: str, num_lang: int):
+        """Generate vs best source plots for a specific num_languages group"""
+        # Identify all vs_best_source columns
+        vs_best_source_cols = [col for col in group_df.columns if col.endswith('_vs_best_source')]
+
+        if 'locale' in group_df.columns:
+            locales = group_df['locale'].tolist()
+        else:
+            locales = group_df.index.tolist()
+
+        for col in vs_best_source_cols:
+            method_name = col.replace('_vs_best_source', '')
+            improvement_data = group_df[col].reindex(locales, fill_value=0).tolist()
+            display_name = self.format_method_key_for_display(method_name)
+            file_method = self.format_method_key_for_filename(method_name)
+
+            # Create individual plot for each method
+            fig, ax = plt.subplots(figsize=(16, 8))
+
+            x = np.arange(len(locales))
+            width = 0.6
+
+            bars = ax.bar(x, improvement_data, width, alpha=0.8)
+
+            # Color bars: green for positive (improvement), red for negative (degradation)
+            for i, bar in enumerate(bars):
+                height = bar.get_height()
+                if abs(height) > 0.001:  # Only show significant differences
+                    if height >= 0:
+                        bar.set_color('forestgreen')
+                        ax.text(bar.get_x() + bar.get_width()/2., height,
+                               f'+{height:.3f}', ha='center', va='bottom', fontsize=8, fontweight='bold', color='darkgreen')
+                    else:
+                        bar.set_color('indianred')
+                        ax.text(bar.get_x() + bar.get_width()/2., height,
+                               f'{height:.3f}', ha='center', va='top', fontsize=8, fontweight='bold', color='darkred')
+
+            # Add reference line at y=0
+            ax.axhline(y=0, color='black', linestyle='-', alpha=0.7, linewidth=2)
+
+            # Add statistics
+            improvements = [h for h in improvement_data if abs(h) > 0.001]
+            if improvements:
+                mean_improvement = np.mean(improvements)
+                positive_count = sum(1 for h in improvements if h > 0)
+                total_count = len(improvements)
+                win_rate = (positive_count / total_count) * 100
+
+                # Add text box with statistics
+                stats_text = f'Mean: {mean_improvement:+.4f}\nWin Rate: {win_rate:.1f}%\nCount: {total_count}'
+                ax.text(0.02, 0.98, stats_text, transform=ax.transAxes, fontsize=10,
+                       verticalalignment='top', bbox=dict(boxstyle='round', facecolor='lightgreen', alpha=0.8))
+
+            ax.set_xlabel('Target Languages')
+            ax.set_ylabel('Improvement over Best Source')
+            ax.set_title(f'{display_name} vs Best Source Baseline ({num_lang} Languages)')
+            ax.set_xticks(x)
+            ax.set_xticklabels(locales, rotation=45, ha='right')
+            ax.grid(True, alpha=0.3)
+
+            plt.tight_layout()
+            output_file = plots_dir / f"vs_best_source_{file_method}_{num_lang}lang_{timestamp}.png"
+            plt.savefig(output_file, dpi=300, bbox_inches='tight')
+            plt.close()
+            print(f"  ✅ vs best source plot for {file_method} ({num_lang} lang) saved to: {output_file}")
 
     def _generate_group_pure_scores_plot(self, df: pd.DataFrame, num_lang: int, plots_dir: Path, timestamp: str):
         """Generate pure scores plot for a specific num_languages group"""
@@ -1059,7 +1642,8 @@ class AdvancedResultsAnalyzer:
             scores = [df.loc[locale, method] if method in df.columns and pd.notna(df.loc[locale, method]) else 0
                      for locale in locales]
 
-            bars = ax.bar(x + i * width, scores, width, label=method.replace('_', ' ').title(),
+            display_name = self.format_method_key_for_display(method)
+            bars = ax.bar(x + i * width, scores, width, label=display_name,
                          alpha=0.8, color=colors[i])
 
         ax.set_xlabel('Target Languages')
@@ -1099,7 +1683,8 @@ class AdvancedResultsAnalyzer:
                 baseline_score = df.loc[locale, 'baseline'] if 'baseline' in df.columns and pd.notna(df.loc[locale, 'baseline']) else 0
                 improvements.append(method_score - baseline_score)
 
-            bars = ax.bar(x + i * width, improvements, width, label=method.replace('_', ' ').title(),
+            display_name = self.format_method_key_for_display(method)
+            bars = ax.bar(x + i * width, improvements, width, label=display_name,
                          alpha=0.8, color=colors[i])
 
             # Color bars: green for positive, red for negative
