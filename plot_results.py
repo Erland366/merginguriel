@@ -204,6 +204,34 @@ class AdvancedResultsAnalyzer:
             return f"{base} (Merged {match.group(1)})"
         return display
 
+    def get_method_num_language_set(self, summary_df: pd.DataFrame, method: str) -> set:
+        """Return the set of num_languages associated with a given method column."""
+        counts = set()
+
+        match = re.search(r'_(\d+)lang$', method)
+        if match:
+            try:
+                counts.add(int(match.group(1)))
+            except ValueError:
+                pass
+
+        for _, row in summary_df.iterrows():
+            raw_map = row.get('num_languages_map')
+            mapping = {}
+            if isinstance(raw_map, str) and raw_map:
+                try:
+                    mapping = json.loads(raw_map)
+                except Exception:
+                    mapping = {}
+            elif isinstance(raw_map, dict):
+                mapping = raw_map
+
+            value = mapping.get(method)
+            if isinstance(value, (int, float)):
+                counts.add(int(value))
+
+        return counts
+
     def find_merge_locales(self, target_locale: str, merge_type: str = "similarity") -> List[str]:
         """Find which locales were used for merging a target language"""
         # Try to find the merge directory with the new naming convention
@@ -731,6 +759,10 @@ class AdvancedResultsAnalyzer:
         locales = summary_df['locale'].tolist()
 
         for method in method_cols:
+            num_lang_counts = self.get_method_num_language_set(summary_df, method)
+            if len(num_lang_counts) <= 1:
+                continue
+
             # Create individual plot for each method
             fig, ax = plt.subplots(figsize=(20, 8))
             display_name = self.format_method_key_for_display(method)
@@ -791,6 +823,9 @@ class AdvancedResultsAnalyzer:
 
         for col in vs_avg_cols:
             method_name = col.replace('_vs_avg_zero', '')
+            num_lang_counts = self.get_method_num_language_set(summary_df, method_name)
+            if len(num_lang_counts) <= 1:
+                continue
             improvement_data = summary_df[col].fillna(0).tolist()
             display_name = self.format_method_key_for_display(method_name)
             file_method = self.format_method_key_for_filename(method_name)
@@ -860,6 +895,9 @@ class AdvancedResultsAnalyzer:
 
         for col in vs_best_cols:
             method_name = col.replace('_vs_best_zero', '')
+            num_lang_counts = self.get_method_num_language_set(summary_df, method_name)
+            if len(num_lang_counts) <= 1:
+                continue
             improvement_data = summary_df[col].fillna(0).tolist()
             display_name = self.format_method_key_for_display(method_name)
             file_method = self.format_method_key_for_filename(method_name)
@@ -929,6 +967,9 @@ class AdvancedResultsAnalyzer:
 
         for col in vs_best_source_cols:
             method_name = col.replace('_vs_best_source', '')
+            num_lang_counts = self.get_method_num_language_set(summary_df, method_name)
+            if len(num_lang_counts) <= 1:
+                continue
             improvement_data = summary_df[col].fillna(0).tolist()
             display_name = self.format_method_key_for_display(method_name)
             file_method = self.format_method_key_for_filename(method_name)
@@ -1178,9 +1219,29 @@ class AdvancedResultsAnalyzer:
 
         for _, row in summary_df.iterrows():
             locale = row['locale']
+            raw_map = row.get('num_languages_map')
+            num_lang_map = {}
+            if isinstance(raw_map, str) and raw_map:
+                try:
+                    num_lang_map = json.loads(raw_map)
+                except Exception:
+                    num_lang_map = {}
+
             for method in methods:
                 if pd.notna(row[method]) and row[method] > 0:  # Only if method has results
-                    num_lang = self.get_num_languages_from_merged_models(locale, method)
+                    num_lang = None
+                    if method in num_lang_map:
+                        num_lang = num_lang_map[method]
+                    else:
+                        match = re.match(r'(.+?)_(\d+)lang$', method)
+                        if match:
+                            try:
+                                num_lang = int(match.group(2))
+                            except ValueError:
+                                num_lang = None
+                        if num_lang is None:
+                            num_lang = self.get_num_languages_from_merged_models(locale, method)
+
                     if num_lang:
                         locale_method_num_lang[(locale, method)] = num_lang
 

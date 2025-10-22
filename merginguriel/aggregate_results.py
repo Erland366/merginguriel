@@ -375,6 +375,18 @@ def aggregate_results(evaluation_matrix: Optional[pd.DataFrame] = None):
                 model_name
             )
 
+            # Harmonize with evaluation prefix in folder name (e.g., average_19lang_locale)
+            folder_prefix = folder.rsplit('_', 1)[0] if '_' in folder else folder
+            prefix_match = re.match(r'(?P<method>.+?)_(?P<count>\d+)lang$', folder_prefix)
+            if prefix_match:
+                experiment_variant = folder_prefix
+                if not metadata.experiment_type or metadata.experiment_type == 'unknown':
+                    metadata.experiment_type = prefix_match.group('method')
+                try:
+                    num_languages = int(prefix_match.group('count'))
+                except ValueError:
+                    pass
+
             # Calculate baseline data if evaluation matrix is available
             baseline_data = None
             if evaluation_matrix is not None and metadata.source_languages:
