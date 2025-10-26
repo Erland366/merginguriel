@@ -93,14 +93,15 @@ class IterativeTrainingOrchestrator:
     def _setup_logging(self):
         """Setup logging configuration."""
         log_level = getattr(logging, self.config.log_level.upper(), logging.INFO)
+        # Removed log file creation - only console logging now
         logging.basicConfig(
             level=log_level,
             format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
             handlers=[
-                logging.StreamHandler(sys.stdout),
-                logging.FileHandler(
-                    os.path.join(self.config.base_output_dir, "iterative_training.log")
-                )
+                logging.StreamHandler(sys.stdout)
+                # logging.FileHandler(
+                #     os.path.join(self.config.base_output_dir, "iterative_training.log")
+                # )
             ]
         )
 

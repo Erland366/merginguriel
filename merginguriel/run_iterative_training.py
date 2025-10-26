@@ -32,8 +32,9 @@ from merginguriel.similarity_utils import load_and_process_similarity
 def setup_logging(log_level: str, log_file: Optional[str] = None):
     """Setup logging configuration."""
     handlers = [logging.StreamHandler(sys.stdout)]
+
     if log_file:
-        # Ensure parent directory exists
+        # Create log file only when explicitly requested
         log_dir = os.path.dirname(log_file)
         os.makedirs(log_dir, exist_ok=True)
         handlers.append(logging.FileHandler(log_file))
@@ -628,13 +629,24 @@ def main():
         type=str,
         help="Load configuration from JSON file"
     )
+    parser.add_argument(
+        "--enable-log-file",
+        action="store_true",
+        help="Enable log file creation (default: disabled, only enabled for large-scale experiments)"
+    )
 
-  
+
     args = parser.parse_args()
 
-    # Setup logging
-    log_file = os.path.join(args.output_dir, "iterative_training.log")
-    setup_logging(args.log_level, log_file)
+    # Setup logging with conditional file creation
+    # Enable log files for large-scale experiments or when explicitly requested
+    enable_log_file = args.enable_log_file or os.environ.get("LARGE_SCALE_EXPERIMENT", "false").lower() == "true"
+
+    if enable_log_file:
+        log_file = os.path.join(args.output_dir, "iterative_training.log")
+        setup_logging(args.log_level, log_file)
+    else:
+        setup_logging(args.log_level)  # Console-only logging
 
     logger = logging.getLogger(__name__)
 

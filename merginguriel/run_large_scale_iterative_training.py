@@ -172,12 +172,17 @@ def run_iterative_training(target_lang: str, source_locales: List[str], mode: st
         start_time = time.time()
 
         # Use subprocess with real-time output logging
+        # Set environment variable to enable log files for large-scale experiments
+        env = os.environ.copy()
+        env["LARGE_SCALE_EXPERIMENT"] = "true"
+
         process = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             universal_newlines=True,
-            bufsize=1
+            bufsize=1,
+            env=env
         )
 
         # Log output in real-time

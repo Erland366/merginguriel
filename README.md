@@ -550,19 +550,16 @@ watch -n 2 nvidia-smi
 ```
 iterative_results/
 ├── en-US/
-│   ├── checkpoints/
-│   │   └── checkpoint_epoch_1.0_step_90
-│   └── training.log
+│   └── checkpoints/
+│       └── checkpoint_epoch_1.0_step_90
 ├── fr-FR/
-│   ├── checkpoints/
-│   └── training.log
+│   └── checkpoints/
 ├── merged_models/
 │   ├── merged_cycle_1/
 │   ├── merged_cycle_2/
 │   └── final_merged_model/
 ├── state_summary.json
-├── merge_history.json
-└── iterative_training.log
+└── merge_history.json
 ```
 
 ### What to Expect

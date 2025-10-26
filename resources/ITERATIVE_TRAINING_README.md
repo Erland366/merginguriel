@@ -169,10 +169,10 @@ The iterative training system creates a structured output directory:
 ```
 iterative_results/
 ├── experiment_config.json          # Configuration file
-├── iterative_training.log          # Main log file
 ├── state_summary.json              # Training state summary
 ├── merge_history.json              # Complete merge history
 ├── final_statistics.json           # Final experiment statistics
+├── iterative_training.log          # Log file (only for large-scale experiments)
 ├── en-US/                         # Per-locale directories
 │   ├── checkpoints/               # Model checkpoints
 │   ├── logs/                      # Training logs
