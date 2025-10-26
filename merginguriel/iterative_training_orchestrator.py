@@ -307,18 +307,23 @@ class IterativeTrainingOrchestrator:
                 training_args
             )
 
-            # Initialize wandb
-            wandb.init(
-                project=self.config.wandb_project,
-                entity=self.config.wandb_entity,
-                name=f"{run_name}_{training_config.locale}",
-                config={
-                    "locale": training_config.locale,
-                    "iterative_training": True,
-                    "merge_frequency": self.config.merge_config.merge_frequency,
-                    "merge_algorithm": self.config.merge_config.merge_algorithm
-                }
-            )
+            # Initialize wandb only if enabled and not disabled
+            if self.config.enable_wandb and self.config.wandb_mode != "disabled":
+                wandb_mode = self.config.wandb_mode if self.config.wandb_mode in ["online", "offline"] else "offline"
+                wandb.init(
+                    project=self.config.wandb_project,
+                    entity=self.config.wandb_entity,
+                    name=f"{run_name}_{training_config.locale}",
+                    mode=wandb_mode,
+                    save_code=False,  # Don't save code files to wandb
+                    dir=self.config.base_output_dir if wandb_mode == "offline" else None,  # Keep wandb files in output dir for offline mode
+                    config={
+                        "locale": training_config.locale,
+                        "iterative_training": True,
+                        "merge_frequency": self.config.merge_config.merge_frequency,
+                        "merge_algorithm": self.config.merge_config.merge_algorithm
+                    }
+                )
 
         except Exception as e:
             logger.warning(f"Failed to setup wandb for {training_config.locale}: {e}")

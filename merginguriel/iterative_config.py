@@ -127,9 +127,10 @@ class IterativeOrchestratorConfig:
     pin_memory: bool = True
 
     # Monitoring and logging
-    enable_wandb: bool = True
+    enable_wandb: bool = False  # Disabled by default for cleaner runs
     wandb_project: str = "MergingUriel-Iterative"
     wandb_entity: Optional[str] = None
+    wandb_mode: str = "disabled"  # "online", "offline", "disabled"
     log_frequency: int = 100  # steps
 
     # Recovery and robustness
@@ -225,6 +226,7 @@ class IterativeOrchestratorConfig:
                 "enable_wandb": self.enable_wandb,
                 "wandb_project": self.wandb_project,
                 "wandb_entity": self.wandb_entity,
+                "wandb_mode": self.wandb_mode,
                 "log_frequency": self.log_frequency
             },
             "recovery": {

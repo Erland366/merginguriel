@@ -157,6 +157,8 @@ def run_iterative_training(target_lang: str, source_locales: List[str], mode: st
         "--experiment-name", f"iterative_{mode}_{target_lang}",
         "--sequential-training",  # Always use sequential to prevent OOM
         "--enable-auto-recovery",  # Enable recovery for long-running experiments
+        "--enable-wandb",  # Enable wandb for large-scale experiments
+        "--wandb-mode", "offline",  # Keep wandb files local for large-scale experiments
         "--save-config"  # Save configuration for reproducibility
     ]
 

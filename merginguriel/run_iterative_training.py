@@ -143,6 +143,7 @@ def create_orchestrator_config_from_args(args) -> IterativeOrchestratorConfig:
         enable_wandb=args.enable_wandb,
         wandb_project=args.wandb_project,
         wandb_entity=args.wandb_entity,
+        wandb_mode=args.wandb_mode,
         log_frequency=args.log_frequency,
         enable_auto_recovery=args.enable_auto_recovery,
         max_merge_attempts=args.max_merge_attempts,
@@ -566,6 +567,13 @@ def main():
         "--wandb-entity",
         type=str,
         help="Wandb entity name"
+    )
+    parser.add_argument(
+        "--wandb-mode",
+        type=str,
+        default="disabled",
+        choices=["online", "offline", "disabled"],
+        help="Wandb mode: online (sync to cloud), offline (local only), disabled (no logging)"
     )
     parser.add_argument(
         "--log-frequency",
