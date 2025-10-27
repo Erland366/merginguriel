@@ -197,7 +197,12 @@ def parse_experiment_metadata(folder_name: str,
 
     if model_path:
         base_name = os.path.basename(os.path.normpath(model_path))
-        merge_match = re.match(r'([a-zA-Z0-9]+)_merge_([a-z]{2}-[A-Z]{2})(?:_(\d+)merged)?', base_name)
+        # Handle new naming convention: {method}_{similarity_type}_merge_{locale}_{num}merged
+        # And legacy convention: {method}_merge_{locale}_{num}merged
+        merge_match = re.match(r'([a-zA-Z0-9]+)_(?:URIEL|REAL)_merge_([a-z]{2}-[A-Z]{2})(?:_(\d+)merged)?', base_name)
+        if not merge_match:
+            # Fallback to legacy naming convention
+            merge_match = re.match(r'([a-zA-Z0-9]+)_merge_([a-z]{2}-[A-Z]{2})(?:_(\d+)merged)?', base_name)
         if merge_match:
             experiment_type = merge_match.group(1)
             locale = merge_match.group(2)
@@ -213,23 +218,46 @@ def parse_experiment_metadata(folder_name: str,
 
     if not locale:
         # Handle naming like method_5lang_locale or method_locale
-        num_lang_match = re.match(r'(.+?)_(\d+)lang_(.+)', folder_name)
+        # Also handle new naming: method_URIEL_5lang_locale or method_REAL_5lang_locale
+        # And new merge naming: method_URIEL_merge_locale_num or method_REAL_merge_locale_num
+        num_lang_match = re.match(r'([a-zA-Z0-9]+)_(?:URIEL|REAL)_(\d+)lang_(.+)', folder_name)
+        if not num_lang_match:
+            num_lang_match = re.match(r'([a-zA-Z0-9]+)_(?:URIEL|REAL)_merge_([a-z]{2}-[A-Z]{2})(?:_(\d+)merged)?', folder_name)
+        if not num_lang_match:
+            # Fallback to legacy naming
+            num_lang_match = re.match(r'(.+?)_(\d+)lang_(.+)', folder_name)
+        if not num_lang_match:
+            num_lang_match = re.match(r'([a-zA-Z0-9]+)_merge_([a-z]{2}-[A-Z]{2})(?:_(\d+)merged)?', folder_name)
+
         if num_lang_match:
             experiment_type = num_lang_match.group(1)
-            try:
-                num_languages = int(num_lang_match.group(2))
-            except ValueError:
-                num_languages = None
-            locale = num_lang_match.group(3)
+            # Check if this is a merge pattern or lang pattern
+            if 'merge' in folder_name:
+                locale = num_lang_match.group(2)
+                if num_lang_match.group(3):
+                    try:
+                        num_languages = int(num_lang_match.group(3))
+                    except ValueError:
+                        num_languages = None
+            else:
+                try:
+                    num_languages = int(num_lang_match.group(2))
+                except ValueError:
+                    num_languages = None
+                locale = num_lang_match.group(3)
         elif '_' in folder_name:
             parts = folder_name.split('_')
             if len(parts[-1]) == 5 and '-' in parts[-1]:
                 locale = parts[-1]
-                experiment_type = '_'.join(parts[:-1]) if len(parts) > 1 else folder_name
+                # Remove similarity type from experiment type if present
+                experiment_type_parts = [p for p in parts[:-1] if p not in ['URIEL', 'REAL']]
+                experiment_type = '_'.join(experiment_type_parts) if len(experiment_type_parts) > 0 else folder_name
             else:
                 # Fallback to last token as locale even if it does not exactly match xx-YY
                 locale = parts[-1]
-                experiment_type = '_'.join(parts[:-1]) if len(parts) > 1 else folder_name
+                # Remove similarity type from experiment type if present
+                experiment_type_parts = [p for p in parts[:-1] if p not in ['URIEL', 'REAL']]
+                experiment_type = '_'.join(experiment_type_parts) if len(experiment_type_parts) > 0 else folder_name
         else:
             locale = folder_name
             experiment_type = folder_name

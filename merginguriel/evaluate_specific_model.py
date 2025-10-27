@@ -54,18 +54,11 @@ def evaluate_specific_model(model_name: str, locale: str = "cy-GB", eval_folder:
         # Load model
         device = "cuda" if torch.cuda.is_available() else "cpu"
         logger.info(f"Using device: {device}")
-        try:
-            model = AutoModelForSequenceClassification.from_pretrained(
-                model_name,
-                device_map=("auto" if device == "cuda" else None),
-                torch_dtype=(torch.bfloat16 if device == "cuda" else None),
-            )
-        except Exception as e:
-            logger.warning(f"Auto device mapping failed ({e}); loading on CPU then moving to {device}")
-            model = AutoModelForSequenceClassification.from_pretrained(
-                model_name,
-                low_cpu_mem_usage=True,
-            ).to(device)
+        model = AutoModelForSequenceClassification.from_pretrained(
+            model_name,
+            device_map=("auto" if device == "cuda" else None),
+            torch_dtype=(torch.bfloat16 if device == "cuda" else None),
+        )
         logger.info("✓ Model loaded")
 
         # Load test data

@@ -34,9 +34,15 @@ try:
 except Exception:
     merging_methods_dict = {}
 
-def get_all_locales_from_similarity_matrix():
+def get_all_locales_from_similarity_matrix(similarity_type="URIEL"):
     """Extract all unique locales from the similarity matrix."""
-    similarity_matrix_path = os.path.join(REPO_ROOT, "sparsed_language_similarity_matrix_unified.csv")
+    if similarity_type == "URIEL":
+        similarity_matrix_path = os.path.join(REPO_ROOT, "language_similarity_matrix_unified.csv")
+    elif similarity_type == "REAL":
+        similarity_matrix_path = os.path.join(REPO_ROOT, "nxn_results", "nxn_eval_20251027_103544", "evaluation_matrix.csv")
+    else:
+        raise ValueError(f"Unknown similarity type: {similarity_type}")
+
     df = pd.read_csv(similarity_matrix_path, index_col=0)
     # Return all locale codes from the index (and columns, they should be the same)
     locales = sorted(df.index.tolist())
@@ -169,9 +175,10 @@ def run_experiment_for_locale(
             merged_models_dir = os.path.join(REPO_ROOT, "merged_models")
             merged_model_path = None
 
-            # Look for the directory that matches our pattern (e.g., similarity_merge_sq-AL_5merged)
+            # Look for the directory that matches our pattern (e.g., similarity_URIEL_merge_sq-AL_5merged)
             for entry in os.listdir(merged_models_dir):
-                if entry.startswith(f"{mode}_merge_{locale}_") and entry.endswith("merged"):
+                if (entry.startswith(f"{mode}_URIEL_merge_{locale}_") or
+                    entry.startswith(f"{mode}_REAL_merge_{locale}_")) and entry.endswith("merged"):
                     merged_model_path = os.path.join(merged_models_dir, entry)
                     break
 
@@ -207,6 +214,8 @@ def main():
                        help="Top-K languages to include in merges that auto-select sources")
     parser.add_argument("--similarity-source", type=str, choices=["sparse","dense"], default="dense",
                        help="Use precomputed sparse CSV or compute dense similarities on-the-fly")
+    parser.add_argument("--similarity-type", type=str, choices=["URIEL","REAL"], default="URIEL",
+                       help="Type of similarity matrix to use: URIEL (linguistic features) or REAL (empirical evaluation results)")
     parser.add_argument("--top-k", type=int, default=20,
                        help="Top-K neighbors per language for on-the-fly similarity")
     parser.add_argument("--sinkhorn-iters", type=int, default=20,
@@ -232,7 +241,7 @@ def main():
     
     args = parser.parse_args()
     
-    all_locales = get_all_locales_from_similarity_matrix()
+    all_locales = get_all_locales_from_similarity_matrix(args.similarity_type)
 
     if args.list_modes:
         if merging_methods_dict:
@@ -287,6 +296,7 @@ def main():
     merge_extra_args = [
         "--num-languages", str(args.num_languages),
         "--similarity-source", args.similarity_source,
+        "--similarity-type", args.similarity_type,
         "--top-k", str(args.top_k),
         "--sinkhorn-iters", str(args.sinkhorn_iters),
         "--dataset-name", args.dataset_name,

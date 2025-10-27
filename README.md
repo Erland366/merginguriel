@@ -41,7 +41,8 @@ The system supports multiple pre-trained models as base architectures:
 - `submodules/auto_merge_llm/auto_merge_llm/methods/fisher_dataset.py`: dataset-enabled Fisher wrapper (builds shared dataloader from locales)
 - `submodules/auto_merge_llm/auto_merge_llm/methods/fisher.py`: full Fisher core (gradient-based merging)
 - `submodules/auto_merge_llm/auto_merge_llm/methods/__init__.py`: merging method registry
-- `sparsed_language_similarity_matrix_unified.csv`: cosine similarities between locales
+- `language_similarity_matrix_unified.csv`: URIEL linguistic feature similarities between locales
+- `nxn_results/nxn_eval_20251027_103544/evaluation_matrix.csv`: empirical cross-lingual evaluation results
 - `merginguriel/`: utilities and evaluation
 - `haryos_model/`: trained models with subdirectories by base model:
   - `haryos_model/xlm-roberta-base_massive_k_{locale}/` (default)
@@ -154,7 +155,7 @@ Flow overview:
 
 **Build/Refresh Similarity Matrices**
 - Generate a dense and sparsified+Sinkhorn matrix with MASSIVE locales as indices/columns:
-  - `python merginguriel/generate_sparse_similarity_unified.py --k 20 --iterations 20 --feature-type syntax_knn --locales-csv model_mapping_unified.csv --out-dense language_similarity_matrix_unified.csv --out-sparse sparsed_language_similarity_matrix_unified.csv`
+  - `python merginguriel/generate_sparse_similarity_unified.py --k 20 --iterations 20 --feature-type syntax_knn --locales-csv model_mapping_unified.csv --out-dense language_similarity_matrix_unified.csv`
 - Notes:
   - Uses lang2vec features; ensure `lang2vec` is available in `submodules/lang2vec`.
   - `--k 20` preserves top-20 neighbors per language; you can select any `--num-languages <= 20` at runtime.

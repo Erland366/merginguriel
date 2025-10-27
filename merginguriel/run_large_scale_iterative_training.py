@@ -50,9 +50,15 @@ from merginguriel.similarity_utils import load_and_process_similarity
 # Loguru logger imported from merginguriel package
 
 
-def get_all_locales_from_similarity_matrix():
+def get_all_locales_from_similarity_matrix(similarity_type="URIEL"):
     """Extract all unique locales from the similarity matrix."""
-    similarity_matrix_path = os.path.join(REPO_ROOT, "sparsed_language_similarity_matrix_unified.csv")
+    if similarity_type == "URIEL":
+        similarity_matrix_path = os.path.join(REPO_ROOT, "language_similarity_matrix_unified.csv")
+    elif similarity_type == "REAL":
+        similarity_matrix_path = os.path.join(REPO_ROOT, "nxn_results", "nxn_eval_20251027_103544", "evaluation_matrix.csv")
+    else:
+        raise ValueError(f"Unknown similarity type: {similarity_type}")
+
     df = pd.read_csv(similarity_matrix_path, index_col=0)
     locales = sorted(df.index.tolist())
     return locales

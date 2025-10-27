@@ -101,7 +101,7 @@ class AdvancedResultsAnalyzer:
 
         # Look for experiment directories
         exp_patterns = [
-            "*_merge_*",  # similarity_merge_sq-AL, average_merge_sq-AL, etc.
+            "*_merge_*",  # similarity_merge_sq-AL, average_merge_sq-AL, similarity_URIEL_merge_sq-AL_5merged, etc.
             "ensemble_*_*",  # ensemble_majority_sq-AL, ensemble_uriel_logits_sq-AL, etc.
             "*baseline_*"  # baseline experiments
         ]
@@ -147,8 +147,10 @@ class AdvancedResultsAnalyzer:
             return 'ensemble'
         elif 'merge' in dir_name:
             # Extract merge method (similarity, average, ties, task_arithmetic, etc.)
+            # Handle new naming convention: method_URIEL_merge_locale_num or method_REAL_merge_locale_num
             for method in ['similarity', 'average', 'ties', 'task_arithmetic', 'slerp', 'regmean', 'dare', 'fisher']:
-                if method in dir_name:
+                # Look for method at the start of directory name or before similarity type
+                if re.match(rf'^{method}(_(?:URIEL|REAL))?_merge_', dir_name) or f'_{method}_' in dir_name:
                     return f'merge_{method}'
             return 'merge_unknown'
         else:
@@ -238,14 +240,26 @@ class AdvancedResultsAnalyzer:
         merge_dir = None
         merge_details_file = None
 
-        # Look for directories that match the pattern: {merge_type}_merge_{target_locale}_{N}merged
-        for exp_dir in self.merged_models_path.glob(f"{merge_type}_merge_{target_locale}_*merged"):
-            if exp_dir.is_dir():
-                merge_dir = exp_dir
-                merge_details_file = merge_dir / "merge_details.txt"
+        # Look for directories that match the pattern: {merge_type}_URIEL_merge_{target_locale}_{N}merged or {merge_type}_REAL_merge_{target_locale}_{N}merged
+        for similarity_type in ['URIEL', 'REAL']:
+            for exp_dir in self.merged_models_path.glob(f"{merge_type}_{similarity_type}_merge_{target_locale}_*merged"):
+                if exp_dir.is_dir():
+                    merge_dir = exp_dir
+                    merge_details_file = merge_dir / "merge_details.txt"
+                    break
+            if merge_dir:
                 break
 
         # Fallback to old naming convention if new one not found
+        if merge_dir is None:
+            # Look for legacy {merge_type}_merge_{target_locale}_{N}merged
+            for exp_dir in self.merged_models_path.glob(f"{merge_type}_merge_{target_locale}_*merged"):
+                if exp_dir.is_dir():
+                    merge_dir = exp_dir
+                    merge_details_file = merge_dir / "merge_details.txt"
+                    break
+
+        # Final fallback to very old naming convention
         if merge_dir is None:
             merge_dir = self.merged_models_path / f"{merge_type}_merge_{target_locale}"
             merge_details_file = merge_dir / "merge_details.txt"
@@ -286,10 +300,16 @@ class AdvancedResultsAnalyzer:
     def extract_num_languages_from_details(self, target_locale: str, merge_type: str) -> Optional[int]:
         """Extract number of languages from merge_details.txt files"""
         # Try to find merge_details.txt for this specific merge type and target locale
-        merge_patterns = [
+        # Support new naming convention with similarity type
+        merge_patterns = []
+        for similarity_type in ['URIEL', 'REAL']:
+            merge_patterns.extend([
+                f"merged_models/{merge_type}_{similarity_type}_merge_{target_locale}_*merged/merge_details.txt",
+            ])
+        merge_patterns.extend([
             f"merged_models/{merge_type}_merge_{target_locale}_*merged/merge_details.txt",
             f"merged_models/{merge_type}_merge_{target_locale}/merge_details.txt",
-        ]
+        ])
 
         merge_details_file = None
         for pattern in merge_patterns:
@@ -315,15 +335,26 @@ class AdvancedResultsAnalyzer:
     def extract_source_locales_from_details(self, target_locale: str) -> List[str]:
         """Extract source locales from merge_details.txt files for any merge type"""
         # Try to find merge_details.txt from any merge type for this target locale
-        # Support both new naming convention (with merge count) and old naming
-        merge_patterns = [
+        # Support both new naming convention (with similarity type and merge count) and old naming
+        merge_patterns = []
+
+        # New naming with similarity type
+        for similarity_type in ['URIEL', 'REAL']:
+            merge_patterns.extend([
+                f"merged_models/*_{similarity_type}_merge_{target_locale}_*merged/merge_details.txt",
+                f"merged_models/similarity_{similarity_type}_merge_{target_locale}_*merged/merge_details.txt",
+                f"merged_models/average_{similarity_type}_merge_{target_locale}_*merged/merge_details.txt",
+            ])
+
+        # Legacy naming patterns
+        merge_patterns.extend([
             f"merged_models/*merge_{target_locale}_*merged/merge_details.txt",
             f"merged_models/similarity_merge_{target_locale}_*merged/merge_details.txt",
             f"merged_models/average_merge_{target_locale}_*merged/merge_details.txt",
             f"merged_models/similarity_merge_{target_locale}/merge_details.txt",
             f"merged_models/average_merge_{target_locale}/merge_details.txt",
             f"merged_models/*merge_{target_locale}/merge_details.txt"
-        ]
+        ])
 
         for pattern in merge_patterns:
             merge_details_files = list(self.results_dir.glob(pattern))
@@ -1190,13 +1221,23 @@ class AdvancedResultsAnalyzer:
         # Look for merged model directories for this locale and method
         merged_models_path = self.results_dir / "merged_models"
 
-        # Pattern: {method}_merge_{locale}_{num}merged
+        # Pattern: {method}_{similarity_type}_merge_{locale}_{num}merged or {method}_merge_{locale}_{num}merged
         base_method = method
         match = re.match(r'(.+?)_(\d+)lang$', method)
         if match:
             base_method = match.group(1)
-        pattern = f"{base_method}_merge_{locale}_(\\d+)merged"
 
+        # Try new naming convention first
+        for similarity_type in ['URIEL', 'REAL']:
+            pattern = f"{base_method}_{similarity_type}_merge_{locale}_(\\d+)merged"
+            for entry in merged_models_path.iterdir():
+                if entry.is_dir():
+                    match = re.search(pattern, entry.name)
+                    if match:
+                        return int(match.group(1))
+
+        # Fallback to legacy naming convention
+        pattern = f"{base_method}_merge_{locale}_(\\d+)merged"
         for entry in merged_models_path.iterdir():
             if entry.is_dir():
                 match = re.search(pattern, entry.name)

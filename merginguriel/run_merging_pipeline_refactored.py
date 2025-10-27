@@ -55,6 +55,7 @@ class MergeConfig:
     base_model: str = "xlm-roberta-base"
     # Similarity matrix options
     similarity_source: str = "sparse"  # 'sparse' (precomputed) or 'dense' (on-the-fly)
+    similarity_type: str = "URIEL"  # 'URIEL' (linguistic features) or 'REAL' (empirical evaluation results)
     top_k: int = 20
     sinkhorn_iters: int = 20
     # Fisher/dataset options
@@ -129,10 +130,16 @@ class SimilarityWeightCalculator(WeightCalculator):
     def calculate_weights(self, config: MergeConfig) -> Tuple[Dict[str, ModelInfo], ModelInfo]:
         target_lang = config.target_lang
         print(f"\n--- Computing Similarity Weights for {target_lang} ---")
-        print("Using on-the-fly similarity computation with top-k + Sinkhorn normalization")
+        print(f"Using {config.similarity_type} similarity matrix with top-k + Sinkhorn normalization")
 
-        # Use the new similarity utilities directly
-        similarity_matrix_path = os.path.join(project_root, "language_similarity_matrix_unified.csv")
+        # Choose similarity matrix based on type
+        if config.similarity_type == "URIEL":
+            similarity_matrix_path = os.path.join(project_root, "language_similarity_matrix_unified.csv")
+        elif config.similarity_type == "REAL":
+            # Use the latest NxN evaluation results
+            similarity_matrix_path = os.path.join(project_root, "nxn_results", "nxn_eval_20251027_103544", "evaluation_matrix.csv")
+        else:
+            raise ValueError(f"Unknown similarity type: {config.similarity_type}")
 
         similar_languages = load_and_process_similarity(
             similarity_matrix_path, target_lang, config.num_languages,
@@ -779,8 +786,9 @@ class OutputManager:
         """Save the merged model and merge details."""
         # Get the number of models merged
         num_models = len(models_and_weights)
+        # Include similarity type in the naming convention
         output_dir = os.path.join(self.project_root, "merged_models",
-                                 f"{config.mode}_merge_{config.target_lang}_{num_models}merged")
+                                 f"{config.mode}_{config.similarity_type}_merge_{config.target_lang}_{num_models}merged")
 
         os.makedirs(output_dir, exist_ok=True)
         merged_model.save_pretrained(output_dir)
@@ -892,6 +900,7 @@ def create_config_from_args(args) -> MergeConfig:
         num_fisher_examples=args.num_fisher_examples,
         base_model=args.base_model,
         similarity_source=args.similarity_source,
+        similarity_type=args.similarity_type,
         top_k=args.top_k,
         sinkhorn_iters=args.sinkhorn_iters,
         fisher_data_mode=args.fisher_data_mode,
@@ -972,6 +981,13 @@ def main():
         choices=["sparse", "dense"],
         default="sparse",
         help="Use precomputed sparse CSV or compute dense similarities on-the-fly with top-k + Sinkhorn"
+    )
+    parser.add_argument(
+        "--similarity-type",
+        type=str,
+        choices=["URIEL", "REAL"],
+        default="URIEL",
+        help="Type of similarity matrix to use: URIEL (linguistic features) or REAL (empirical evaluation results)"
     )
     parser.add_argument(
         "--top-k",
