@@ -53,7 +53,7 @@ class MergeConfig:
     label_column: str = "label"
     num_fisher_examples: int = 100
     base_model: str = "xlm-roberta-base"
-    # Similarity matrix options
+        # Similarity matrix options
     similarity_source: str = "sparse"  # 'sparse' (precomputed) or 'dense' (on-the-fly)
     similarity_type: str = "URIEL"  # 'URIEL' (linguistic features) or 'REAL' (empirical evaluation results)
     top_k: int = 20

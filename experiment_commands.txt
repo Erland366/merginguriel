@@ -1,0 +1,47 @@
+# Large-Scale Experiment Commands with REAL Similarity Type
+# ================================================
+
+# Command 1: XLM-RoBERTa-Base Models
+# =================================
+source .venv/bin/activate
+python merginguriel/run_large_scale_experiment.py \
+  --similarity-type REAL \
+  --models-root haryos_model \
+  --num-languages 5 \
+  --cleanup-after-eval
+
+# Command 2: XLM-RoBERTa-Large Models
+# ===================================
+source .venv/bin/activate
+python merginguriel/run_large_scale_experiment.py \
+  --similarity-type REAL \
+  --models-root haryos_model_large \
+  --num-languages 5 \
+  --cleanup-after-eval
+
+# Optional: Core Methods Only (Faster Run)
+# =====================================
+# For Base Models:
+source .venv/bin/activate
+python merginguriel/run_large_scale_experiment.py \
+  --similarity-type REAL \
+  --models-root haryos_model \
+  --modes baseline similarity average fisher \
+  --num-languages 5 \
+  --cleanup-after-eval
+
+# For Large Models:
+source .venv/bin/activate
+python merginguriel/run_large_scale_experiment.py \
+  --similarity-type REAL \
+  --models-root haryos_model_large \
+  --modes baseline similarity average fisher \
+  --num-languages 5 \
+  --cleanup-after-eval
+
+# Expected Results:
+# ================
+# Base Models: similarity_roberta-base_REAL_merged5_...png
+# Large Models: similarity_roberta-large_REAL_merged5_...png
+# Storage Saved: ~1.2TB with cleanup enabled
+# Estimated Runtime: 15-20 hours per command

@@ -48,10 +48,17 @@ def get_all_locales_from_similarity_matrix(similarity_type="URIEL"):
     locales = sorted(df.index.tolist())
     return locales
 
-def get_model_for_locale(locale):
-    """Get the model path for a specific locale using consolidated directory structure."""
-    # Use the consolidated model directory structure
-    model_path = os.path.join(REPO_ROOT, f"haryos_model/xlm-roberta-base_massive_k_{locale}")
+def get_model_for_locale(locale, models_root="haryos_model"):
+    """Get the model path for a specific locale using specified model directory."""
+    # Try to detect model size from directory name (base/large)
+    model_size = "base"  # default
+    if "large" in models_root.lower():
+        model_size = "large"
+    elif "base" in models_root.lower():
+        model_size = "base"
+
+    # Use consistent naming pattern: {models_root}/xlm-roberta-{size}_massive_k_{locale}
+    model_path = os.path.join(REPO_ROOT, f"{models_root}/xlm-roberta-{model_size}_massive_k_{locale}")
 
     # Check if the model directory exists
     if not os.path.exists(model_path):
@@ -59,6 +66,7 @@ def get_model_for_locale(locale):
         return None
 
     return model_path
+
 
 def run_merge(mode: str, target_lang: str, extra_args: List[str]) -> bool:
     """Run the merging pipeline for a specific mode and target language."""
@@ -146,14 +154,16 @@ def run_experiment_for_locale(
     locale: str,
     modes: List[str],
     merge_extra_args: List[str],
+    cleanup_after_eval: bool = False,
+    models_root: str = "haryos_model",
 ):
     """Run the requested experiment modes for a single locale."""
     print(f"\n{'='*60}")
-    print(f"Running experiment for locale: {locale}")
+    print(f"Running experiment for locale: {locale} (models: {models_root})")
     print(f"{'='*60}")
 
     # Get model path for this locale
-    base_model_path = get_model_for_locale(locale)
+    base_model_path = get_model_for_locale(locale, models_root)
 
     if not base_model_path:
         print(f"Skipping {locale} - no model found")
@@ -164,7 +174,7 @@ def run_experiment_for_locale(
     for mode in modes:
         if mode == "baseline":
             print(f"\n--- Baseline Evaluation for {locale} ---")
-            success = run_evaluation(base_model_path, locale, "baseline")
+            success = run_evaluation(base_model_path, locale, mode)
             results['baseline'] = success
             continue
 
@@ -185,6 +195,16 @@ def run_experiment_for_locale(
             if merged_model_path and os.path.exists(merged_model_path):
                 eval_success = run_evaluation(merged_model_path, locale, mode)
                 results[mode] = eval_success
+
+                # Clean up merged model after successful evaluation if requested
+                if cleanup_after_eval and eval_success:
+                    try:
+                        import shutil
+                        print(f"🗑️  Cleaning up merged model: {merged_model_path}")
+                        shutil.rmtree(merged_model_path)
+                        print(f"✅ Successfully deleted {merged_model_path}")
+                    except Exception as e:
+                        print(f"⚠️  Failed to delete {merged_model_path}: {e}")
             else:
                 print(f"❌ Could not find merged model directory for {mode} merge of {locale}")
                 results[mode] = False
@@ -238,7 +258,11 @@ def main():
                        help="Max sequence length for Fisher tokenization")
     parser.add_argument("--preset", type=str, choices=["none", "fairness", "target"], default="none",
                         help="Convenience presets for Fisher config: fairness = sources-only + equal preweights; target = target-only + URIEL preweights")
-    
+    parser.add_argument("--cleanup-after-eval", action="store_true",
+                        help="Delete merged model files after evaluation to save storage space")
+    parser.add_argument("--models-root", type=str, default="haryos_model",
+                        help="Root directory containing models (default: haryos_model)")
+
     args = parser.parse_args()
     
     all_locales = get_all_locales_from_similarity_matrix(args.similarity_type)
@@ -311,7 +335,7 @@ def main():
 
     for i, locale in enumerate(locales):
         print(f"\nProcessing locale {i+1}/{len(locales)}: {locale}")
-        results = run_experiment_for_locale(locale, args.modes, merge_extra_args)
+        results = run_experiment_for_locale(locale, args.modes, merge_extra_args, args.cleanup_after_eval, args.models_root)
         
         overall_results[locale] = results
         

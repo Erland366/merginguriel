@@ -61,6 +61,42 @@ def evaluate_specific_model(model_name: str, locale: str = "cy-GB", eval_folder:
         )
         logger.info("✓ Model loaded")
 
+        # Extract model family name from HuggingFace model
+        def get_model_family_name(model_path):
+            """Extract model family name from HuggingFace model."""
+            try:
+                from transformers import AutoConfig
+                config = AutoConfig.from_pretrained(model_path)
+
+                # Extract model family from various sources
+                if hasattr(config, 'name_or_path'):
+                    model_name = config.name_or_path
+                elif hasattr(config, '_name_or_path'):
+                    model_name = config._name_or_path
+                elif hasattr(config, 'model_type'):
+                    model_name = config.model_type
+                else:
+                    model_name = os.path.basename(model_path)
+
+                # Clean up the model name
+                if '/' in model_name:
+                    model_name = model_name.split('/')[-1]
+
+                # Remove common suffixes
+                for suffix in ['-uncased', '-cased', '-v1', '-v2']:
+                    model_name = model_name.replace(suffix, '')
+
+                return model_name
+            except:
+                # Fallback to directory name parsing
+                dir_name = os.path.basename(model_path)
+                if '_' in dir_name:
+                    return dir_name.split('_')[0]
+                return dir_name
+
+        model_family_name = get_model_family_name(model_name)
+        logger.info(f"✓ Detected model family: {model_family_name}")
+
         # Load test data
         dataset = load_dataset("AmazonScience/massive", massive_locale, split="test", trust_remote_code=True)
         logger.info(f"✓ Loaded {len(dataset)} test examples")
@@ -140,6 +176,7 @@ def evaluate_specific_model(model_name: str, locale: str = "cy-GB", eval_folder:
             'evaluation_info': {
                 'timestamp': datetime.now().isoformat(),
                 'model_name': model_name,
+                'model_family_name': model_family_name,
                 'locale': locale,
                 'massive_locale': massive_locale,
                 'dataset': 'AmazonScience/massive',

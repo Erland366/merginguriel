@@ -42,11 +42,14 @@ class AdvancedResultsAnalyzer:
     enhanced_analysis.py and comprehensive_analysis.py
     """
 
-    def __init__(self, results_dir: str = ".", num_languages_filter: Optional[List[int]] = None):
+    def __init__(self, results_dir: str = ".", num_languages_filter: Optional[List[int]] = None,
+                 similarity_types: Optional[List[str]] = None):
         self.results_dir = Path(results_dir)
         self.merged_models_path = self.results_dir / "merged_models"
         self.ensemble_results_path = self.results_dir / "ensemble_results"
+        self.experiment_results_dir = self.results_dir / "results"  # Directory containing experiment results
         self.num_languages_filter = num_languages_filter
+        self.similarity_types = similarity_types  # Filter by similarity type: ['URIEL'], ['REAL'], or None for all
 
         # Data storage
         self.results_dfs = {}
@@ -99,18 +102,24 @@ class AdvancedResultsAnalyzer:
         """Load results from individual experiment directories"""
         print("Loading experiment directories...")
 
-        # Look for experiment directories
+        # Look for experiment directories in the results/ subdirectory
+        # Patterns to match the actual directory naming conventions
         exp_patterns = [
-            "*_merge_*",  # similarity_merge_sq-AL, average_merge_sq-AL, similarity_URIEL_merge_sq-AL_5merged, etc.
-            "ensemble_*_*",  # ensemble_majority_sq-AL, ensemble_uriel_logits_sq-AL, etc.
-            "*baseline_*"  # baseline experiments
+            "*_*lang_*",  # average_19lang_af-ZA, similarity_5lang_sq-AL, etc.
+            "ensemble_*",  # ensemble_majority_sq-AL, ensemble_uriel_logits_sq-AL, etc.
+            "baseline_*",  # baseline_af-ZA, baseline_sq-AL, etc.
+            "*_merge_*",  # Legacy pattern: similarity_merge_sq-AL, average_merge_sq-AL, etc.
         ]
 
         for pattern in exp_patterns:
-            for exp_dir in self.results_dir.glob(pattern):
+            for exp_dir in self.experiment_results_dir.glob(pattern):
                 if exp_dir.is_dir():
                     result = self.load_experiment_result(exp_dir)
                     if result:
+                        # Apply similarity type filter if specified
+                        if self.similarity_types is not None:
+                            if result['similarity_type'] not in self.similarity_types:
+                                continue
                         self.experiment_results[exp_dir.name] = result
 
         print(f"Loaded {len(self.experiment_results)} experiment results")
@@ -129,6 +138,7 @@ class AdvancedResultsAnalyzer:
             return {
                 'directory': exp_dir.name,
                 'type': self.detect_experiment_type(exp_dir.name),
+                'similarity_type': self.extract_similarity_type(exp_dir.name),
                 'target_locale': data.get('target_locale'),
                 'accuracy': data.get('performance', {}).get('accuracy', 0),
                 'baseline_accuracy': data.get('performance', {}).get('baseline_accuracy', 0),
@@ -155,6 +165,20 @@ class AdvancedResultsAnalyzer:
             return 'merge_unknown'
         else:
             return 'unknown'
+
+    def extract_similarity_type(self, dir_name: str) -> str:
+        """Extract similarity type (URIEL/REAL) from directory name"""
+        # Check for new naming convention with similarity type
+        match = re.search(r'_(URIEL|REAL)_', dir_name)
+        if match:
+            return match.group(1)
+
+        # For legacy naming without similarity type, assume URIEL
+        # This handles old experiments that don't have the similarity type prefix
+        if 'merge' in dir_name or any(method in dir_name for method in ['similarity', 'average', 'ties', 'task_arithmetic', 'slerp', 'regmean', 'dare', 'fisher']):
+            return 'URIEL'
+
+        return 'unknown'
 
     def load_merge_details(self, exp_dir: Path) -> Optional[Dict]:
         """Load merge details from merge_details.txt file"""
@@ -189,22 +213,114 @@ class AdvancedResultsAnalyzer:
             print(f"Error loading merge details from {exp_dir}: {e}")
             return None
 
-    def format_method_key_for_filename(self, method_key: str) -> str:
-        """Convert method keys like similarity_2lang to similarity_merged2 for file names."""
+    def format_method_key_for_filename(self, method_key: str, model_family: str = None, similarity_type: str = None) -> str:
+        """Convert method keys like similarity_roberta-base_2lang to similarity_roberta-base_REAL_merged2 for file names."""
         match = re.search(r'_(\d+)lang$', method_key)
         if match:
             base = method_key[:match.start()]
-            return f"{base}_merged{match.group(1)}"
-        return method_key
+            # Build the filename with model family and similarity type
+            parts = [base]
+            if model_family and model_family != 'unknown':
+                parts.append(model_family)
+            if similarity_type and similarity_type != 'unknown':
+                parts.append(similarity_type)
+            parts.append(f"merged{match.group(1)}")
+            return "_".join(parts)
 
-    def format_method_key_for_display(self, method_key: str) -> str:
-        """Friendly display name for method keys with optional merged count."""
+        # If no lang suffix, include model family and similarity type
+        parts = [method_key]
+        if model_family and model_family != 'unknown':
+            parts.append(model_family)
+        if similarity_type and similarity_type != 'unknown':
+            parts.append(similarity_type)
+        return "_".join(parts)
+
+    def format_method_key_for_display(self, method_key: str, model_family: str = None, similarity_type: str = None) -> str:
+        """Friendly display name for method keys with model family and merged count."""
         match = re.search(r'_(\d+)lang$', method_key)
-        display = method_key.replace('_', ' ').title()
         if match:
             base = method_key[:match.start()].replace('_', ' ').title()
-            return f"{base} (Merged {match.group(1)})"
+            extra_info = []
+            if model_family and model_family != 'unknown':
+                extra_info.append(model_family)
+            if similarity_type and similarity_type != 'unknown':
+                extra_info.append(similarity_type)
+            extra_info.append(f"Merged {match.group(1)}")
+            return f"{base} ({', '.join(extra_info)})"
+
+        # If no lang suffix, include model family and similarity type
+        display = method_key.replace('_', ' ').title()
+        extra_info = []
+        if model_family and model_family != 'unknown':
+            extra_info.append(model_family)
+        if similarity_type and similarity_type != 'unknown':
+            extra_info.append(similarity_type)
+        if extra_info:
+            return f"{display} ({', '.join(extra_info)})"
         return display
+
+    def get_method_model_family(self, method: str) -> str:
+        """Get the model family name for a method from experiment results."""
+        # Look for this method in our experiment results
+        for exp_name, exp_data in self.experiment_results.items():
+            if exp_data['type'] == 'baseline':
+                continue
+
+            # Extract method name from experiment type
+            exp_type = exp_data['type']
+            if exp_type.startswith('merge_'):
+                exp_method = exp_type.replace('merge_', '')
+
+                # Check if this matches our method (ignoring model family and lang suffix)
+                method_base = re.sub(r'_\d+lang$', '', method)
+                # Remove model family name if present (e.g., similarity_roberta-base -> similarity)
+                method_base = re.sub(r'_.*?$', '', method_base)
+                if exp_method == method_base:
+                    # Try to get model family from evaluation info
+                    if 'model_family_name' in exp_data:
+                        return exp_data['model_family_name']
+
+        # Fallback: try to extract from method name
+        if '_roberta-base' in method:
+            return 'roberta-base'
+        elif '_roberta-large' in method:
+            return 'roberta-large'
+        elif '_bert-base' in method:
+            return 'bert-base'
+        elif '_bert-large' in method:
+            return 'bert-large'
+        elif '_modernbert' in method:
+            return 'modernbert'
+
+        # Default fallback
+        return 'unknown'
+
+    def get_method_similarity_type(self, method: str) -> str:
+        """Get the similarity type for a method from experiment results."""
+        # Look for this method in our experiment results
+        for exp_name, exp_data in self.experiment_results.items():
+            if exp_data['type'] == 'baseline':
+                continue
+
+            # Extract method name from experiment type
+            exp_type = exp_data['type']
+            if exp_type.startswith('merge_'):
+                exp_method = exp_type.replace('merge_', '')
+
+                # Check if this matches our method (ignoring similarity type and lang suffix)
+                method_base = re.sub(r'_\d+lang$', '', method)
+                method_base = re.sub(r'_.*?$', '', method_base)  # Remove model family
+                if exp_method == method_base:
+                    return exp_data.get('similarity_type', 'unknown')
+
+        # Fallback: try to extract from method name if it contains similarity type
+        if '_URIEL_' in method:
+            return 'URIEL'
+        elif '_REAL_' in method:
+            return 'REAL'
+
+        # For legacy methods without similarity type, assume URIEL
+        return 'URIEL'
 
     def get_method_num_language_set(self, summary_df: pd.DataFrame, method: str) -> set:
         """Return the set of num_languages associated with a given method column."""
@@ -794,10 +910,14 @@ class AdvancedResultsAnalyzer:
             if len(num_lang_counts) <= 1:
                 continue
 
+            # Get model family and similarity type for this method
+            model_family = self.get_method_model_family(method)
+            similarity_type = self.get_method_similarity_type(method)
+
             # Create individual plot for each method
             fig, ax = plt.subplots(figsize=(20, 8))
-            display_name = self.format_method_key_for_display(method)
-            file_method = self.format_method_key_for_filename(method)
+            display_name = self.format_method_key_for_display(method, model_family, similarity_type)
+            file_method = self.format_method_key_for_filename(method, model_family, similarity_type)
 
             # Get method data
             method_data = summary_df[method].fillna(0).tolist()
@@ -857,9 +977,14 @@ class AdvancedResultsAnalyzer:
             num_lang_counts = self.get_method_num_language_set(summary_df, method_name)
             if len(num_lang_counts) <= 1:
                 continue
+
+            # Get model family and similarity type for this method
+            model_family = self.get_method_model_family(method_name)
+            similarity_type = self.get_method_similarity_type(method_name)
+
             improvement_data = summary_df[col].fillna(0).tolist()
-            display_name = self.format_method_key_for_display(method_name)
-            file_method = self.format_method_key_for_filename(method_name)
+            display_name = self.format_method_key_for_display(method_name, model_family, similarity_type)
+            file_method = self.format_method_key_for_filename(method_name, model_family, similarity_type)
 
             # Create individual plot for each method
             fig, ax = plt.subplots(figsize=(16, 8))
@@ -929,9 +1054,14 @@ class AdvancedResultsAnalyzer:
             num_lang_counts = self.get_method_num_language_set(summary_df, method_name)
             if len(num_lang_counts) <= 1:
                 continue
+
+            # Get model family and similarity type for this method
+            model_family = self.get_method_model_family(method_name)
+            similarity_type = self.get_method_similarity_type(method_name)
+
             improvement_data = summary_df[col].fillna(0).tolist()
-            display_name = self.format_method_key_for_display(method_name)
-            file_method = self.format_method_key_for_filename(method_name)
+            display_name = self.format_method_key_for_display(method_name, model_family, similarity_type)
+            file_method = self.format_method_key_for_filename(method_name, model_family, similarity_type)
 
             # Create individual plot for each method
             fig, ax = plt.subplots(figsize=(16, 8))
@@ -1001,9 +1131,14 @@ class AdvancedResultsAnalyzer:
             num_lang_counts = self.get_method_num_language_set(summary_df, method_name)
             if len(num_lang_counts) <= 1:
                 continue
+
+            # Get model family and similarity type for this method
+            model_family = self.get_method_model_family(method_name)
+            similarity_type = self.get_method_similarity_type(method_name)
+
             improvement_data = summary_df[col].fillna(0).tolist()
-            display_name = self.format_method_key_for_display(method_name)
-            file_method = self.format_method_key_for_filename(method_name)
+            display_name = self.format_method_key_for_display(method_name, model_family, similarity_type)
+            file_method = self.format_method_key_for_filename(method_name, model_family, similarity_type)
 
             # Create individual plot for each method
             fig, ax = plt.subplots(figsize=(16, 8))
@@ -1813,12 +1948,16 @@ class AdvancedResultsAnalyzer:
 
 
 def main():
-    """Main function to run the advanced analysis system with num_languages support"""
-    parser = argparse.ArgumentParser(description='Enhanced Results Analysis with num_languages Support')
+    """Main function to run the advanced analysis system with similarity type and num_languages support"""
+    parser = argparse.ArgumentParser(description='Enhanced Results Analysis with Similarity Type and num_languages Support')
     parser.add_argument('--num-languages', type=str,
                        help='Filter by number of languages (comma-separated, e.g., "3,5")')
+    parser.add_argument('--similarity-types', type=str,
+                       help='Filter by similarity types (comma-separated, e.g., "URIEL,REAL")')
     parser.add_argument('--list-num-languages', action='store_true',
                        help='List available num_languages values in data')
+    parser.add_argument('--list-similarity-types', action='store_true',
+                       help='List available similarity types in data')
 
     args = parser.parse_args()
 
@@ -1831,6 +1970,17 @@ def main():
         except ValueError:
             print("Error: num_languages must be comma-separated integers")
             return None
+
+    # Parse similarity types filter
+    similarity_types_filter = None
+    if args.similarity_types:
+        similarity_types_filter = [x.strip().upper() for x in args.similarity_types.split(',')]
+        valid_types = {'URIEL', 'REAL'}
+        invalid_types = [t for t in similarity_types_filter if t not in valid_types]
+        if invalid_types:
+            print(f"Error: Invalid similarity types: {invalid_types}. Valid types: {valid_types}")
+            return None
+        print(f"Filtering experiments with similarity types: {similarity_types_filter}")
 
     # If listing num_languages, create analyzer and show available values
     if args.list_num_languages:
@@ -1854,8 +2004,30 @@ def main():
             print(f"Error analyzing data: {e}")
             return None
 
+    # If listing similarity types, create analyzer and show available values
+    if args.list_similarity_types:
+        try:
+            analyzer = AdvancedResultsAnalyzer()
+            # Find available similarity types from experiment results
+            available_similarity_types = set()
+            for exp_name, exp_data in analyzer.experiment_results.items():
+                if exp_data.get('similarity_type') and exp_data['similarity_type'] != 'unknown':
+                    available_similarity_types.add(exp_data['similarity_type'])
+
+            if available_similarity_types:
+                print(f"Available similarity types in data: {sorted(list(available_similarity_types))}")
+            else:
+                print("No similarity type information found in experiment results")
+            return None
+        except Exception as e:
+            print(f"Error analyzing data: {e}")
+            return None
+
     try:
-        analyzer = AdvancedResultsAnalyzer(num_languages_filter=num_languages_filter)
+        analyzer = AdvancedResultsAnalyzer(
+            num_languages_filter=num_languages_filter,
+            similarity_types=similarity_types_filter
+        )
         summary_df = analyzer.generate_advanced_analysis()
         return summary_df
     except Exception as e:
