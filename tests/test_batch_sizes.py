@@ -19,7 +19,7 @@ def test_batch_size_commands():
         "python", "training_bert.py",
         "--output_dir", "./test_results_default_bs",
         "--do_train", "--do_eval",
-        "--num_train_epochs", "3",
+        "--num-train-epochs", "3",  # HuggingFace field name,
         "--max_train_samples", "200",
         "--max_eval_samples", "100",
         # No batch size specified - will use HuggingFace defaults (usually 8)
@@ -34,12 +34,12 @@ def test_batch_size_commands():
         "python", "training_bert.py",
         "--output_dir", "./test_results_small_bs",
         "--do_train", "--do_eval",
-        "--num_train_epochs", "3",
-        "--per_device_train_batch_size", "4",
-        "--per_device_eval_batch_size", "8",
+        "--num-train-epochs", "3",  # HuggingFace field name,
+        "--per-device-train-batch-size", "4",
+        "--per-device-eval-batch-size", "8",
         "--max_train_samples", "200",
         "--max_eval_samples", "100",
-        "--learning_rate", "3e-5",
+        "--learning-rate", "3e-5",
         "--early_stopping_patience", "2"
     ]
     print(" ".join(cmd2))
@@ -52,12 +52,12 @@ def test_batch_size_commands():
         "python", "training_bert.py",
         "--output_dir", "./test_results_medium_bs",
         "--do_train", "--do_eval",
-        "--num_train_epochs", "3",
-        "--per_device_train_batch_size", "16",
-        "--per_device_eval_batch_size", "32",
+        "--num-train-epochs", "3",  # HuggingFace field name,
+        "--per-device-train-batch-size", "16",
+        "--per-device-eval-batch-size", "32",
         "--max_train_samples", "300",
         "--max_eval_samples", "150",
-        "--learning_rate", "5e-5",
+        "--learning-rate", "5e-5",
         "--early_stopping_patience", "3"
     ]
     print(" ".join(cmd3))
@@ -70,12 +70,12 @@ def test_batch_size_commands():
         "python", "training_bert.py",
         "--output_dir", "./test_results_large_bs",
         "--do_train", "--do_eval",
-        "--num_train_epochs", "3",
-        "--per_device_train_batch_size", "32",
-        "--per_device_eval_batch_size", "64",
+        "--num-train-epochs", "3",  # HuggingFace field name,
+        "--per-device-train-batch-size", "32",
+        "--per-device-eval-batch-size", "64",
         "--max_train_samples", "400",
         "--max_eval_samples", "200",
-        "--learning_rate", "1e-4",  # Higher LR for larger batches
+        "--learning-rate", "1e-4",  # Higher LR for larger batches
         "--early_stopping_patience", "3"
     ]
     print(" ".join(cmd4))
@@ -88,13 +88,13 @@ def test_batch_size_commands():
         "python", "training_bert.py",
         "--output_dir", "./test_results_grad_acc",
         "--do_train", "--do_eval",
-        "--num_train_epochs", "3",
-        "--per_device_train_batch_size", "8",
-        "--per_device_eval_batch_size", "16",
+        "--num-train-epochs", "3",  # HuggingFace field name,
+        "--per-device-train-batch-size", "8",
+        "--per-device-eval-batch-size", "16",
         "--gradient_accumulation_steps", "4",  # Accumulate 4 steps
         "--max_train_samples", "300",
         "--max_eval_samples", "150",
-        "--learning_rate", "5e-5",
+        "--learning-rate", "5e-5",
         "--early_stopping_patience", "3"
     ]
     print(" ".join(cmd5))
@@ -107,12 +107,12 @@ def test_batch_size_commands():
         "python", "training_bert.py",
         "--output_dir", "./test_results_diff_bs",
         "--do_train", "--do_eval",
-        "--num_train_epochs", "3",
-        "--per_device_train_batch_size", "12",  # Smaller for training
-        "--per_device_eval_batch_size", "48",  # Larger for evaluation (no gradients)
+        "--num-train-epochs", "3",  # HuggingFace field name,
+        "--per-device-train-batch-size", "12",  # Smaller for training
+        "--per-device-eval-batch-size", "48",  # Larger for evaluation (no gradients)
         "--max_train_samples", "250",
         "--max_eval_samples", "125",
-        "--learning_rate", "4e-5",
+        "--learning-rate", "4e-5",
         "--early_stopping_patience", "2"
     ]
     print(" ".join(cmd6))
@@ -185,4 +185,4 @@ if __name__ == "__main__":
     show_memory_estimates()
 
     print("🚀 Ready to configure your batch sizes!")
-    print("💡 Start with --per_device_train_batch_size 16 and adjust based on your GPU memory")
+    print("💡 Start with --per-device-train-batch-size 16 and adjust based on your GPU memory")

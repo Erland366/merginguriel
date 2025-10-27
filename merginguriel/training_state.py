@@ -13,10 +13,10 @@ import pickle
 from dataclasses import dataclass, field, asdict
 from typing import Dict, List, Optional, Any, Tuple
 from pathlib import Path
-import logging
+from merginguriel import logger
 from datetime import datetime
 
-logger = logging.getLogger(__name__)
+# Loguru logger imported from merginguriel package
 
 
 @dataclass

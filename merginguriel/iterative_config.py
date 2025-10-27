@@ -19,7 +19,7 @@ class IterativeTrainingConfig:
     # Basic training parameters
     locale: str
     dataset_config_name: str
-    max_epochs: int = 15
+    epochs: int = 15
     learning_rate: float = 5e-5
     batch_size: int = 32  # Reduced from 128 to prevent OOM in sequential training
     max_seq_length: int = 128
@@ -46,8 +46,7 @@ class IterativeTrainingConfig:
     output_dir: str = ""
 
     # Resource management
-    fp16: bool = False
-    bf16: bool = True
+    bf16: bool = True  # bf16 precision enabled by default for better performance
     gradient_accumulation_steps: int = 1
     warmup_ratio: float = 0.1
     weight_decay: float = 0.01
@@ -92,7 +91,7 @@ class IterativeMergeConfig:
 
     # Merge execution
     merge_device: str = "auto"  # "auto", "cpu", "cuda"
-    merge_precision: str = "fp32"  # "fp32", "fp16", "bf16"
+    merge_precision: str = "bf16"  # "fp32", "bf16" - bf16 by default
 
     # Checkpoint handling for merges
     checkpoint_before_merge: bool = True
@@ -122,7 +121,7 @@ class IterativeOrchestratorConfig:
     enable_distributed: bool = False
 
     # Resource management
-    max_gpu_memory: Optional[int] = None  # MB, None for unlimited
+    max-gpu-memory: Optional[int] = None  # MB, None for unlimited
     num_workers: int = 1
     pin_memory: bool = True
 
@@ -218,7 +217,7 @@ class IterativeOrchestratorConfig:
                 "enable_distributed": self.enable_distributed
             },
             "resource_management": {
-                "max_gpu_memory": self.max_gpu_memory,
+                "max-gpu-memory": self.max-gpu-memory,
                 "num_workers": self.num_workers,
                 "pin_memory": self.pin_memory
             },

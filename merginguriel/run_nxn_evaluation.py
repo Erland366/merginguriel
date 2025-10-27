@@ -16,14 +16,12 @@ import torch
 from datetime import datetime
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
-import logging
+from merginguriel import logger
 from tqdm import tqdm
 
 # Import evaluation function (supports local paths)
 from merginguriel.evaluate_specific_model import evaluate_specific_model
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
 
 def discover_locales(models_root: str) -> list[str]:
     """Scan the models root for locale-named folders and return sorted MASSIVE locales."""
@@ -47,8 +45,8 @@ def get_local_models_for_locales(locales: list[str], models_root: str) -> dict:
         model_path = os.path.join(models_root, f"xlm-roberta-base_massive_k_{locale}")
         if os.path.isdir(model_path):
             result[locale] = {
-                'locale': locale,
-                'path': model_path,
+                "locale": locale,
+                "path": model_path,
             }
         else:
             logger.warning(f"Missing local model for {locale}: {model_path}")
@@ -75,7 +73,7 @@ def evaluate_single_model_target(model_info, target_locale, results_base_dir):
         if results:
             # Save results
             results_path = os.path.join(eval_folder, "results.json")
-            with open(results_path, 'w', encoding='utf-8') as f:
+            with open(results_path, "w", encoding="utf-8") as f:
                 json.dump(results, f, indent=2, ensure_ascii=False)
 
             # Extract key metrics
@@ -86,8 +84,8 @@ def evaluate_single_model_target(model_info, target_locale, results_base_dir):
             logger.info(f"✓ {model_locale} → {target_locale}: {accuracy:.4f} ({correct}/{total})")
 
             return {
-                'model_locale': model_locale,
-                'target_locale': target_locale,
+                "model_locale": model_locale,
+                "target_locale": target_locale,
                 'accuracy': accuracy,
                 'correct': correct,
                 'total': total,
@@ -96,8 +94,8 @@ def evaluate_single_model_target(model_info, target_locale, results_base_dir):
         else:
             logger.error(f"✗ {model_locale} → {target_locale}: Evaluation failed")
             return {
-                'model_locale': model_locale,
-                'target_locale': target_locale,
+                "model_locale": model_locale,
+                "target_locale": target_locale,
                 'accuracy': None,
                 'correct': None,
                 'total': None,
@@ -108,8 +106,8 @@ def evaluate_single_model_target(model_info, target_locale, results_base_dir):
     except Exception as e:
         logger.error(f"✗ {model_locale} → {target_locale}: {str(e)}")
         return {
-            'model_locale': model_locale,
-            'target_locale': target_locale,
+            "model_locale": model_locale,
+            "target_locale": target_locale,
             'accuracy': None,
             'correct': None,
             'total': None,
@@ -176,8 +174,8 @@ def run_nxn_evaluation(models_root: str, locales=None, max_workers=4, results_di
                     except Exception as e:
                         logger.error(f"Task {model_locale} → {target_locale} failed: {e}")
                         results.append({
-                            'model_locale': model_locale,
-                            'target_locale': target_locale,
+                            "model_locale": model_locale,
+                            "target_locale": target_locale,
                             'accuracy': None,
                             'correct': None,
                             'total': None,

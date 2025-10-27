@@ -230,7 +230,7 @@ class IterativeTrainingOrchestrator:
         # Create training arguments
         training_args = TrainingArguments(
             output_dir=training_config.output_dir,
-            num_train_epochs=training_config.max_epochs,
+            num_train_epochs=training_config.epochs,
             per_device_train_batch_size=training_config.batch_size,
             per_device_eval_batch_size=training_config.batch_size,
             learning_rate=training_config.learning_rate,
@@ -246,7 +246,7 @@ class IterativeTrainingOrchestrator:
             load_best_model_at_end=True,
             metric_for_best_model="eval_accuracy",
             greater_is_better=True,
-            fp16=training_config.fp16,
+            bf16=training_config.bf16,
             gradient_accumulation_steps=training_config.gradient_accumulation_steps,
             report_to="wandb" if self.config.enable_wandb else "none",
             disable_tqdm=False,
@@ -360,14 +360,14 @@ class IterativeTrainingOrchestrator:
         else:
             locales = list(self.trainers.keys())
 
-        max_epochs = self.config.training_configs[0].max_epochs
+        epochs = self.config.training_configs[0].epochs
         merge_frequency = self.config.merge_config.merge_frequency
 
-        logger.info(f"Training {len(locales)} models for {max_epochs} epochs with merge every {merge_frequency} epochs")
+        logger.info(f"Training {len(locales)} models for {epochs} epochs with merge every {merge_frequency} epochs")
 
         # Train epoch by epoch with merging
-        for epoch in range(max_epochs):
-            logger.info(f"=== EPOCH {epoch + 1}/{max_epochs} ===")
+        for epoch in range(epochs):
+            logger.info(f"=== EPOCH {epoch + 1}/{epochs} ===")
 
             # Train each model for one epoch
             for locale in locales:
@@ -547,9 +547,9 @@ class IterativeTrainingOrchestrator:
                 trainer.model.gradient_checkpointing_enable()
                 logger.info(f"Enabled gradient checkpointing for {locale}")
 
-            # Use mixed precision if available to save memory
-            if hasattr(trainer.args, 'fp16') and trainer.args.fp16:
-                logger.info(f"Using FP16 mixed precision for {locale}")
+            # Use bf16 precision if available to save memory
+            if hasattr(trainer.args, 'bf16') and trainer.args.bf16:
+                logger.info(f"Using BF16 precision for {locale}")
 
             trainer.model.to(device)
             logger.info(f"Training {locale} on device: {device}")
@@ -558,7 +558,7 @@ class IterativeTrainingOrchestrator:
             latest_checkpoint = None if pending_reset else self._find_latest_checkpoint(locale)
 
             # Set training parameters for this epoch
-            original_max_epochs = trainer.args.num_train_epochs
+            original_epochs = trainer.args.num_train_epochs
             original_resume_from_checkpoint = getattr(trainer.args, 'resume_from_checkpoint', None)
 
             # Configure trainer to train for exactly one more epoch
@@ -585,7 +585,7 @@ class IterativeTrainingOrchestrator:
             trainer.train()
 
             # Restore original training arguments
-            trainer.args.num_train_epochs = original_max_epochs
+            trainer.args.num_train_epochs = original_epochs
             trainer.args.resume_from_checkpoint = original_resume_from_checkpoint
 
             # Save model state after this epoch

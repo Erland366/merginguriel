@@ -9,7 +9,7 @@ state redistribution.
 import os
 import sys
 import time
-import logging
+from merginguriel import logger
 import threading
 from datetime import datetime
 from typing import Dict, List, Optional, Any, Tuple
@@ -35,7 +35,7 @@ from merginguriel.run_merging_pipeline_refactored import (
 )
 from auto_merge_llm.methods import merging_methods_dict
 
-logger = logging.getLogger(__name__)
+# Loguru logger imported from merginguriel package
 
 
 class MergeCoordinator:

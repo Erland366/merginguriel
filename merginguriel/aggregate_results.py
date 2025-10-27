@@ -12,13 +12,11 @@ from pathlib import Path
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple, Any
 from dataclasses import dataclass
-import logging
+from merginguriel import logger
 import glob
 import re
 
-# Set up logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-logger = logging.getLogger(__name__)
+# Loguru logger imported from merginguriel package
 
 
 @dataclass
@@ -55,7 +53,7 @@ def parse_num_languages_from_model_path(model_path: Optional[str]) -> Optional[i
         return None
 
     base_name = os.path.basename(os.path.normpath(model_path))
-    match = re.search(r'_(\d+)merged$', base_name)
+    match = re.search(r"_(\d+)merged$", base_name)
     if match:
         try:
             return int(match.group(1))
@@ -74,9 +72,9 @@ def count_languages_in_merge_details(model_path: Optional[str]) -> Optional[int]
         return None
 
     try:
-        with open(merge_details_path, 'r') as f:
+        with open(merge_details_path, "r") as f:
             content = f.read()
-        matches = re.findall(r'^\s*\d+\.\s*Model:', content, re.MULTILINE)
+        matches = re.findall(r"^\s*\d+\.\s*Model:", content, re.MULTILINE)
         if matches:
             return len(matches)
     except Exception as e:
@@ -103,7 +101,7 @@ def load_results_from_folder(folder_path):
     results_file = os.path.join(folder_path, "results.json")
     if os.path.exists(results_file):
         try:
-            with open(results_file, 'r') as f:
+            with open(results_file, "r") as f:
                 return json.load(f)
         except Exception as e:
             logger.error(f"Error loading {results_file}: {e}")
@@ -117,14 +115,14 @@ def parse_merge_details(merge_details_path: str) -> Optional[Dict[str, Any]]:
         return None
 
     try:
-        with open(merge_details_path, 'r') as f:
+        with open(merge_details_path, "r") as f:
             content = f.read()
 
         # Parse key-value pairs from the merge details
         details = {}
         for line in content.strip().split('\n'):
             if ':' in line:
-                key, value = line.split(':', 1)
+                key, value = line.split(":", 1)
                 details[key.strip()] = value.strip()
 
         return details
@@ -136,7 +134,7 @@ def parse_merge_details(merge_details_path: str) -> Optional[Dict[str, Any]]:
 def extract_locale_from_model_path(model_path: str) -> Optional[str]:
     """Extract locale from model path like './haryos_model/xlm-roberta-base_massive_k_sq-AL'."""
     # Pattern: xlm-roberta-base_massive_k_{locale}
-    match = re.search(r'massive_k_([a-z]{2}-[A-Z]{2})', model_path)
+    match = re.search(r"massive_k_([a-z]{2}-[A-Z]{2})", model_path)
     if match:
         return match.group(1)
     return None
@@ -159,18 +157,18 @@ def parse_experiment_metadata(folder_name: str,
     if merge_details_path and os.path.exists(merge_details_path):
         merge_details = parse_merge_details(merge_details_path)
         try:
-            with open(merge_details_path, 'r') as f:
+            with open(merge_details_path, "r") as f:
                 details_content = f.read()
         except Exception as e:
             logger.warning(f"Unable to read merge details content from {merge_details_path}: {e}")
             details_content = None
 
     if merge_details and details_content:
-        experiment_type = merge_details.get('Merge Mode', 'unknown').lower()
-        target_lang = merge_details.get('Target Language', '') or merge_details.get('Locale', '')
+        experiment_type = merge_details.get("Merge Mode", "unknown").lower()
+        target_lang = merge_details.get("Target Language", "") or merge_details.get("Locale", "")
 
         # Extract source locales and weights
-        locale_pattern = re.compile(r'^\s*- Locale:\s*([a-zA-Z]{2}-[a-zA-Z]{2})', re.MULTILINE)
+        locale_pattern = re.compile(r"^\s*- Locale:\s*([a-zA-Z]{2}-[a-zA-Z]{2})", re.MULTILINE)
         weight_pattern = re.compile(
             r'^\s*- Locale:\s*([a-zA-Z]{2}-[a-zA-Z]{2}).*?Weight:\s*([0-9.]+)',
             re.MULTILINE | re.DOTALL

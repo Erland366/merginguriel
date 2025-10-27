@@ -209,7 +209,7 @@ Flow overview:
        --dataset_config_name fr-FR,de-DE,es-ES,it-IT \
        --output_dir results/multilang_european \
        --model_name_or_path xlm-roberta-base \
-       --num_train_epochs 10 \
+       --num-train-epochs 10 \
        --do_train --do_eval --do_predict
    ```
 
@@ -247,7 +247,7 @@ Flow overview:
        --dataset_config_name fr-FR,de-DE,es-ES,it-IT \
        --output_dir results/multilang_european_test \
        --model_name_or_path xlm-roberta-base \
-       --num_train_epochs 1 \
+       --num-train-epochs 1 \
        --max_train_samples 50 \
        --max_eval_samples 20 \
        --max_predict_samples 20 \
@@ -262,7 +262,7 @@ Flow overview:
        --dataset_config_name fr-FR,de-DE,es-ES,it-IT \
        --output_dir results/multilang_european_test \
        --model_name_or_path xlm-roberta-base \
-       --num_train_epochs 10 \
+       --num-train-epochs 10 \
        --do_train --do_eval --do_predict
    ```
 
@@ -334,13 +334,13 @@ The `--dataset_config_name` argument now accepts:
   - Train XLMR-Base models (default, 3 epochs):
     - `python merginguriel/train_missing_models.py --locales af-ZA sq-AL --fp16`
   - Train XLMR-Large models (higher performance):
-    - `python merginguriel/train_missing_models.py --base-model FacebookAI/xlm-roberta-large --locales af-ZA sq-AL --train-bs 16 --eval-bs 16 --fp16`
+    - `python merginguriel/train_missing_models.py --base-model FacebookAI/xlm-roberta-large --locales af-ZA sq-AL --per-device-train-batch-size 16 --per-device-eval-batch-size 16 --bf16`
   - Train individual locale with XLMR-Large:
-    - `python merginguriel/training_bert.py --model_name_or_path FacebookAI/xlm-roberta-large --dataset_config_name af-ZA --per_device_train_batch_size 16 --per_device_eval_batch_size 16 --fp16`
+    - `python merginguriel/training_bert.py --model_name_or_path FacebookAI/xlm-roberta-large --dataset_config_name af-ZA --per-device-train-batch-size 16 --per-device-eval-batch-size 16 --fp16`
   - Options:
     - `--mapping-csv model_mapping_unified.csv` or `available_locales.txt` (source of locales)
     - `--base-model` (HF base model: `xlm-roberta-base`, `FacebookAI/xlm-roberta-large`)
-    - `--train-bs 32 --eval-bs 64 --epochs 3 --lr 5e-5` (training hyperparameters)
+    - `--per-device-train-batch-size 32 --per-device-eval-batch-size 64 --num-train-epochs 3 --lr 5e-5` (training hyperparameters, note: --lr and --epochs accept same values as --learning-rate and --num-train-epochs respectively)
     - `--max 5` to limit how many to train this run
     - Outputs to `haryos_model/{base-model}_massive_k_{locale}` per locale
 
@@ -1041,7 +1041,7 @@ uv run merginguriel/run_multilang_training.py --exclude de-DE --output_dir my_mo
 
 # Custom training parameters
 uv run merginguriel/run_multilang_training.py --super-model \
-  --additional-args --learning_rate 1e-4 --batch_size 32 --num_train_epochs 10
+  --additional-args --learning-rate 1e-4 --per-device-train-batch-size 32 --num-train-epochs 10
 ```
 
 ### 📊 Supported Languages

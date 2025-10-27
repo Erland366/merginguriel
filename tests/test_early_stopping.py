@@ -19,9 +19,9 @@ def test_early_stopping_commands():
         "python", "training_bert.py",
         "--output_dir", "./test_results_early_stop",
         "--do_train", "--do_eval",
-        "--num_train_epochs", "10",  # Set high to allow early stopping
-        "--per_device_train_batch_size", "16",
-        "--per_device_eval_batch_size", "16",
+        "--num-train-epochs", "10",  # Set high to allow early stopping
+        "--per-device-train-batch-size", "16",
+        "--per-device-eval-batch-size", "16",
         "--logging_steps", "50",
         "--max_train_samples", "200",
         "--max_eval_samples", "100",
@@ -39,13 +39,13 @@ def test_early_stopping_commands():
         "python", "training_bert.py",
         "--output_dir", "./test_results_custom_early_stop",
         "--do_train", "--do_eval",
-        "--num_train_epochs", "15",
-        "--per_device_train_batch_size", "8",
-        "--per_device_eval_batch_size", "8",
+        "--num-train-epochs", "15",
+        "--per-device-train-batch-size", "8",
+        "--per-device-eval-batch-size", "8",
         "--logging_steps", "25",
         "--max_train_samples", "300",
         "--max_eval_samples", "150",
-        "--learning_rate", "3e-5",
+        "--learning-rate", "3e-5",
         "--early_stopping_patience", "5",  # More patient: wait 5 epochs
         "--early_stopping_threshold", "0.001",  # Require minimum improvement of 0.001
         "--wandb_tags", "early-stopping,patient,roberta"
@@ -60,12 +60,12 @@ def test_early_stopping_commands():
         "python", "training_bert.py",
         "--output_dir", "./test_results_aggressive_early_stop",
         "--do_train", "--do_eval",
-        "--num_train_epochs", "8",
-        "--per_device_train_batch_size", "16",
+        "--num-train-epochs", "8",
+        "--per-device-train-batch-size", "16",
         "--logging_steps", "20",
         "--max_train_samples", "150",
         "--max_eval_samples", "75",
-        "--learning_rate", "2e-5",
+        "--learning-rate", "2e-5",
         "--early_stopping_patience", "1",  # Very aggressive: stop after 1 bad evaluation
         "--wandb_tags", "early-stopping,aggressive,quick"
     ]
@@ -80,12 +80,12 @@ def test_early_stopping_commands():
         "--model_name_or_path", "bert-base-uncased",
         "--output_dir", "./test_results_bert_early_stop",
         "--do_train", "--do_eval",
-        "--num_train_epochs", "12",
-        "--per_device_train_batch_size", "16",
+        "--num-train-epochs", "12",
+        "--per-device-train-batch-size", "16",
         "--logging_steps", "30",
         "--max_train_samples", "250",
         "--max_eval_samples", "125",
-        "--learning_rate", "2e-5",
+        "--learning-rate", "2e-5",
         "--early_stopping_patience", "4",
         "--wandb_tags", "bert,early-stopping,comparison"
     ]
@@ -99,8 +99,8 @@ def test_early_stopping_commands():
         "python", "training_bert.py",
         "--output_dir", "./test_results_no_early_stop",
         "--do_train", "--do_eval",
-        "--num_train_epochs", "5",  # Fixed number of epochs
-        "--per_device_train_batch_size", "16",
+        "--num-train-epochs", "5",  # Fixed number of epochs
+        "--per-device-train-batch-size", "16",
         "--logging_steps", "40",
         "--max_train_samples", "200",
         "--max_eval_samples", "100",

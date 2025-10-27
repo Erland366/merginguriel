@@ -41,21 +41,21 @@ def setup_logging(log_level: str, log_file: Optional[str] = None):
 
     logging.basicConfig(
         level=getattr(logging, log_level.upper(), logging.INFO),
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
         handlers=handlers
     )
 
 
 def create_training_configs_from_args(args) -> List[IterativeTrainingConfig]:
     """Create training configurations from command line arguments."""
-    locales = [locale.strip() for locale in args.locales.split(',')]
+    locales = [locale.strip() for locale in args.locales.split(",")]
 
     training_configs = []
     for i, locale in enumerate(locales):
         config = IterativeTrainingConfig(
             locale=locale,
             dataset_config_name=locale,
-            max_epochs=args.max_epochs,
+            max_epochs=args.epochs,
             learning_rate=args.learning_rate,
             batch_size=args.batch_size,
             max_seq_length=args.max_seq_length,
@@ -67,7 +67,6 @@ def create_training_configs_from_args(args) -> List[IterativeTrainingConfig]:
             save_steps=args.save_steps,
             eval_steps=args.eval_steps,
             early_stopping_patience=args.early_stopping_patience,
-            fp16=args.fp16,
             bf16=args.bf16,
             gradient_accumulation_steps=args.gradient_accumulation_steps,
             warmup_ratio=args.warmup_ratio,
@@ -137,7 +136,7 @@ def create_orchestrator_config_from_args(args) -> IterativeOrchestratorConfig:
         max_sync_wait_time=args.max_sync_wait_time,
         merge_timeout=args.merge_timeout,
         enable_distributed=args.enable_distributed,
-        max_gpu_memory=args.max_gpu_memory,
+        max-gpu-memory=args.max-gpu-memory,
         num_workers=args.num_workers,
         pin_memory=args.pin_memory,
         enable_wandb=args.enable_wandb,
@@ -224,7 +223,7 @@ def validate_args(args):
         raise ValueError(f"Cannot create output directory {args.output_dir}: {e}")
 
     # Validate GPU memory if specified
-    if args.max_gpu_memory and args.max_gpu_memory <= 0:
+    if args.max-gpu-memory and args.max-gpu-memory <= 0:
         raise ValueError("Max GPU memory must be positive if specified")
 
 
@@ -243,7 +242,7 @@ def print_experiment_summary(config: IterativeOrchestratorConfig):
     for i, training_config in enumerate(config.training_configs, 1):
         print(f"{i}. Locale: {training_config.locale}")
         print(f"   Dataset: {training_config.dataset_config_name}")
-        print(f"   Max Epochs: {training_config.max_epochs}")
+        print(f"   Max Epochs: {training_config.epochs}")
         print(f"   Batch Size: {training_config.batch_size}")
         print(f"   Learning Rate: {training_config.learning_rate}")
         print(f"   Output Dir: {training_config.output_dir}")
@@ -303,7 +302,7 @@ def main():
         "--mode",
         type=str,
         required=True,
-        choices=['uriel', 'manual', 'similarity', 'average', 'fisher', 'fisher_simple', 'fisher_dataset', 'iterative'],
+        choices=["uriel", "manual", "similarity", "average", "fisher", "fisher_simple", "fisher_dataset", "iterative"],
         help="The merging mode to use."
     )
     parser.add_argument(
@@ -334,7 +333,7 @@ def main():
         "--text-column",
         type=str,
         default="utt",
-        help="Column name containing text data (MASSIVE uses 'utt')"
+        help="Column name containing text data (MASSIVE uses \"utt\")"
     )
     parser.add_argument(
         "--label-column",
@@ -395,10 +394,10 @@ def main():
 
     # Training parameters
     parser.add_argument(
-        "--max-epochs",
+        "--epochs",
         type=int,
         default=15,
-        help="Maximum number of training epochs"
+        help="Number of training epochs"
     )
     parser.add_argument(
         "--learning-rate",
@@ -418,11 +417,7 @@ def main():
         default=128,
         help="Maximum sequence length"
     )
-    parser.add_argument(
-        "--fp16",
-        action="store_true",
-        help="Use mixed precision training"
-    )
+    # fp16 removed - bf16 is now the standard precision
     parser.add_argument(
         "--bf16",
         action="store_true",

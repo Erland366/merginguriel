@@ -22,9 +22,9 @@ def test_wandb_command():
         "python", "training_bert.py",
         "--output_dir", "./test_results",
         "--do_train", "--do_eval",
-        "--num_train_epochs", "1",
-        "--per_device_train_batch_size", "16",
-        "--per_device_eval_batch_size", "16",
+        "--num-train-epochs", "1",
+        "--per-device-train-batch-size", "16",
+        "--per-device-eval-batch-size", "16",
         "--logging_steps", "10",
         "--max_train_samples", "100",  # Small sample for testing
         "--max_eval_samples", "50"
@@ -40,15 +40,15 @@ def test_wandb_command():
         "python", "training_bert.py",
         "--output_dir", "./test_results_custom",
         "--do_train", "--do_eval",
-        "--num_train_epochs", "2",
-        "--per_device_train_batch_size", "8",
-        "--per_device_eval_batch_size", "8",
+        "--num-train-epochs", "2",
+        "--per-device-train-batch-size", "8",
+        "--per-device-eval-batch-size", "8",
         "--logging_steps", "5",
         "--max_train_samples", "200",
         "--max_eval_samples", "100",
         "--wandb_project", "MergingUriel",
         "--wandb_tags", "roberta,massive,intent-classification,test",
-        "--learning_rate", "3e-5"
+        "--learning-rate", "3e-5"
         # Run name will be auto-generated: roberta-base_massive_en-US_lr3e-5_ep2
     ]
     print(" ".join(cmd2))
@@ -61,8 +61,8 @@ def test_wandb_command():
         "python", "training_bert.py",
         "--output_dir", "./test_results_offline",
         "--do_train", "--do_eval",
-        "--num_train_epochs", "1",
-        "--per_device_train_batch_size", "16",
+        "--num-train-epochs", "1",
+        "--per-device-train-batch-size", "16",
         "--logging_steps", "20",
         "--max_train_samples", "50",
         "--max_eval_samples", "25",
@@ -80,13 +80,13 @@ def test_wandb_command():
         "--model_name_or_path", "bert-base-uncased",
         "--output_dir", "./test_results_bert",
         "--do_train", "--do_eval",
-        "--num_train_epochs", "1",
-        "--per_device_train_batch_size", "16",
+        "--num-train-epochs", "1",
+        "--per-device-train-batch-size", "16",
         "--logging_steps", "15",
         "--max_train_samples", "100",
         "--max_eval_samples", "50",
         "--wandb_tags", "bert,baseline,massive",
-        "--learning_rate", "2e-5"
+        "--learning-rate", "2e-5"
         # Run name will be auto-generated: bert-base-uncased_massive_en-US_lr2e-5_ep1
     ]
     print(" ".join(cmd4))
@@ -101,9 +101,9 @@ def test_wandb_command():
         "--dataset_config_name", "fr-FR",
         "--output_dir", "./test_results_french",
         "--do_train", "--do_eval",
-        "--num_train_epochs", "3",
-        "--per_device_train_batch_size", "16",
-        "--learning_rate", "1e-4",
+        "--num-train-epochs", "3",
+        "--per-device-train-batch-size", "16",
+        "--learning-rate", "1e-4",
         "--max_train_samples", "100",
         "--max_eval_samples", "50",
         "--wandb_tags", "french,roberta,massive"

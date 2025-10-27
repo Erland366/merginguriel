@@ -6,7 +6,7 @@ performance-based triggering, and comprehensive monitoring of the
 iterative training process.
 """
 
-import logging
+from merginguriel import logger
 import time
 import numpy as np
 from typing import Dict, List, Optional, Any, Tuple
@@ -14,7 +14,7 @@ from datetime import datetime, timedelta
 from dataclasses import dataclass, field
 from collections import deque
 
-logger = logging.getLogger(__name__)
+# Loguru logger imported from merginguriel package
 
 
 @dataclass

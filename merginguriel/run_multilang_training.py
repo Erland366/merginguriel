@@ -131,7 +131,7 @@ def run_training(languages, output_dir, additional_args=None, exclude_language=N
             "--do_eval",
             "--do_predict",
             "--model_name_or_path", "xlm-roberta-base",
-            "--num_train_epochs", "15"
+            "--num-train-epochs", "15"
         ]
         print(f"🚀 Starting LOLO training (excluding {exclude_language})...")
     else:
@@ -144,7 +144,7 @@ def run_training(languages, output_dir, additional_args=None, exclude_language=N
             "--do_eval",
             "--do_predict",
             "--model_name_or_path", "xlm-roberta-base",
-            "--num_train_epochs", "15"
+            "--num-train-epochs", "15"
         ]
         print(f"🚀 Starting multi-language training...")
         print(f"📚 Training on {len(languages)} languages: {', '.join(languages[:5])}{'...' if len(languages) > 5 else ''}")
@@ -216,7 +216,7 @@ Examples:
     parser.add_argument(
         "--additional-args",
         nargs="*",
-        help="Additional arguments to pass to training_bert.py (e.g., --learning_rate 1e-4 --batch_size 32)"
+        help="Additional arguments to pass to training_bert.py (e.g., --learning-rate 1e-4 --per-device-train-batch-size 32)"
     )
 
     args = parser.parse_args()

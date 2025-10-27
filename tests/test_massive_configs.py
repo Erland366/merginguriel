@@ -76,7 +76,7 @@ def list_massive_configs():
         for desc, config in examples:
             if config in configs:
                 print(f"# {desc}")
-                print(f"python training_bert.py --dataset_config_name {config} --do_train --do_eval --num_train_epochs 5")
+                print(f"python training_bert.py --dataset_config_name {config} --do_train --do_eval --num-train-epochs 5")
                 print()
 
         print("Note: Some languages may have less training data than others.")

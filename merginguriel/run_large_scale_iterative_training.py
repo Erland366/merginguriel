@@ -27,7 +27,7 @@ import shutil
 from datetime import datetime
 from pathlib import Path
 from typing import List, Dict, Optional, Tuple, Any
-import logging
+from merginguriel import logger
 
 # Ensure project root on sys.path
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
@@ -47,9 +47,7 @@ except Exception:
 # Import MergingUriel components
 from merginguriel.similarity_utils import load_and_process_similarity
 
-# Set up logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-logger = logging.getLogger(__name__)
+# Loguru logger imported from merginguriel package
 
 
 def get_all_locales_from_similarity_matrix():
@@ -501,8 +499,8 @@ def main():
                        help="Clean up intermediate artifacts after each locale")
 
     # Pass-through options for run_iterative_training.py
-    parser.add_argument("--max-epochs", type=int, default=15,
-                       help="Maximum number of training epochs")
+    parser.add_argument("--epochs", type=int, default=15,
+                       help="Number of training epochs")
     parser.add_argument("--learning-rate", type=float, default=5e-5,
                        help="Learning rate")
     parser.add_argument("--batch-size", type=int, default=128,
@@ -511,10 +509,8 @@ def main():
                        help="Maximum sequence length")
     parser.add_argument("--merge-frequency", type=int, default=3,
                        help="Number of epochs between merges")
-    parser.add_argument("--fp16", action="store_true",
-                       help="Use mixed precision training")
-    parser.add_argument("--bf16", action="store_true",
-                       help="Use mixed precision training")
+    parser.add_argument("--bf16", action="store_true", default=True,
+                       help="Use bf16 precision for training (default: enabled)")
     parser.add_argument("--enable-wandb", action="store_true",
                        help="Enable Weights & Biases logging")
     parser.add_argument("--output-dir", type=str, default="iterative_large_scale_results",
@@ -562,7 +558,7 @@ def main():
 
     # Build pass-through args for iterative training
     training_extra_args = [
-        "--max-epochs", str(args.max_epochs),
+        "--epochs", str(args.epochs),
         "--learning-rate", str(args.learning_rate),
         "--batch-size", str(args.batch_size),
         "--max-seq-length", str(args.max_seq_length),
@@ -572,8 +568,7 @@ def main():
     ]
 
     # Add optional flags
-    if args.fp16:
-        training_extra_args.append("--fp16")
+    # fp16 removed - bf16 is now the standard precision
     if args.enable_wandb:
         training_extra_args.append("--enable-wandb")
 
@@ -602,7 +597,7 @@ def main():
                 'config': {
                     'mode': args.mode,
                     'max_models': args.max_models,
-                    'max_epochs': args.max_epochs,
+                    'epochs': args.epochs,
                     'merge_frequency': args.merge_frequency
                 }
             }, f, indent=2)
@@ -636,7 +631,7 @@ def main():
                 'start_from': args.start_from,
                 'max_locales': args.max_locales,
                 'max_models': args.max_models,
-                'max_epochs': args.max_epochs,
+                'epochs': args.epochs,
                 'merge_frequency': args.merge_frequency,
                 'batch_size': args.batch_size,
                 'learning_rate': args.learning_rate,

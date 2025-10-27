@@ -466,149 +466,25 @@ def main():
         finally:
             sys.argv = original_argv
 
-    # Apply opinionated defaults matching project conventions unless explicitly provided
-    def _has_flag(name: str) -> bool:
-        return any(arg == name for arg in processed_argv)
-
-    # Model default
-    if not _has_flag('--model_name_or_path'):
-        model_args.model_name_or_path = 'xlm-roberta-base'
-
-    # Train/eval/predict toggles
-    if not _has_flag('--do_train'):
-        training_args.do_train = True
-    if not _has_flag('--do_eval'):
-        training_args.do_eval = True
-    if not _has_flag('--do_predict'):
-        training_args.do_predict = True
-
-    # Epochs and batch sizes
-    if not _has_flag('--num_train_epochs'):
-        training_args.num_train_epochs = 15
-    if not _has_flag('--per_device_train_batch_size'):
-        training_args.per_device_train_batch_size = 128
-    if not _has_flag('--per_device_eval_batch_size'):
-        training_args.per_device_eval_batch_size = 128
-
-    # Early stopping patience (already default 3 in DataTrainingArguments)
-    if not _has_flag('--early_stopping_patience'):
-        data_args.early_stopping_patience = 3
-
-    # Strategies must match when loading best model at end
-    if not _has_flag('--evaluation_strategy'):
-        training_args.evaluation_strategy = IntervalStrategy.EPOCH
-    if not _has_flag('--save_strategy'):
-        training_args.save_strategy = IntervalStrategy.EPOCH
-    if not _has_flag('--save_total_limit'):
-        training_args.save_total_limit = 15
-    if not _has_flag('--load_best_model_at_end'):
-        training_args.load_best_model_at_end = True
-    if not _has_flag('--metric_for_best_model'):
-        training_args.metric_for_best_model = 'accuracy'
-    if not _has_flag('--greater_is_better'):
-        training_args.greater_is_better = True
-    if not _has_flag('--overwrite_output_dir'):
-        training_args.overwrite_output_dir = True
-    # Optional compilation
-    if not _has_flag('--torch_compile'):
-        try:
-            training_args.torch_compile = True
-        except Exception:
-            pass
-
-    # Setup wandb environment
+    # Configure wandb if available
     if wandb_available and not model_args.wandb_offline:
-        # Generate descriptive run name
         auto_run_name = generate_wandb_run_name(model_args, data_args, training_args)
-
-        os.environ["WANDB_PROJECT"] = model_args.wandb_project
-        if model_args.wandb_entity:
-            os.environ["WANDB_ENTITY"] = model_args.wandb_entity
         if auto_run_name:
             os.environ["WANDB_RUN_NAME"] = auto_run_name
             logger.info(f"Generated wandb run name: {auto_run_name}")
+
+        if model_args.wandb_project:
+            os.environ["WANDB_PROJECT"] = model_args.wandb_project
+        if model_args.wandb_entity:
+            os.environ["WANDB_ENTITY"] = model_args.wandb_entity
         if model_args.wandb_tags:
             os.environ["WANDB_TAGS"] = model_args.wandb_tags
 
-        # Configure wandb reporting
-        if not hasattr(training_args, 'report_to') or training_args.report_to is None:
-            training_args.report_to = "wandb"
-        elif isinstance(training_args.report_to, list) and "wandb" not in training_args.report_to:
-            training_args.report_to.append("wandb")
-        elif training_args.report_to == "none":
-            training_args.report_to = "wandb"
-    elif model_args.wandb_offline:
-        os.environ["WANDB_MODE"] = "offline"
-
-        # Generate descriptive run name even in offline mode
-        auto_run_name = generate_wandb_run_name(model_args, data_args, training_args)
-        if auto_run_name:
-            os.environ["WANDB_RUN_NAME"] = auto_run_name
-            logger.info(f"Generated wandb run name (offline): {auto_run_name}")
-
-        training_args.report_to = "wandb"
-    else:
-        training_args.report_to = "none"
-
-    # Configure early stopping and checkpointing settings
-    if training_args.do_train and training_args.do_eval:
-        # Auto-generate output directory based on wandb run name
-        auto_run_name = generate_wandb_run_name(model_args, data_args, training_args)
-        if auto_run_name:
-            # Create output directory in checkpoint_results subfolder
-            original_output_dir = training_args.output_dir
-            training_args.output_dir = os.path.join("checkpoint_results", auto_run_name)
-            logger.info(f"Auto-generated output directory: {training_args.output_dir}")
-            logger.info(f"Original output_dir argument: {original_output_dir}")
-        else:
-            # Fallback to default if wandb name generation fails
-            logger.info("Using provided output directory (wandb name generation failed)")
-
-        # Enable evaluation and saving for early stopping
-        if not hasattr(training_args, 'eval_strategy') or training_args.eval_strategy is None or training_args.eval_strategy == "no":
-            training_args.eval_strategy = "epoch"
-        if not hasattr(training_args, 'save_strategy') or training_args.save_strategy is None:
-            training_args.save_strategy = "epoch"
-        if not hasattr(training_args, 'save_total_limit'):
-            training_args.save_total_limit = 3
-        if not hasattr(training_args, 'load_best_model_at_end'):
-            training_args.load_best_model_at_end = True
-        if not hasattr(training_args, 'metric_for_best_model'):
-            training_args.metric_for_best_model = "eval_accuracy"
-        if not hasattr(training_args, 'greater_is_better'):
-            training_args.greater_is_better = True
-        if not hasattr(training_args, 'logging_strategy'):
-            training_args.logging_strategy = "steps"
-        training_args.logging_steps = 1
-
-        # Configure torch_compile if enabled
-        torch_compile_enabled = (
-            getattr(training_args, 'torch_compile', False) or
-            getattr(model_args, 'torch_compile', False)
-        )
-        if torch_compile_enabled:
-            if not hasattr(training_args, 'torch_compile_backend'):
-                training_args.torch_compile_backend = "inductor"
-            if not hasattr(training_args, 'torch_compile_mode'):
-                training_args.torch_compile_mode = "default"
-            logger.info("torch_compile enabled")
-
-        # Ensure output directory exists
-        os.makedirs(training_args.output_dir, exist_ok=True)
-
-        # Log checkpointing configuration
-        logger.info(f"Early stopping configured with patience: {data_args.early_stopping_patience}")
-        logger.info(f"Load best model at end: {training_args.load_best_model_at_end}")
-        logger.info(f"Metric for best model: {training_args.metric_for_best_model}")
-        logger.info(f"Evaluation strategy: {training_args.eval_strategy}")
-        logger.info(f"Save strategy: {training_args.save_strategy}")
-        logger.info(f"Save total limit: {training_args.save_total_limit}")
-        logger.info(f"Output directory: {training_args.output_dir}")
-        logger.info(f"Logging strategy: {training_args.logging_strategy}")
-        logger.info(f"Logging steps: {training_args.logging_steps}")
-        if torch_compile_enabled:
-            logger.info(f"Torch compile backend: {training_args.torch_compile_backend}")
-            logger.info(f"Torch compile mode: {training_args.torch_compile_mode}")
+    # Set default training modes if not specified
+    if not training_args.do_train and not training_args.do_eval and not training_args.do_predict:
+        training_args.do_train = True
+        training_args.do_eval = True
+        training_args.do_predict = True
 
     # Setup logging
     logging.basicConfig(
@@ -631,7 +507,7 @@ def main():
     # Log on each process the small summary:
     logger.warning(
         f"Process rank: {training_args.local_rank}, device: {training_args.device}, n_gpu: {training_args.n_gpu}, "
-        + f"distributed training: {training_args.parallel_mode.value == 'distributed'}, 16-bits training: {training_args.fp16}"
+        + f"distributed training: {training_args.parallel_mode.value == 'distributed'}, bf16 training: {training_args.bf16}"
     )
     logger.info(f"Training/evaluation parameters {training_args}")
 
@@ -926,7 +802,7 @@ def main():
     # we already did the padding.
     if data_args.pad_to_max_length:
         data_collator = default_data_collator
-    elif training_args.fp16:
+    elif training_args.bf16:
         data_collator = DataCollatorWithPadding(tokenizer, pad_to_multiple_of=8)
     else:
         data_collator = None
