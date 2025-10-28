@@ -120,10 +120,10 @@ def get_similarity_weights(similarity_df: pd.DataFrame,
     # Get weights for target locale
     target_weights = processed_df.loc[target_locale]
 
-    # Filter languages with non-zero weights and sort
+    # Filter languages with non-zero weights and exclude target language itself
     valid_languages = []
     for locale, weight in target_weights.items():
-        if weight > 0:
+        if weight > 0 and locale != target_locale:
             valid_languages.append((locale, weight))
 
     # Sort by weight (descending) and limit
