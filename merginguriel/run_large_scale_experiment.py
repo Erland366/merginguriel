@@ -214,15 +214,14 @@ def run_experiment_for_locale(
         print(f"\n--- {mode} Merge for {locale} ---")
         merge_success = run_merge(mode, locale, merge_extra_args)
         if merge_success:
-            # Find the actual merged model directory with the new naming convention
+            # Find the actual merged model directory using the merged model naming convention
             merged_models_dir = os.path.join(REPO_ROOT, "merged_models")
-            merged_model_path = naming_manager.find_results_directory(
+            merged_model_path = naming_manager.find_merged_model_directory(
                 merged_models_dir,
-                experiment_type='merging',
                 method=mode,
                 similarity_type=similarity_type,
                 locale=locale,
-                model_family=model_family
+                num_languages=num_languages
             )
 
             if merged_model_path and os.path.exists(merged_model_path):
@@ -235,7 +234,12 @@ def run_experiment_for_locale(
                     model_family=model_family,
                     num_languages=num_languages
                 )
-                eval_success = run_evaluation(merged_model_path, locale, mode, results_dir_name)
+                # Create the results directory before passing it to evaluation script
+                results_full_path = os.path.join(REPO_ROOT, "results", results_dir_name)
+                os.makedirs(results_full_path, exist_ok=True)
+
+                # Pass the full path to evaluation script
+                eval_success = run_evaluation(merged_model_path, locale, mode, results_full_path)
                 results[mode] = eval_success
 
                 # Clean up merged model after successful evaluation if requested

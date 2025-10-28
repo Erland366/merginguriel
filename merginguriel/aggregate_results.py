@@ -16,6 +16,9 @@ from merginguriel import logger
 import glob
 import re
 
+# Import centralized naming system
+from merginguriel.naming_config import naming_manager
+
 # Loguru logger imported from merginguriel package
 
 
@@ -143,7 +146,7 @@ def extract_locale_from_model_path(model_path: str) -> Optional[str]:
 def parse_experiment_metadata(folder_name: str,
                               folder_path: str,
                               model_path: Optional[str] = None) -> ExperimentMetadata:
-    """Parse experiment metadata using merge_details if present, otherwise use heuristics."""
+    """Parse experiment metadata using merge_details if present, otherwise use centralized naming system."""
 
     # Prefer merge_details that live alongside the actual merged model directory
     merge_details_path = None
@@ -189,6 +192,44 @@ def parse_experiment_metadata(folder_name: str,
             timestamp=merge_details.get('Timestamp (UTC)', ''),
             folder_name=folder_name
         )
+
+    # Try to parse directory name using centralized naming system
+    # Only use this if we don't have merge_details (which has more accurate info)
+    if not merge_details:
+        try:
+            # First try to parse as a results directory
+            parsed = naming_manager.parse_results_dir_name(folder_name)
+
+            return ExperimentMetadata(
+                experiment_type=parsed['experiment_type'],
+                locale=parsed['locale'],
+                target_lang=parsed['locale'],
+                source_languages=None,
+                weights=None,
+                merge_mode=parsed['method'],
+                num_languages=parsed['num_languages'],
+                timestamp=parsed.get('timestamp'),
+                folder_name=folder_name
+            )
+        except ValueError:
+            # Try to parse as a merged model directory
+            try:
+                parsed = naming_manager.parse_merged_model_dir_name(folder_name)
+
+                return ExperimentMetadata(
+                    experiment_type=parsed['experiment_type'],
+                    locale=parsed['locale'],
+                    target_lang=parsed['locale'],
+                    source_languages=None,
+                    weights=None,
+                    merge_mode=parsed['method'],
+                    num_languages=parsed['num_languages'],
+                    timestamp=parsed.get('timestamp'),
+                    folder_name=folder_name
+                )
+            except ValueError:
+                # Fallback heuristics for legacy directories
+                pass
 
     # Fallback heuristics using model path or folder name
     experiment_type = 'baseline' if model_path and not is_merge_model_path(model_path) else 'unknown'
