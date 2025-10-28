@@ -1,0 +1,10 @@
+# Large-Scale Experiment Command: XLM-RoBERTa-Base Models
+# Run this in tmux for overnight experiments
+
+source .venv/bin/activate
+python merginguriel/run_large_scale_experiment.py \
+  --similarity-type REAL \
+  --models-root haryos_model \
+  --modes baseline similarity average ties task_arithmetic slerp regmean fisher \
+  --num-languages 5 \
+  --cleanup-after-eval

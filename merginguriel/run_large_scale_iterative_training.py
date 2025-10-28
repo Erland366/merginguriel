@@ -47,6 +47,9 @@ except Exception:
 # Import MergingUriel components
 from merginguriel.similarity_utils import load_and_process_similarity
 
+# Import centralized naming system
+from merginguriel.naming_config import naming_manager
+
 # Loguru logger imported from merginguriel package
 
 
@@ -64,9 +67,9 @@ def get_all_locales_from_similarity_matrix(similarity_type="URIEL"):
     return locales
 
 
-def get_available_locales():
+def get_available_locales(models_root="haryos_model"):
     """Get list of locales that have available models."""
-    models_dir = os.path.join(REPO_ROOT, "haryos_model")
+    models_dir = os.path.join(REPO_ROOT, models_root)
     available_locales = []
     if os.path.exists(models_dir):
         for item in os.listdir(models_dir):
@@ -76,7 +79,8 @@ def get_available_locales():
     return sorted(available_locales)
 
 
-def auto_select_iterative_sources(target_lang: str, max_models: int, top_k: int = 20,
+def auto_select_iterative_sources(target_lang: str, max_models: int, similarity_type: str = "URIEL",
+                                models_root: str = "haryos_model", top_k: int = 20,
                                 sinkhorn_iters: int = 20) -> List[str]:
     """
     Auto-select source languages for iterative training based on similarity to target.
@@ -84,6 +88,8 @@ def auto_select_iterative_sources(target_lang: str, max_models: int, top_k: int 
     Args:
         target_lang: Target language code
         max_models: Maximum number of source models to include
+        similarity_type: Type of similarity matrix to use (URIEL or REAL)
+        models_root: Root directory containing models
         top_k: Number of similar languages to consider from similarity matrix
         sinkhorn_iters: Sinkhorn normalization iterations
 
@@ -93,7 +99,12 @@ def auto_select_iterative_sources(target_lang: str, max_models: int, top_k: int 
     logger.info(f"Auto-selecting source languages for target: {target_lang}")
 
     # Get similarity matrix path
-    similarity_matrix_path = os.path.join(REPO_ROOT, "language_similarity_matrix_unified.csv")
+    if similarity_type == "URIEL":
+        similarity_matrix_path = os.path.join(REPO_ROOT, "language_similarity_matrix_unified.csv")
+    elif similarity_type == "REAL":
+        similarity_matrix_path = os.path.join(REPO_ROOT, "nxn_results", "nxn_eval_20251027_103544", "evaluation_matrix.csv")
+    else:
+        raise ValueError(f"Unknown similarity type: {similarity_type}")
 
     try:
         # Get similar languages using existing similarity processing
@@ -106,7 +117,7 @@ def auto_select_iterative_sources(target_lang: str, max_models: int, top_k: int 
         source_locales = [locale for locale, weight in similar_languages]
 
         # Get available locales to filter results
-        available_locales = get_available_locales()
+        available_locales = get_available_locales(models_root)
         available_set = set(available_locales)
 
         # Filter to only available locales
@@ -122,7 +133,7 @@ def auto_select_iterative_sources(target_lang: str, max_models: int, top_k: int 
         logger.error(f"Error auto-selecting source languages: {e}")
         # Fallback to some reasonable defaults
         fallback_locales = ["en-US", "fr-FR", "de-DE", "es-ES", "it-IT"]
-        available_locales = get_available_locales()
+        available_locales = get_available_locales(models_root)
         final_fallback = [loc for loc in fallback_locales if loc in available_locales][:max_models]
         logger.warning(f"Using fallback source languages: {final_fallback}")
         return final_fallback
@@ -329,7 +340,8 @@ def extract_iterative_results(target_lang: str, mode: str, locale_output_dir: st
 
 
 def save_iterative_results(target_lang: str, mode: str, results: Dict[str, Any],
-                         results_dir: str = "results") -> bool:
+                         results_dir: str = "results", model_family: str = None,
+                         similarity_type: str = "URIEL", num_languages: int = None) -> bool:
     """
     Save iterative training results in format compatible with aggregate_results.py.
 
@@ -338,15 +350,29 @@ def save_iterative_results(target_lang: str, mode: str, results: Dict[str, Any],
         mode: Training mode
         results: Results dictionary
         results_dir: Base results directory
+        model_family: Model family name
+        similarity_type: Similarity type used
+        num_languages: Number of languages
 
     Returns:
         True if successful, False otherwise
     """
     try:
-        # Create folder name in expected format
-        folder_name = f"iterative_{mode}_{target_lang}"
+        # Create folder name using centralized naming system
+        folder_name = naming_manager.get_results_dir_name(
+            experiment_type='iterative',
+            method=mode,
+            similarity_type=similarity_type,
+            locale=target_lang,
+            model_family=model_family,
+            num_languages=num_languages
+        )
         results_folder = os.path.join(REPO_ROOT, results_dir, folder_name)
         os.makedirs(results_folder, exist_ok=True)
+
+        # Update results with missing information
+        results['evaluation_info']['model_family_name'] = model_family
+        results['evaluation_info']['similarity_type'] = similarity_type
 
         # Save results.json
         results_file = os.path.join(results_folder, "results.json")
@@ -411,8 +437,10 @@ def run_experiment_for_locale(
     training_extra_args: List[str],
     output_base_dir: str,
     max_models: int,
-    top_k: int,
-    sinkhorn_iters: int
+    similarity_type: str = "URIEL",
+    models_root: str = "haryos_model",
+    top_k: int = 20,
+    sinkhorn_iters: int = 20
 ) -> Dict[str, bool]:
     """
     Run the iterative training experiment for a single locale.
@@ -423,6 +451,8 @@ def run_experiment_for_locale(
         training_extra_args: Additional arguments for training
         output_base_dir: Base output directory
         max_models: Maximum number of source models
+        similarity_type: Type of similarity matrix to use
+        models_root: Root directory containing models
         top_k: Top-K for similarity selection
         sinkhorn_iters: Sinkhorn iterations
 
@@ -430,19 +460,41 @@ def run_experiment_for_locale(
         Dictionary with results status
     """
     logger.info(f"\n{'='*60}")
-    logger.info(f"Running iterative training experiment for locale: {locale}")
+    logger.info(f"Running iterative training experiment for locale: {locale} (models: {models_root}, similarity: {similarity_type})")
     logger.info(f"{'='*60}")
 
     # Check if target model exists (for validation)
-    target_model_path = os.path.join(REPO_ROOT, f"haryos_model/xlm-roberta-base_massive_k_{locale}")
+    target_model_path = os.path.join(REPO_ROOT, f"{models_root}/xlm-roberta-base_massive_k_{locale}")
     if not os.path.exists(target_model_path):
         logger.warning(f"Target model not found for {locale}: {target_model_path}")
         # Don't skip - iterative training creates its own models
 
+    # Get model family name using centralized naming system
+    try:
+        model_family = naming_manager.detect_model_family_from_path(target_model_path)
+        logger.info(f"✓ Detected model family: {model_family}")
+    except Exception as e:
+        logger.error(f"❌ Failed to detect model family: {e}")
+        return {'success': False, 'error': f'Failed to detect model family: {e}'}
+
+    # Validate required components
+    try:
+        naming_manager.validate_required_components(
+            experiment_type='iterative',
+            method=mode,
+            similarity_type=similarity_type,
+            locale=locale,
+            model_family=model_family,
+            model_path=target_model_path
+        )
+    except ValueError as e:
+        logger.error(f"❌ Validation failed: {e}")
+        return {'success': False, 'error': f'Validation failed: {e}'}
+
     results = {}
 
     # Auto-select source languages
-    source_locales = auto_select_iterative_sources(locale, max_models, top_k, sinkhorn_iters)
+    source_locales = auto_select_iterative_sources(locale, max_models, similarity_type, models_root, top_k, sinkhorn_iters)
 
     if not source_locales:
         logger.error(f"No source languages found for {locale}")
@@ -466,7 +518,10 @@ def run_experiment_for_locale(
 
         if training_results:
             # Save results in compatible format
-            save_success = save_iterative_results(locale, mode, training_results)
+            save_success = save_iterative_results(locale, mode, training_results,
+                                                model_family=model_family,
+                                                similarity_type=similarity_type,
+                                                num_languages=max_models)
             results['success'] = save_success
             results['accuracy'] = training_results['performance']['accuracy']
         else:
@@ -530,10 +585,16 @@ def main():
     parser.add_argument("--sequential-training", action="store_true", default=True,
                        help="Train models sequentially to prevent OOM")
 
+    # Additional options for consistency with merging/ensemble experiments
+    parser.add_argument("--similarity-type", type=str, choices=["URIEL","REAL"], default="URIEL",
+                       help="Type of similarity matrix to use: URIEL (linguistic features) or REAL (empirical evaluation results)")
+    parser.add_argument("--models-root", type=str, default="haryos_model",
+                       help="Root directory containing models (default: haryos_model)")
+
     args = parser.parse_args()
 
     # Get all available locales (those with models)
-    available_locales = get_available_locales()
+    available_locales = get_available_locales(args.models_root)
 
     if args.list_locales:
         print("Available locales (with models):")
@@ -556,6 +617,8 @@ def main():
 
     logger.info(f"Starting large-scale iterative training experiment for {len(locales)} locales")
     logger.info(f"Mode: {args.mode}")
+    logger.info(f"Similarity Type: {args.similarity_type}")
+    logger.info(f"Model Root: {args.models_root}")
     logger.info(f"Start from index: {args.start_from}")
     logger.info(f"Max models per locale: {args.max_models}")
 
@@ -584,7 +647,8 @@ def main():
         start_time = time.time()
         results = run_experiment_for_locale(
             locale, args.mode, training_extra_args, args.output_dir,
-            args.max_models, args.top_k, args.sinkhorn_iters
+            args.max_models, args.similarity_type, args.models_root,
+            args.top_k, args.sinkhorn_iters
         )
         elapsed_time = time.time() - start_time
 
@@ -599,6 +663,8 @@ def main():
                 'total_locales': len(available_locales),
                 'processed_locales': i + 1,
                 'current_locale': locale,
+                'similarity_type': args.similarity_type,
+                'models_root': args.models_root,
                 'results': overall_results,
                 'config': {
                     'mode': args.mode,
@@ -643,7 +709,9 @@ def main():
                 'learning_rate': args.learning_rate,
                 'top_k': args.top_k,
                 'sinkhorn_iters': args.sinkhorn_iters,
-                'output_dir': args.output_dir
+                'output_dir': args.output_dir,
+                'similarity_type': args.similarity_type,
+                'models_root': args.models_root
             },
             'summary': {
                 'total_locales': len(overall_results),

@@ -39,9 +39,65 @@ python merginguriel/run_large_scale_experiment.py \
   --num-languages 5 \
   --cleanup-after-eval
 
+# Ensemble Inference Experiments
+# ==============================
+
+# Command 3: Ensemble with Base Models (REAL)
+# ==========================================
+source .venv/bin/activate
+python merginguriel/run_large_scale_ensemble_experiments.py \
+  --similarity-type REAL \
+  --models-root haryos_model \
+  --num-languages 5 \
+  --voting-methods majority weighted_majority soft uriel_logits
+
+# Command 4: Ensemble with Large Models (REAL)
+# ===========================================
+source .venv/bin/activate
+python merginguriel/run_large_scale_ensemble_experiments.py \
+  --similarity-type REAL \
+  --models-root haryos_model_large \
+  --num-languages 5 \
+  --voting-methods majority weighted_majority soft uriel_logits
+
+# Iterative Training Experiments
+# ==============================
+
+# Command 5: Iterative Training with Base Models (REAL)
+# ====================================================
+source .venv/bin/activate
+python merginguriel/run_large_scale_iterative_training.py \
+  --similarity-type REAL \
+  --models-root haryos_model \
+  --mode similarity \
+  --max-models 5
+
+# Command 6: Iterative Training with Base Models (URIEL)
+# =====================================================
+source .venv/bin/activate
+python merginguriel/run_large_scale_iterative_training.py \
+  --similarity-type URIEL \
+  --models-root haryos_model \
+  --mode similarity \
+  --max-models 5
+
+# URIEL Comparison Commands (Optional)
+# ====================================
+
+# Command 7: Base Models with URIEL (for comparison)
+# ==================================================
+source .venv/bin/activate
+python merginguriel/run_large_scale_experiment.py \
+  --similarity-type URIEL \
+  --models-root haryos_model \
+  --num-languages 5 \
+  --cleanup-after-eval
+
 # Expected Results:
 # ================
 # Base Models: similarity_roberta-base_REAL_merged5_...png
 # Large Models: similarity_roberta-large_REAL_merged5_...png
-# Storage Saved: ~1.2TB with cleanup enabled
-# Estimated Runtime: 15-20 hours per command
+# Ensemble: ensemble_majority_REAL_...png, ensemble_soft_REAL_...png
+# Iterative: iterative_similarity_REAL_...png
+# Storage Saved: ~1.2TB with cleanup enabled for merging experiments
+# Estimated Runtime: 15-20 hours per merging command, 5-8 hours per ensemble/iterative command

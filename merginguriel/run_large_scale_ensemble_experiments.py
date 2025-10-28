@@ -29,6 +29,9 @@ REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if REPO_ROOT not in sys.path:
     sys.path.insert(0, REPO_ROOT)
 
+# Import centralized naming system
+from merginguriel.naming_config import naming_manager
+
 def get_all_locales_from_similarity_matrix(similarity_type="URIEL"):
     """Extract all unique locales from the similarity matrix."""
     if similarity_type == "URIEL":
@@ -42,12 +45,23 @@ def get_all_locales_from_similarity_matrix(similarity_type="URIEL"):
     locales = sorted(df.index.tolist())
     return locales
 
-def get_model_for_locale(locale):
-    """Get the model path for a specific locale using consolidated directory structure."""
-    model_path = os.path.join(REPO_ROOT, f"haryos_model/xlm-roberta-base_massive_k_{locale}")
+def get_model_for_locale(locale, models_root="haryos_model"):
+    """Get the model path for a specific locale using specified model directory."""
+    # Try to detect model size from directory name (base/large)
+    model_size = "base"  # default
+    if "large" in models_root.lower():
+        model_size = "large"
+    elif "base" in models_root.lower():
+        model_size = "base"
+
+    # Use consistent naming pattern: {models_root}/xlm-roberta-{size}_massive_k_{locale}
+    model_path = os.path.join(REPO_ROOT, f"{models_root}/xlm-roberta-{model_size}_massive_k_{locale}")
+
+    # Check if the model directory exists
     if not os.path.exists(model_path):
         print(f"Warning: Model directory not found for locale {locale}: {model_path}")
         return None
+
     return model_path
 
 def get_available_locales():
@@ -81,11 +95,19 @@ def run_ensemble_inference(voting_method: str, target_lang: str, extra_args: Lis
         return False
 
 def save_ensemble_results(target_lang: str, voting_method: str, ensemble_data: Dict,
-                        results_dir: str = "results") -> bool:
+                        results_dir: str = "results", model_family: str = None,
+                        similarity_type: str = "URIEL", num_models: int = None) -> bool:
     """Save ensemble results in format compatible with aggregate_results.py."""
     try:
-        # Create folder name in expected format
-        folder_name = f"ensemble_{voting_method}_{target_lang}"
+        # Create folder name using centralized naming system
+        folder_name = naming_manager.get_results_dir_name(
+            experiment_type='ensemble',
+            method=voting_method,
+            similarity_type=similarity_type,
+            locale=target_lang,
+            model_family=model_family,
+            num_languages=num_models
+        )
         results_folder = os.path.join(REPO_ROOT, results_dir, folder_name)
         os.makedirs(results_folder, exist_ok=True)
 
@@ -94,22 +116,25 @@ def save_ensemble_results(target_lang: str, voting_method: str, ensemble_data: D
             "evaluation_info": {
                 "timestamp": datetime.now().isoformat(),
                 "model_name": f"ensemble_{voting_method}_{target_lang}",
+                "model_family_name": model_family,
                 "locale": target_lang,
                 "massive_locale": target_lang,
                 "dataset": "AmazonScience/massive",
                 "split": "test",
                 "experiment_type": f"ensemble_{voting_method}",
-                "voting_method": voting_method
+                "voting_method": voting_method,
+                "similarity_type": similarity_type
             },
             "model_info": {
-                "num_models": ensemble_data.get("experiment_info", {}).get("num_models", 0),
+                "num_models": ensemble_data.get("experiment_info", {}).get("num_models", num_models or 0),
                 "model_names": ensemble_data.get("metadata", {}).get("model_names", []),
                 "ensemble_method": voting_method,
                 "similarity_weights": ensemble_data.get("models", {})
             },
             "dataset_info": {
                 "total_examples": ensemble_data.get("experiment_info", {}).get("num_examples", 0),
-                "voting_method": voting_method
+                "voting_method": voting_method,
+                "num_models": num_models
             },
             "performance": ensemble_data.get("performance", {}),
             "metadata": ensemble_data.get("metadata", {}),
@@ -149,16 +174,41 @@ def run_experiment_for_locale(
     locale: str,
     voting_methods: List[str],
     ensemble_extra_args: List[str],
+    models_root: str = "haryos_model",
+    similarity_type: str = "URIEL",
+    num_languages: int = 5,
 ):
     """Run the requested ensemble experiments for a single locale."""
     print(f"\n{'='*60}")
-    print(f"Running ensemble experiments for locale: {locale}")
+    print(f"Running ensemble experiments for locale: {locale} (models: {models_root}, similarity: {similarity_type})")
     print(f"{'='*60}")
 
     # Check if model exists for this locale
-    base_model_path = get_model_for_locale(locale)
+    base_model_path = get_model_for_locale(locale, models_root)
     if not base_model_path:
         print(f"Skipping {locale} - no model found")
+        return {}
+
+    # Get model family name using centralized naming system
+    try:
+        model_family = naming_manager.detect_model_family_from_path(base_model_path)
+        print(f"✓ Detected model family: {model_family}")
+    except Exception as e:
+        print(f"❌ Failed to detect model family: {e}")
+        return {}
+
+    # Validate required components
+    try:
+        naming_manager.validate_required_components(
+            experiment_type='ensemble',
+            method=voting_methods[0] if voting_methods else 'majority',
+            similarity_type=similarity_type,
+            locale=locale,
+            model_family=model_family,
+            model_path=base_model_path
+        )
+    except ValueError as e:
+        print(f"❌ Validation failed: {e}")
         return {}
 
     results: Dict[str, bool] = {}
@@ -173,7 +223,12 @@ def run_experiment_for_locale(
             # Load results and save in compatible format
             ensemble_data = load_ensemble_results(locale, voting_method)
             if ensemble_data:
-                save_success = save_ensemble_results(locale, voting_method, ensemble_data)
+                save_success = save_ensemble_results(
+                    locale, voting_method, ensemble_data,
+                    model_family=model_family,
+                    similarity_type=similarity_type,
+                    num_models=num_languages
+                )
                 results[voting_method] = save_success
             else:
                 results[voting_method] = False
@@ -210,6 +265,12 @@ def main():
     parser.add_argument("--output-dir", type=str, default="urie_ensemble_results",
                        help="Output directory for ensemble results")
 
+    # Additional options for consistency with merging experiments
+    parser.add_argument("--similarity-type", type=str, choices=["URIEL","REAL"], default="URIEL",
+                       help="Type of similarity matrix to use: URIEL (linguistic features) or REAL (empirical evaluation results)")
+    parser.add_argument("--models-root", type=str, default="haryos_model",
+                       help="Root directory containing models (default: haryos_model)")
+
     args = parser.parse_args()
 
     # Get all available locales (those with models)
@@ -242,6 +303,8 @@ def main():
 
     print(f"Starting ensemble experiment for {len(locales)} locales")
     print(f"Voting methods: {args.voting_methods}")
+    print(f"Similarity Type: {args.similarity_type}")
+    print(f"Model Root: {args.models_root}")
     print(f"Start from index: {args.start_from}")
 
     # Track overall results
@@ -261,7 +324,8 @@ def main():
 
     for i, locale in enumerate(locales):
         print(f"\nProcessing locale {i+1}/{len(locales)}: {locale}")
-        results = run_experiment_for_locale(locale, args.voting_methods, ensemble_extra_args)
+        results = run_experiment_for_locale(locale, args.voting_methods, ensemble_extra_args,
+                                          args.models_root, args.similarity_type, args.num_languages)
 
         overall_results[locale] = results
 
@@ -273,6 +337,8 @@ def main():
                 'total_locales': len(available_locales),
                 'processed_locales': i + 1,
                 'current_locale': locale,
+                'similarity_type': args.similarity_type,
+                'models_root': args.models_root,
                 'results': overall_results
             }, f, indent=2)
 
@@ -311,7 +377,9 @@ def main():
                 'num_examples': args.num_examples,
                 'top_k': args.top_k,
                 'sinkhorn_iters': args.sinkhorn_iters,
-                'output_dir': args.output_dir
+                'output_dir': args.output_dir,
+                'similarity_type': args.similarity_type,
+                'models_root': args.models_root
             },
             'summary': {
                 'total_locales': len(overall_results),

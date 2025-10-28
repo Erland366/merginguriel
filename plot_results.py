@@ -28,6 +28,15 @@ from datetime import datetime
 from typing import Dict, List, Tuple, Optional, Any
 import argparse
 
+# Import centralized naming system
+try:
+    from merginguriel.naming_config import naming_manager
+except ImportError:
+    # Fallback if the module structure is different
+    import sys
+    sys.path.append(os.path.join(os.path.dirname(__file__), 'merginguriel'))
+    from naming_config import naming_manager
+
 warnings.filterwarnings('ignore')
 
 # Set plotting style to match user preferences from enhanced_analysis.py
@@ -134,51 +143,98 @@ class AdvancedResultsAnalyzer:
             with open(results_file, 'r') as f:
                 data = json.load(f)
 
-            # Extract key information
+            # Try to parse directory name using centralized naming system
+            try:
+                parsed = naming_manager.parse_results_dir_name(exp_dir.name)
+                similarity_type = parsed['similarity_type']
+                model_family = parsed['model_family']
+                num_languages = parsed['num_languages']
+                locale = parsed['locale']
+                method = parsed['method']
+                experiment_type = parsed['experiment_type']
+            except ValueError:
+                # Fallback to manual extraction for legacy directories
+                similarity_type = self.extract_similarity_type(exp_dir.name)
+                model_family = 'unknown'
+                num_languages = None
+                locale = data.get('evaluation_info', {}).get('locale')
+                method = 'unknown'
+                experiment_type = 'unknown'
+
+            # Extract key information from results data
+            eval_info = data.get('evaluation_info', {})
+            performance = data.get('performance', {})
+            model_info = data.get('model_info', {})
+
             return {
                 'directory': exp_dir.name,
                 'type': self.detect_experiment_type(exp_dir.name),
-                'similarity_type': self.extract_similarity_type(exp_dir.name),
-                'target_locale': data.get('target_locale'),
-                'accuracy': data.get('performance', {}).get('accuracy', 0),
-                'baseline_accuracy': data.get('performance', {}).get('baseline_accuracy', 0),
-                'experiment_info': data.get('experiment_info', {}),
-                'merge_details': self.load_merge_details(exp_dir) if 'merge' in exp_dir.name else None
+                'similarity_type': similarity_type,
+                'model_family': model_family,
+                'num_languages': num_languages,
+                'target_locale': locale or eval_info.get('locale') or data.get('target_locale'),
+                'method': method,
+                'experiment_type': experiment_type,
+                'accuracy': performance.get('accuracy', 0),
+                'baseline_accuracy': performance.get('baseline_accuracy', 0),
+                'experiment_info': eval_info,
+                'model_info': model_info,
+                'merge_details': self.load_merge_details(exp_dir) if 'merge' in exp_dir.name else None,
+                'model_family_name': eval_info.get('model_family_name') or model_family,
+                'num_models': model_info.get('num_models') or num_languages
             }
         except Exception as e:
             print(f"Error loading {exp_dir}: {e}")
             return None
 
     def detect_experiment_type(self, dir_name: str) -> str:
-        """Detect experiment type from directory name"""
-        if 'baseline' in dir_name:
-            return 'baseline'
-        elif 'ensemble' in dir_name:
-            return 'ensemble'
-        elif 'merge' in dir_name:
-            # Extract merge method (similarity, average, ties, task_arithmetic, etc.)
-            # Handle new naming convention: method_URIEL_merge_locale_num or method_REAL_merge_locale_num
-            for method in ['similarity', 'average', 'ties', 'task_arithmetic', 'slerp', 'regmean', 'dare', 'fisher']:
-                # Look for method at the start of directory name or before similarity type
-                if re.match(rf'^{method}(_(?:URIEL|REAL))?_merge_', dir_name) or f'_{method}_' in dir_name:
-                    return f'merge_{method}'
-            return 'merge_unknown'
-        else:
-            return 'unknown'
+        """Detect experiment type from directory name using centralized naming system"""
+        try:
+            parsed = naming_manager.parse_results_dir_name(dir_name)
+            experiment_type = parsed['experiment_type']
+
+            # Convert experiment_type to expected format
+            if experiment_type == 'baseline':
+                return 'baseline'
+            elif experiment_type == 'ensemble':
+                return 'ensemble'
+            elif experiment_type in ['merging', 'iterative']:
+                # Return merge_method format for consistency
+                return f"merge_{parsed['method']}"
+            else:
+                return 'unknown'
+        except ValueError:
+            # Fallback to manual parsing for legacy directories
+            if 'baseline' in dir_name:
+                return 'baseline'
+            elif 'ensemble' in dir_name:
+                return 'ensemble'
+            elif 'merge' in dir_name:
+                # Extract merge method (similarity, average, ties, task_arithmetic, etc.)
+                for method in ['similarity', 'average', 'ties', 'task_arithmetic', 'slerp', 'regmean', 'dare', 'fisher']:
+                    if re.match(rf'^{method}(_(?:URIEL|REAL))?_merge_', dir_name) or f'_{method}_' in dir_name:
+                        return f'merge_{method}'
+                return 'merge_unknown'
+            else:
+                return 'unknown'
 
     def extract_similarity_type(self, dir_name: str) -> str:
-        """Extract similarity type (URIEL/REAL) from directory name"""
-        # Check for new naming convention with similarity type
-        match = re.search(r'_(URIEL|REAL)_', dir_name)
-        if match:
-            return match.group(1)
+        """Extract similarity type (URIEL/REAL) from directory name using centralized naming system"""
+        try:
+            parsed = naming_manager.parse_results_dir_name(dir_name)
+            similarity_type = parsed['similarity_type']
+            return similarity_type if similarity_type else 'unknown'
+        except ValueError:
+            # Fallback to manual parsing for legacy directories
+            match = re.search(r'_(URIEL|REAL)_', dir_name)
+            if match:
+                return match.group(1)
 
-        # For legacy naming without similarity type, assume URIEL
-        # This handles old experiments that don't have the similarity type prefix
-        if 'merge' in dir_name or any(method in dir_name for method in ['similarity', 'average', 'ties', 'task_arithmetic', 'slerp', 'regmean', 'dare', 'fisher']):
-            return 'URIEL'
+            # For legacy naming without similarity type, assume URIEL
+            if 'merge' in dir_name or any(method in dir_name for method in ['similarity', 'average', 'ties', 'task_arithmetic', 'slerp', 'regmean', 'dare', 'fisher']):
+                return 'URIEL'
 
-        return 'unknown'
+            return 'unknown'
 
     def load_merge_details(self, exp_dir: Path) -> Optional[Dict]:
         """Load merge details from merge_details.txt file"""
@@ -260,11 +316,15 @@ class AdvancedResultsAnalyzer:
         return display
 
     def get_method_model_family(self, method: str) -> str:
-        """Get the model family name for a method from experiment results."""
+        """Get the model family name for a method using centralized naming system."""
         # Look for this method in our experiment results
         for exp_name, exp_data in self.experiment_results.items():
             if exp_data['type'] == 'baseline':
                 continue
+
+            # Check if we have model_family_name directly from the parsed directory
+            if 'model_family_name' in exp_data and exp_data['model_family_name'] != 'unknown':
+                return exp_data['model_family_name']
 
             # Extract method name from experiment type
             exp_type = exp_data['type']
@@ -276,9 +336,9 @@ class AdvancedResultsAnalyzer:
                 # Remove model family name if present (e.g., similarity_roberta-base -> similarity)
                 method_base = re.sub(r'_.*?$', '', method_base)
                 if exp_method == method_base:
-                    # Try to get model family from evaluation info
-                    if 'model_family_name' in exp_data:
-                        return exp_data['model_family_name']
+                    # Try to get model family from experiment data
+                    if 'model_family' in exp_data and exp_data['model_family'] != 'unknown':
+                        return exp_data['model_family']
 
         # Fallback: try to extract from method name
         if '_roberta-base' in method:
@@ -296,7 +356,7 @@ class AdvancedResultsAnalyzer:
         return 'unknown'
 
     def get_method_similarity_type(self, method: str) -> str:
-        """Get the similarity type for a method from experiment results."""
+        """Get the similarity type for a method using centralized naming system."""
         # Look for this method in our experiment results
         for exp_name, exp_data in self.experiment_results.items():
             if exp_data['type'] == 'baseline':

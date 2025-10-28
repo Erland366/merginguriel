@@ -34,6 +34,9 @@ try:
 except Exception:
     merging_methods_dict = {}
 
+# Import centralized naming system
+from merginguriel.naming_config import naming_manager
+
 def get_all_locales_from_similarity_matrix(similarity_type="URIEL"):
     """Extract all unique locales from the similarity matrix."""
     if similarity_type == "URIEL":
@@ -120,34 +123,32 @@ def detect_num_languages_from_model_path(model_path: Optional[str]) -> Optional[
     return None
 
 
-def run_evaluation(model_path, locale, prefix):
+def run_evaluation(model_path, locale, method_or_prefix, results_dir_name=None):
     """Run evaluation for a specific model using the consolidated model path."""
     print(f"Running evaluation for {model_path} with locale {locale}...")
 
-    # Extract num_languages from the model path (e.g., similarity_merge_az-AZ_5merged -> 5)
-    num_languages = detect_num_languages_from_model_path(model_path)
-    if num_languages is not None:
-        print(f"Detected {num_languages} merged languages for {model_path}")
-
-    # Create enhanced prefix with num_languages
-    if num_languages is not None:
-        enhanced_prefix = f"{prefix}_{num_languages}lang"
-    else:
-        enhanced_prefix = prefix
-
-    print(f"Using enhanced prefix: {enhanced_prefix}")
+    # Use custom results directory name if provided, otherwise generate one
+    if results_dir_name is None:
+        # Legacy mode - generate directory name from prefix
+        num_languages = detect_num_languages_from_model_path(model_path)
+        if num_languages is not None:
+            enhanced_prefix = f"{method_or_prefix}_{num_languages}lang"
+        else:
+            enhanced_prefix = method_or_prefix
+        results_dir_name = enhanced_prefix
 
     cmd = [sys.executable, os.path.join(REPO_ROOT, "merginguriel", "evaluate_specific_model.py"),
            "--base-model", model_path,
            "--locale", locale,
-           "--prefix", enhanced_prefix]
+           "--prefix", method_or_prefix,
+           "--results-dir", results_dir_name]
 
     try:
         result = subprocess.run(cmd, check=True, capture_output=True, text=True)
-        print(f"✓ Evaluation completed for {locale} ({enhanced_prefix})")
+        print(f"✓ Evaluation completed for {locale} ({method_or_prefix})")
         return True
     except subprocess.CalledProcessError as e:
-        print(f"✗ Evaluation failed for {locale} ({enhanced_prefix}): {e}")
+        print(f"✗ Evaluation failed for {locale} ({method_or_prefix}): {e}")
         return False
 
 def run_experiment_for_locale(
@@ -156,10 +157,12 @@ def run_experiment_for_locale(
     merge_extra_args: List[str],
     cleanup_after_eval: bool = False,
     models_root: str = "haryos_model",
+    similarity_type: str = "URIEL",
+    num_languages: int = 5,
 ):
     """Run the requested experiment modes for a single locale."""
     print(f"\n{'='*60}")
-    print(f"Running experiment for locale: {locale} (models: {models_root})")
+    print(f"Running experiment for locale: {locale} (models: {models_root}, similarity: {similarity_type})")
     print(f"{'='*60}")
 
     # Get model path for this locale
@@ -169,12 +172,42 @@ def run_experiment_for_locale(
         print(f"Skipping {locale} - no model found")
         return False
 
+    # Get model family name using centralized naming system
+    try:
+        model_family = naming_manager.detect_model_family_from_path(base_model_path)
+        print(f"✓ Detected model family: {model_family}")
+    except Exception as e:
+        print(f"❌ Failed to detect model family: {e}")
+        return False
+
+    # Validate required components
+    try:
+        naming_manager.validate_required_components(
+            experiment_type='merging',
+            method=modes[0] if modes else 'baseline',
+            similarity_type=similarity_type,
+            locale=locale,
+            model_family=model_family,
+            model_path=base_model_path
+        )
+    except ValueError as e:
+        print(f"❌ Validation failed: {e}")
+        return False
+
     results: Dict[str, bool] = {}
 
     for mode in modes:
         if mode == "baseline":
             print(f"\n--- Baseline Evaluation for {locale} ---")
-            success = run_evaluation(base_model_path, locale, mode)
+            # Create results directory with centralized naming
+            results_dir_name = naming_manager.get_results_dir_name(
+                experiment_type='baseline',
+                method='baseline',
+                similarity_type=None,
+                locale=locale,
+                model_family=model_family
+            )
+            success = run_evaluation(base_model_path, locale, mode, results_dir_name)
             results['baseline'] = success
             continue
 
@@ -183,17 +216,26 @@ def run_experiment_for_locale(
         if merge_success:
             # Find the actual merged model directory with the new naming convention
             merged_models_dir = os.path.join(REPO_ROOT, "merged_models")
-            merged_model_path = None
-
-            # Look for the directory that matches our pattern (e.g., similarity_URIEL_merge_sq-AL_5merged)
-            for entry in os.listdir(merged_models_dir):
-                if (entry.startswith(f"{mode}_URIEL_merge_{locale}_") or
-                    entry.startswith(f"{mode}_REAL_merge_{locale}_")) and entry.endswith("merged"):
-                    merged_model_path = os.path.join(merged_models_dir, entry)
-                    break
+            merged_model_path = naming_manager.find_results_directory(
+                merged_models_dir,
+                experiment_type='merging',
+                method=mode,
+                similarity_type=similarity_type,
+                locale=locale,
+                model_family=model_family
+            )
 
             if merged_model_path and os.path.exists(merged_model_path):
-                eval_success = run_evaluation(merged_model_path, locale, mode)
+                # Create results directory with centralized naming
+                results_dir_name = naming_manager.get_results_dir_name(
+                    experiment_type='merging',
+                    method=mode,
+                    similarity_type=similarity_type,
+                    locale=locale,
+                    model_family=model_family,
+                    num_languages=num_languages
+                )
+                eval_success = run_evaluation(merged_model_path, locale, mode, results_dir_name)
                 results[mode] = eval_success
 
                 # Clean up merged model after successful evaluation if requested
@@ -296,6 +338,9 @@ def main():
         locales = locales[:args.max_locales]
     
     print(f"Starting experiment for {len(locales)} locales")
+    print(f"Similarity Type: {args.similarity_type}")
+    print(f"Model Root: {args.models_root}")
+    print(f"Cleanup After Eval: {args.cleanup_after_eval}")
     print(f"Modes: {args.modes}")
     print(f"Start from index: {args.start_from}")
     
@@ -335,7 +380,7 @@ def main():
 
     for i, locale in enumerate(locales):
         print(f"\nProcessing locale {i+1}/{len(locales)}: {locale}")
-        results = run_experiment_for_locale(locale, args.modes, merge_extra_args, args.cleanup_after_eval, args.models_root)
+        results = run_experiment_for_locale(locale, args.modes, merge_extra_args, args.cleanup_after_eval, args.models_root, args.similarity_type, args.num_languages)
         
         overall_results[locale] = results
         
@@ -347,6 +392,9 @@ def main():
                 'total_locales': len(all_locales),
                 'processed_locales': i + 1,
                 'current_locale': locale,
+                'similarity_type': args.similarity_type,
+                'models_root': args.models_root,
+                'cleanup_after_eval': args.cleanup_after_eval,
                 'results': overall_results
             }, f, indent=2)
         
@@ -380,6 +428,9 @@ def main():
                 'start_from': args.start_from,
                 'max_locales': args.max_locales,
                 'num_languages': args.num_languages,
+                'similarity_type': args.similarity_type,
+                'models_root': args.models_root,
+                'cleanup_after_eval': args.cleanup_after_eval,
                 'dataset_name': args.dataset_name,
                 'dataset_split': args.dataset_split,
                 'text_column': args.text_column,
