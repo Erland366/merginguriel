@@ -29,7 +29,7 @@ def print_usage_examples():
             "use_case": "Good for models with conflicting parameter directions"
         },
         {
-            "name": "Task Arithmetic",
+            "name": "TaskArithmetic",
             "mode": "task_arithmetic",
             "description": "Adds/subtracts task vectors representing fine-tuning changes",
             "use_case": "Ideal when you have clear task vector representations"

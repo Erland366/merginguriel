@@ -31,6 +31,7 @@ class ExperimentMetadata:
     source_languages: Optional[List[str]] = None
     weights: Optional[Dict[str, float]] = None
     merge_mode: Optional[str] = None
+    similarity_type: Optional[str] = None
     num_languages: Optional[int] = None
     timestamp: Optional[str] = None
     folder_name: Optional[str] = None
@@ -87,17 +88,25 @@ def count_languages_in_merge_details(model_path: Optional[str]) -> Optional[int]
 
 def determine_experiment_variant(experiment_type: str,
                                  num_languages: Optional[int],
-                                 model_path: Optional[str]) -> str:
-    """Build a display key that differentiates merges by language count."""
+                                 model_path: Optional[str],
+                                 similarity_type: Optional[str] = None) -> str:
+    """Build a display key that differentiates merges by language count and similarity type."""
     base_type = experiment_type or "unknown"
 
     if not is_merge_model_path(model_path):
         return base_type
 
-    if num_languages:
-        return f"{base_type}_{int(num_languages)}lang"
-
-    return f"{base_type}_unknownlang"
+    # Include similarity type for non-baseline experiments
+    if similarity_type and similarity_type in ['URIEL', 'REAL'] and base_type != 'baseline':
+        if num_languages:
+            return f"{base_type}_{similarity_type}_{int(num_languages)}lang"
+        else:
+            return f"{base_type}_{similarity_type}_unknownlang"
+    else:
+        if num_languages:
+            return f"{base_type}_{int(num_languages)}lang"
+        else:
+            return f"{base_type}_unknownlang"
 
 def load_results_from_folder(folder_path):
     """Load results.json from a folder."""
@@ -188,6 +197,7 @@ def parse_experiment_metadata(folder_name: str,
             source_languages=source_languages or None,
             weights=weights or None,
             merge_mode=experiment_type,
+            similarity_type=None,  # Not available in merge_details, will be set later
             num_languages=num_languages,
             timestamp=merge_details.get('Timestamp (UTC)', ''),
             folder_name=folder_name
@@ -207,6 +217,7 @@ def parse_experiment_metadata(folder_name: str,
                 source_languages=None,
                 weights=None,
                 merge_mode=parsed['method'],
+                similarity_type=parsed.get('similarity_type', 'URIEL'),
                 num_languages=parsed['num_languages'],
                 timestamp=parsed.get('timestamp'),
                 folder_name=folder_name
@@ -223,6 +234,7 @@ def parse_experiment_metadata(folder_name: str,
                     source_languages=None,
                     weights=None,
                     merge_mode=parsed['method'],
+                    similarity_type=parsed.get('similarity_type', 'URIEL'),
                     num_languages=parsed['num_languages'],
                     timestamp=parsed.get('timestamp'),
                     folder_name=folder_name
@@ -437,9 +449,10 @@ def aggregate_results(evaluation_matrix: Optional[pd.DataFrame] = None):
                 num_languages = 4
 
             experiment_variant = determine_experiment_variant(
-                metadata.experiment_type,
+                metadata.merge_mode or metadata.experiment_type,
                 num_languages,
-                model_name
+                model_name,
+                eval_info.get('similarity_type') or metadata.__dict__.get('similarity_type', 'URIEL')
             )
 
             # Harmonize with evaluation prefix in folder name (e.g., average_19lang_locale)
@@ -463,7 +476,7 @@ def aggregate_results(evaluation_matrix: Optional[pd.DataFrame] = None):
                     evaluation_matrix
                 )
 
-            # Build the data row
+            # Build the data row with similarity type
             data_row = {
                 'locale': locale,
                 'experiment_type': metadata.experiment_type,
@@ -482,7 +495,9 @@ def aggregate_results(evaluation_matrix: Optional[pd.DataFrame] = None):
                 'weights': metadata.weights,
                 'merge_mode': metadata.merge_mode,
                 'num_languages': num_languages,
-                'merge_timestamp': metadata.timestamp
+                'merge_timestamp': metadata.timestamp,
+                # Similarity type for differentiation
+                'similarity_type': eval_info.get('similarity_type') or metadata.__dict__.get('similarity_type', 'URIEL')
             }
 
             # Add baseline data if available

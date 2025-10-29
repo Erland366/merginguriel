@@ -473,7 +473,7 @@ class TiesStrategy(MergingStrategy):
 
 
 class TaskArithmeticStrategy(MergingStrategy):
-    """Task Arithmetic merging strategy that adds/subtracts task vectors."""
+    """TaskArithmetic merging strategy that adds/subtracts task vectors."""
 
     def get_merger(self, mode: str):
         return merging_methods_dict["task_arithmetic"]()
@@ -484,7 +484,7 @@ class TaskArithmeticStrategy(MergingStrategy):
         models_and_weights: Dict[str, ModelInfo],
         base_model_info: ModelInfo,
     ) -> Dict[str, Any]:
-        # Task Arithmetic parameters
+        # TaskArithmetic parameters
         # For task_arithmetic, scaling_coefficient should be a single float
         # We'll use the average of weights or a default value
         src_weights = [info.weight for info in models_and_weights.values()]

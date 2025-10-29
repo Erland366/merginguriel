@@ -136,7 +136,7 @@ def create_orchestrator_config_from_args(args) -> IterativeOrchestratorConfig:
         max_sync_wait_time=args.max_sync_wait_time,
         merge_timeout=args.merge_timeout,
         enable_distributed=args.enable_distributed,
-        max-gpu-memory=args.max-gpu-memory,
+        max_gpu_memory=args.max_gpu_memory,
         num_workers=args.num_workers,
         pin_memory=args.pin_memory,
         enable_wandb=args.enable_wandb,

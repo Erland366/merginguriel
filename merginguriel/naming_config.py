@@ -218,8 +218,8 @@ class NamingManager:
 
     def parse_merged_model_dir_name(self, dir_name: str) -> Dict[str, Any]:
         """Parse merged model directory name into components."""
-        # Pattern: similarity_REAL_merge_af-ZA_4merged
-        pattern = r'^(?P<method>[^_]+)_(?P<similarity_type>URIEL|REAL)_merge_(?P<locale>[a-z]{2}-[A-Z]{2})_(?P<num_languages>\d+)merged$'
+        # Pattern: similarity_REAL_merge_af-ZA_4merged or task_arithmetic_REAL_merge_af-ZA_4merged
+        pattern = r'^(?P<method>[^_]+(?:_[^_]+)*)_(?P<similarity_type>URIEL|REAL)_merge_(?P<locale>[a-z]{2}-[A-Z]{2})_(?P<num_languages>\d+)merged$'
         match = re.match(pattern, dir_name)
 
         if match:
@@ -231,7 +231,7 @@ class NamingManager:
             return result
 
         # Legacy pattern for backward compatibility
-        legacy_pattern = r'^(?P<experiment_type>[^_]+)_(?P<method>[^_]+)_(?P<similarity_type>URIEL|REAL)_(?P<locale>[a-z]{2}-[A-Z]{2})_(?P<model_family>[^_]+(?:_[^_]+)*)_(?P<num_languages>\d+)lang_(?P<timestamp>\d{8}_\d{6})$'
+        legacy_pattern = r'^(?P<experiment_type>[^_]+)_(?P<method>[^_]+(?:_[^_]+)*)_(?P<similarity_type>URIEL|REAL)_(?P<locale>[a-z]{2}-[A-Z]{2})_(?P<model_family>[^_]+(?:_[^_]+)*)_(?P<num_languages>\d+)lang_(?P<timestamp>\d{8}_\d{6})$'
         match = re.match(legacy_pattern, dir_name)
         if match:
             result = match.groupdict()

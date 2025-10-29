@@ -5,7 +5,7 @@ Follows the sophisticated analysis patterns from enhanced_analysis.py and compre
 Includes advanced merging methods and ensemble analysis
 
 Features:
-- Advanced merging methods analysis (TIES, Task Arithmetic, SLERP, RegMean, DARE, Fisher)
+- Advanced merging methods analysis (TIES, TaskArithmetic, SLERP, RegMean, DARE, Fisher)
 - Ensemble inference methods analysis (majority, weighted_majority, soft, uriel_logits)
 - Zero-shot performance comparison using N-x-N evaluation matrices
 - Merge details extraction from merge_details.txt files
@@ -295,7 +295,14 @@ class AdvancedResultsAnalyzer:
         """Friendly display name for method keys with model family and merged count."""
         match = re.search(r'_(\d+)lang$', method_key)
         if match:
-            base = method_key[:match.start()].replace('_', ' ').title()
+            base = method_key[:match.start()]
+            # Special handling for ties and task_arithmetic to keep them consistent
+            if base.startswith('ties'):
+                base = base.replace('_', '')
+            elif base.startswith('task_arithmetic'):
+                base = base.replace('_', '')
+            else:
+                base = base.replace('_', ' ').title()
             extra_info = []
             if model_family and model_family != 'unknown':
                 extra_info.append(model_family)
@@ -306,6 +313,11 @@ class AdvancedResultsAnalyzer:
 
         # If no lang suffix, include model family and similarity type
         display = method_key.replace('_', ' ').title()
+        # Special handling for ties and task_arithmetic to keep them consistent
+        if display.startswith('Ties'):
+            display = display.replace(' ', '')
+        elif display.startswith('Task Arithmetic'):
+            display = display.replace(' ', '')
         extra_info = []
         if model_family and model_family != 'unknown':
             extra_info.append(model_family)

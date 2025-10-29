@@ -161,8 +161,8 @@ def main():
     print(f"\n📖 USAGE EXAMPLES FOR NEW METHODS:")
     print("-" * 40)
     examples = [
-        ("TIES Merging", "ties", "--mode ties --target-lang sq-AL --num-languages 5"),
-        ("Task Arithmetic", "task_arithmetic", "--mode task_arithmetic --target-lang sq-AL --num-languages 5"),
+        ("TiesMerging", "ties", "--mode ties --target-lang sq-AL --num-languages 5"),
+        ("TaskArithmetic", "task_arithmetic", "--mode task_arithmetic --target-lang sq-AL --num-languages 5"),
         ("SLERP", "slerp", "--mode slerp --target-lang sq-AL --num-languages 5"),
         ("RegMean", "regmean", "--mode regmean --target-lang sq-AL --num-languages 5"),
     ]
