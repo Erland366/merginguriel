@@ -17,7 +17,8 @@ python merginguriel/run_large_scale_experiment.py \
   --similarity-type REAL \
   --models-root haryos_model_large \
   --num-languages 5 \
-  --cleanup-after-eval
+  --cleanup-after-eval \
+  --modes ties
 
 # Optional: Core Methods Only (Faster Run)
 # =====================================

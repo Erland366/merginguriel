@@ -89,24 +89,32 @@ def count_languages_in_merge_details(model_path: Optional[str]) -> Optional[int]
 def determine_experiment_variant(experiment_type: str,
                                  num_languages: Optional[int],
                                  model_path: Optional[str],
-                                 similarity_type: Optional[str] = None) -> str:
-    """Build a display key that differentiates merges by language count and similarity type."""
+                                 similarity_type: Optional[str] = None,
+                                 base_model: Optional[str] = None) -> str:
+    """Build a display key that differentiates merges by language count, similarity type, and base model."""
     base_type = experiment_type or "unknown"
 
     if not is_merge_model_path(model_path):
+        # For baseline models, include full base model info
+        if base_model:
+            # Use full model name (xlm-roberta-base, xlm-roberta-large)
+            return f"{base_type}_{base_model}"
         return base_type
 
-    # Include similarity type for non-baseline experiments
+    # Use full base model name for merging experiments
+    model_name = base_model if base_model else "unknown_model"
+
+    # Include similarity type and full base model for non-baseline experiments
     if similarity_type and similarity_type in ['URIEL', 'REAL'] and base_type != 'baseline':
         if num_languages:
-            return f"{base_type}_{similarity_type}_{int(num_languages)}lang"
+            return f"{base_type}_{similarity_type}_{model_name}_{int(num_languages)}lang"
         else:
-            return f"{base_type}_{similarity_type}_unknownlang"
+            return f"{base_type}_{similarity_type}_{model_name}_unknownlang"
     else:
         if num_languages:
-            return f"{base_type}_{int(num_languages)}lang"
+            return f"{base_type}_{model_name}_{int(num_languages)}lang"
         else:
-            return f"{base_type}_unknownlang"
+            return f"{base_type}_{model_name}_unknownlang"
 
 def load_results_from_folder(folder_path):
     """Load results.json from a folder."""
@@ -448,11 +456,28 @@ def aggregate_results(evaluation_matrix: Optional[pd.DataFrame] = None):
                 # Default legacy merges without explicit counts to 4
                 num_languages = 4
 
+            # Extract base model from folder_name (since model_name doesn't contain base model info for merges)
+            base_model = None
+            # Try to extract from folder name first
+            if folder:
+                if "xlm-roberta-base" in folder:
+                    base_model = "xlm-roberta-base"
+                elif "xlm-roberta-large" in folder:
+                    base_model = "xlm-roberta-large"
+
+            # Fallback to model_name for baseline models
+            if not base_model and model_name:
+                if "xlm-roberta-base" in model_name:
+                    base_model = "xlm-roberta-base"
+                elif "xlm-roberta-large" in model_name:
+                    base_model = "xlm-roberta-large"
+
             experiment_variant = determine_experiment_variant(
                 metadata.merge_mode or metadata.experiment_type,
                 num_languages,
                 model_name,
-                eval_info.get('similarity_type') or metadata.__dict__.get('similarity_type', 'URIEL')
+                eval_info.get('similarity_type') or metadata.__dict__.get('similarity_type', 'URIEL'),
+                base_model
             )
 
             # Harmonize with evaluation prefix in folder name (e.g., average_19lang_locale)
