@@ -71,13 +71,15 @@ def get_model_for_locale(locale, models_root="haryos_model"):
     return model_path
 
 
-def run_merge(mode: str, target_lang: str, extra_args: List[str]) -> bool:
+def run_merge(mode: str, target_lang: str, extra_args: List[str], base_model: Optional[str] = None) -> bool:
     """Run the merging pipeline for a specific mode and target language."""
     print(f"Running {mode} merge for {target_lang}...")
 
     cmd = [sys.executable, os.path.join(REPO_ROOT, "merginguriel", "run_merging_pipeline_refactored.py"),
            "--mode", mode,
            "--target-lang", target_lang]
+    if base_model:
+        cmd.extend(["--base-model", base_model])
     if extra_args:
         cmd.extend(extra_args)
 
@@ -212,15 +214,31 @@ def run_experiment_for_locale(
             continue
 
         print(f"\n--- {mode} Merge for {locale} ---")
-        merge_success = run_merge(mode, locale, merge_extra_args)
+        # Extract base model name from base_model_path
+        base_model_name = None
+        if base_model_path:
+            if "xlm-roberta-base" in base_model_path:
+                base_model_name = "xlm-roberta-base"
+            elif "xlm-roberta-large" in base_model_path:
+                base_model_name = "xlm-roberta-large"
+
+        merge_success = run_merge(mode, locale, merge_extra_args, base_model_name)
         if merge_success:
             # Find the actual merged model directory using the merged model naming convention
             merged_models_dir = os.path.join(REPO_ROOT, "merged_models")
+            # Convert model_family to the expected format (xlm-roberta-base, xlm-roberta-large)
+            lookup_model_family = model_family
+            if "xlm-roberta-base_massive_k" in model_family:
+                lookup_model_family = "xlm-roberta-base"
+            elif "xlm-roberta-large_massive_k" in model_family:
+                lookup_model_family = "xlm-roberta-large"
+
             merged_model_path = naming_manager.find_merged_model_directory(
                 merged_models_dir,
                 method=mode,
                 similarity_type=similarity_type,
                 locale=locale,
+                model_family=lookup_model_family,
                 num_languages=num_languages
             )
 
@@ -380,6 +398,7 @@ def main():
         "--preweight", args.preweight,
         "--batch-size", str(args.batch_size),
         "--max-seq-length", str(args.max_seq_length),
+        "--base-model-dir", str(Path(REPO_ROOT) / args.models_root),
     ]
 
     for i, locale in enumerate(locales):

@@ -17,7 +17,7 @@ class NamingConfig:
 
     # Core naming patterns
     results_dir_pattern: str = "{experiment_type}_{method}_{similarity_type}_{locale}_{model_family}_{num_languages}lang"
-    merged_model_pattern: str = "{method}_{similarity_type}_merge_{locale}_{num_languages}merged"
+    merged_model_pattern: str = "{method}_{similarity_type}_merge_{locale}_{model_family}_{num_languages}merged"
     plot_filename_pattern: str = "{method}_{model_family}_{similarity_type}_{num_languages}lang"
 
     # Simple patterns for baseline
@@ -81,6 +81,7 @@ class NamingManager:
             method=method,
             similarity_type=similarity_type,
             locale=locale,
+            model_family=model_family,
             num_languages=num_languages
         )
 
@@ -218,21 +219,31 @@ class NamingManager:
 
     def parse_merged_model_dir_name(self, dir_name: str) -> Dict[str, Any]:
         """Parse merged model directory name into components."""
-        # Pattern: similarity_REAL_merge_af-ZA_4merged or task_arithmetic_REAL_merge_af-ZA_4merged
-        pattern = r'^(?P<method>[^_]+(?:_[^_]+)*)_(?P<similarity_type>URIEL|REAL)_merge_(?P<locale>[a-z]{2}-[A-Z]{2})_(?P<num_languages>\d+)merged$'
+        # New pattern: ties_REAL_merge_af-ZA_xlm-roberta-base_4merged or average_REAL_merge_af-ZA_xlm-roberta-large_4merged
+        pattern = r'^(?P<method>[^_]+(?:_[^_]+)*)_(?P<similarity_type>URIEL|REAL)_merge_(?P<locale>[a-z]{2}-[A-Z]{2})_(?P<model_family>[^_]+(?:_[^_]+)*)_(?P<num_languages>\d+)merged$'
         match = re.match(pattern, dir_name)
 
         if match:
             result = match.groupdict()
             result['experiment_type'] = 'merging'
-            result['model_family'] = 'unknown'
             result['num_languages'] = int(result['num_languages'])
             result['timestamp'] = None
             return result
 
-        # Legacy pattern for backward compatibility
-        legacy_pattern = r'^(?P<experiment_type>[^_]+)_(?P<method>[^_]+(?:_[^_]+)*)_(?P<similarity_type>URIEL|REAL)_(?P<locale>[a-z]{2}-[A-Z]{2})_(?P<model_family>[^_]+(?:_[^_]+)*)_(?P<num_languages>\d+)lang_(?P<timestamp>\d{8}_\d{6})$'
+        # Legacy pattern for backward compatibility (without model_family)
+        legacy_pattern = r'^(?P<method>[^_]+(?:_[^_]+)*)_(?P<similarity_type>URIEL|REAL)_merge_(?P<locale>[a-z]{2}-[A-Z]{2})_(?P<num_languages>\d+)merged$'
         match = re.match(legacy_pattern, dir_name)
+        if match:
+            result = match.groupdict()
+            result['experiment_type'] = 'merging'
+            result['model_family'] = 'unknown'  # Legacy models don't have family info
+            result['num_languages'] = int(result['num_languages'])
+            result['timestamp'] = None
+            return result
+
+        # Older legacy pattern for backward compatibility
+        older_legacy_pattern = r'^(?P<experiment_type>[^_]+)_(?P<method>[^_]+(?:_[^_]+)*)_(?P<similarity_type>URIEL|REAL)_(?P<locale>[a-z]{2}-[A-Z]{2})_(?P<model_family>[^_]+(?:_[^_]+)*)_(?P<num_languages>\d+)lang_(?P<timestamp>\d{8}_\d{6})$'
+        match = re.match(older_legacy_pattern, dir_name)
         if match:
             result = match.groupdict()
             result['num_languages'] = int(result['num_languages'])
@@ -267,7 +278,7 @@ class NamingManager:
         return None
 
     def find_merged_model_directory(self, base_dir: str, method: str, similarity_type: str,
-                                  locale: str, num_languages: Optional[int] = None) -> Optional[str]:
+                                  locale: str, model_family: str, num_languages: Optional[int] = None) -> Optional[str]:
         """Find existing merged model directory matching given criteria."""
         if not os.path.exists(base_dir):
             return None
@@ -280,7 +291,8 @@ class NamingManager:
                 parsed = self.parse_merged_model_dir_name(entry)
                 if (parsed['method'] == method and
                     parsed['similarity_type'] == similarity_type and
-                    parsed['locale'] == locale):
+                    parsed['locale'] == locale and
+                    (parsed.get('model_family') == model_family or parsed.get('model_family') == 'unknown')):
                     # For merged models, be more flexible about num_languages
                     # The directory name might not match the actual number of merged models
                     return os.path.join(base_dir, entry)

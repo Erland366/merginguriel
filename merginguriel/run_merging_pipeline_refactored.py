@@ -15,11 +15,17 @@ import pandas as pd
 from abc import ABC, abstractmethod
 from typing import Dict, List, Optional, Tuple, Any
 from dataclasses import dataclass
+from pathlib import Path
 
 # Resolve repository root (one level up when this file is inside merginguriel/)
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
+
+DEFAULT_MODEL_DIRS = {
+    "xlm-roberta-base": Path(project_root) / "haryos_model",
+    "xlm-roberta-large": Path(project_root) / "haryos_model_large",
+}
 
 submodule_path = os.path.join(project_root, 'submodules/auto_merge_llm')
 if submodule_path not in sys.path:
@@ -63,6 +69,7 @@ class MergeConfig:
     preweight: str = "equal"  # {equal|uriel}
     batch_size: int = 16
     max_seq_length: int = 128
+    base_model_dir: str = ""
 
 
 class WeightCalculator(ABC):
@@ -149,24 +156,34 @@ class SimilarityWeightCalculator(WeightCalculator):
         if not similar_languages:
             raise ValueError("Could not compute similarity weights")
 
-        # Create model mapping using the haryos_model structure
-        models_and_weights = {}
-        for locale, weight in similar_languages:
-            model_path = f"/home/coder/Python_project/MergingUriel/haryos_model/{config.base_model}_massive_k_{locale}"
+        if config.base_model_dir:
+            base_dir = Path(config.base_model_dir).expanduser()
+            if not base_dir.is_absolute():
+                base_dir = Path(project_root) / base_dir
+        else:
+            base_dir = DEFAULT_MODEL_DIRS.get(
+                config.base_model,
+                Path(project_root) / "haryos_model",
+            )
 
-            # Check if model exists locally
-            if not os.path.exists(model_path):
+        # Create model mapping using the resolved base directory
+        models_and_weights: Dict[str, ModelInfo] = {}
+        for locale, weight in similar_languages:
+            model_path = base_dir / f"{config.base_model}_massive_k_{locale}"
+
+            if not model_path.exists():
                 print(f"  ✗ Model path not found: {model_path}")
                 continue
 
-            models_and_weights[model_path] = ModelInfo(
-                model_name=model_path,
-                subfolder="",  # No subfolder needed with consolidated structure
+            model_path_str = str(model_path)
+            models_and_weights[model_path_str] = ModelInfo(
+                model_name=model_path_str,
+                subfolder="",
                 language=locale,
                 locale=locale,
-                weight=weight
+                weight=weight,
             )
-            print(f"  ✓ {model_path}: {weight:.6f} (locale: {locale})")
+            print(f"  ✓ {model_path_str}: {weight:.6f} (locale: {locale})")
 
         if not models_and_weights:
             raise ValueError("No local models found for the target language")
@@ -786,9 +803,22 @@ class OutputManager:
         """Save the merged model and merge details."""
         # Get the number of models merged
         num_models = len(models_and_weights)
-        # Include similarity type in the naming convention
+
+        # Extract base model name from base_model_info.model_name
+        base_model_name = base_model_info.model_name
+        # Clean up the model name to get just the model family (xlm-roberta-base, xlm-roberta-large)
+        if "/" in base_model_name:
+            base_model_name = base_model_name.split("/")[-1]  # Get last part after slash
+
+        # Extract just the model family (xlm-roberta-base, xlm-roberta-large) from full path
+        if "xlm-roberta-base" in base_model_name:
+            base_model_name = "xlm-roberta-base"
+        elif "xlm-roberta-large" in base_model_name:
+            base_model_name = "xlm-roberta-large"
+
+        # Include similarity type and base model in the naming convention
         output_dir = os.path.join(self.project_root, "merged_models",
-                                 f"{config.mode}_{config.similarity_type}_merge_{config.target_lang}_{num_models}merged")
+                                 f"{config.mode}_{config.similarity_type}_merge_{config.target_lang}_{base_model_name}_{num_models}merged")
 
         os.makedirs(output_dir, exist_ok=True)
         merged_model.save_pretrained(output_dir)
@@ -907,6 +937,7 @@ def create_config_from_args(args) -> MergeConfig:
         preweight=args.preweight,
         batch_size=args.batch_size,
         max_seq_length=args.max_seq_length,
+        base_model_dir=args.base_model_dir,
     )
 
 
@@ -932,6 +963,12 @@ def main():
         type=str,
         default="xlm-roberta-base",
         help="Base model name for model path construction (e.g., xlm-roberta-base, xlm-roberta-large)"
+    )
+    parser.add_argument(
+        "--base-model-dir",
+        type=str,
+        default="",
+        help="Optional override for the directory containing base-model checkpoints."
     )
     parser.add_argument(
         "--subfolder-pattern",
