@@ -89,7 +89,7 @@ def get_available_locales(models_root="haryos_model"):
 
 def auto_select_iterative_sources(target_lang: str, max_models: int, similarity_type: str = "URIEL",
                                 models_root: str = "haryos_model", top_k: int = 20,
-                                sinkhorn_iters: int = 20) -> List[str]:
+                                sinkhorn_iters: int = 20, include_target: bool = False) -> List[str]:
     """
     Auto-select source languages for iterative training based on similarity to target.
 
@@ -118,7 +118,7 @@ def auto_select_iterative_sources(target_lang: str, max_models: int, similarity_
         # Get similar languages using existing similarity processing
         similar_languages = load_and_process_similarity(
             similarity_matrix_path, target_lang, max_models,
-            top_k, sinkhorn_iters, verbose=False
+            top_k, sinkhorn_iters, include_target, verbose=False
         )
 
         # Extract just the locale codes
@@ -148,7 +148,7 @@ def auto_select_iterative_sources(target_lang: str, max_models: int, similarity_
 
 
 def run_iterative_training(target_lang: str, source_locales: List[str], mode: str,
-                         extra_args: List[str], output_base_dir: str) -> bool:
+                         extra_args: List[str], output_base_dir: str, include_target: bool = False) -> bool:
     """
     Run iterative training for a specific target language.
 
@@ -165,8 +165,9 @@ def run_iterative_training(target_lang: str, source_locales: List[str], mode: st
     logger.info(f"Starting iterative training for {target_lang} with mode {mode}")
     logger.info(f"Source languages: {source_locales}")
 
-    # Create locale-specific output directory
-    locale_output_dir = os.path.join(output_base_dir, f"iterative_{mode}_{target_lang}")
+    # Create locale-specific output directory with IT/ET naming
+    itet_suffix = "IT" if include_target else "ET"
+    locale_output_dir = os.path.join(output_base_dir, f"iterative_{mode}_{target_lang}_{itet_suffix}")
     os.makedirs(locale_output_dir, exist_ok=True)
 
     # Build command for iterative training
@@ -448,7 +449,8 @@ def run_experiment_for_locale(
     similarity_type: str = "URIEL",
     models_root: str = "haryos_model",
     top_k: int = 20,
-    sinkhorn_iters: int = 20
+    sinkhorn_iters: int = 20,
+    include_target: bool = False
 ) -> Dict[str, bool]:
     """
     Run the iterative training experiment for a single locale.
@@ -502,7 +504,7 @@ def run_experiment_for_locale(
     results = {}
 
     # Auto-select source languages
-    source_locales = auto_select_iterative_sources(locale, max_models, similarity_type, models_root, top_k, sinkhorn_iters)
+    source_locales = auto_select_iterative_sources(locale, max_models, similarity_type, models_root, top_k, sinkhorn_iters, include_target)
 
     if not source_locales:
         logger.error(f"No source languages found for {locale}")
@@ -516,12 +518,13 @@ def run_experiment_for_locale(
 
     # Run iterative training
     training_success = run_iterative_training(
-        locale, source_locales, mode, training_extra_args, output_base_dir
+        locale, source_locales, mode, training_extra_args, output_base_dir, include_target
     )
 
     if training_success:
         # Extract results from training output
-        locale_output_dir = os.path.join(output_base_dir, f"iterative_{mode}_{locale}")
+        itet_suffix = "IT" if include_target else "ET"
+        locale_output_dir = os.path.join(output_base_dir, f"iterative_{mode}_{locale}_{itet_suffix}")
         training_results = extract_iterative_results(locale, mode, locale_output_dir)
 
         if training_results:
@@ -596,6 +599,8 @@ def main():
     # Additional options for consistency with merging/ensemble experiments
     parser.add_argument("--similarity-type", type=str, choices=["URIEL","REAL"], default="URIEL",
                        help="Type of similarity matrix to use: URIEL (linguistic features) or REAL (empirical evaluation results)")
+    parser.add_argument("--include-target", action="store_true",
+                       help="Include target language model in iterative training (IT mode). Default is exclude target (ET mode).")
     parser.add_argument("--models-root", type=str, default="haryos_model",
                        help="Root directory containing models (default: haryos_model)")
 
@@ -656,7 +661,7 @@ def main():
         results = run_experiment_for_locale(
             locale, args.mode, training_extra_args, args.output_dir,
             args.max_models, args.similarity_type, args.models_root,
-            args.top_k, args.sinkhorn_iters
+            args.top_k, args.sinkhorn_iters, args.include_target
         )
         elapsed_time = time.time() - start_time
 

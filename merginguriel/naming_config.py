@@ -16,9 +16,9 @@ class NamingConfig:
     """Centralized configuration for all naming schemes."""
 
     # Core naming patterns
-    results_dir_pattern: str = "{experiment_type}_{method}_{similarity_type}_{locale}_{model_family}_{num_languages}lang"
-    merged_model_pattern: str = "{method}_{similarity_type}_merge_{locale}_{model_family}_{num_languages}merged"
-    plot_filename_pattern: str = "{method}_{model_family}_{similarity_type}_{num_languages}lang"
+    results_dir_pattern: str = "{experiment_type}_{method}_{similarity_type}_{locale}_{model_family}_{num_languages}lang_{include_target}"
+    merged_model_pattern: str = "{method}_{similarity_type}_merge_{locale}_{model_family}_{num_languages}merged_{include_target}"
+    plot_filename_pattern: str = "{method}_{model_family}_{similarity_type}_{num_languages}lang_{include_target}"
 
     # Simple patterns for baseline
     baseline_results_pattern: str = "baseline_{locale}_{model_family}"
@@ -50,7 +50,7 @@ class NamingManager:
 
     def get_results_dir_name(self, experiment_type: str, method: str, similarity_type: str,
                             locale: str, model_family: str, num_languages: Optional[int] = None,
-                            timestamp: Optional[str] = None) -> str:
+                            include_target: bool = False, timestamp: Optional[str] = None) -> str:
         """Generate results directory name."""
         if experiment_type == 'baseline':
             return self.config.baseline_results_pattern.format(
@@ -61,32 +61,37 @@ class NamingManager:
             if num_languages is None:
                 raise ValueError(f"num_languages is required for {experiment_type} experiments")
 
+            include_target_suffix = "IT" if include_target else "ET"
             return self.config.results_dir_pattern.format(
                 experiment_type=experiment_type,
                 method=method,
                 similarity_type=similarity_type,
                 locale=locale,
                 model_family=model_family,
-                num_languages=num_languages
+                num_languages=num_languages,
+                include_target=include_target_suffix
             )
 
     def get_merged_model_dir_name(self, experiment_type: str, method: str, similarity_type: str,
                                   locale: str, model_family: str, num_languages: int,
-                                  timestamp: Optional[str] = None) -> str:
+                                  include_target: bool = False, timestamp: Optional[str] = None) -> str:
         """Generate merged model directory name."""
         if experiment_type == 'baseline':
             raise ValueError("Baseline experiments don't create merged models")
 
+        include_target_suffix = "IT" if include_target else "ET"
         return self.config.merged_model_pattern.format(
             method=method,
             similarity_type=similarity_type,
             locale=locale,
             model_family=model_family,
-            num_languages=num_languages
+            num_languages=num_languages,
+            include_target=include_target_suffix
         )
 
     def get_plot_filename(self, method: str, model_family: str, similarity_type: str,
-                         num_languages: Optional[int] = None, timestamp: Optional[str] = None) -> str:
+                         num_languages: Optional[int] = None, include_target: bool = False,
+                         timestamp: Optional[str] = None) -> str:
         """Generate plot filename."""
         if num_languages is None:
             # For baseline plots
@@ -95,11 +100,13 @@ class NamingManager:
             )
         else:
             # For method plots
+            include_target_suffix = "IT" if include_target else "ET"
             return self.config.plot_filename_pattern.format(
                 method=method,
                 model_family=model_family,
                 similarity_type=similarity_type,
-                num_languages=num_languages
+                num_languages=num_languages,
+                include_target=include_target_suffix
             )
 
     def detect_model_size_from_root(self, models_root: str) -> str:
@@ -203,9 +210,9 @@ class NamingManager:
             result['timestamp'] = None
             return result
 
-        # General pattern: merging_similarity_REAL_sq-AL_xlm-roberta-base-uncased_5lang
-        # Pattern: experiment_type_method_similarity_type_locale_model_family_num_languages
-        general_pattern = r'^(?P<experiment_type>[^_]+)_(?P<method>[^_]+)_(?P<similarity_type>URIEL|REAL)_(?P<locale>[a-z]{2}-[A-Z]{2})_(?P<model_family>[^_]+(?:_[^_]+)*)_(?P<num_languages>\d+)lang$'
+        # General pattern: merging_similarity_REAL_sq-AL_xlm-roberta-base-uncased_5lang_IT/ET
+        # Pattern: experiment_type_method_similarity_type_locale_model_family_num_languages_include_target
+        general_pattern = r'^(?P<experiment_type>[^_]+)_(?P<method>[^_]+)_(?P<similarity_type>URIEL|REAL)_(?P<locale>[a-z]{2}-[A-Z]{2})_(?P<model_family>[^_]+(?:_[^_]+)*)_(?P<num_languages>\d+)lang_(?P<include_target>IT|ET)$'
         match = re.match(general_pattern, dir_name)
         if match:
             result = match.groupdict()
@@ -213,8 +220,8 @@ class NamingManager:
             result['timestamp'] = None
             return result
 
-        # Alternative pattern: ensemble_method_locale_model_family_num_languages
-        ensemble_pattern = r'^(?P<experiment_type>ensemble)_(?P<method>[^_]+)_(?P<similarity_type>URIEL|REAL)_(?P<locale>[a-z]{2}-[A-Z]{2})_(?P<model_family>[^_]+(?:_[^_]+)*)_(?P<num_languages>\d+)lang$'
+        # Alternative pattern: ensemble_method_locale_model_family_num_languages_include_target
+        ensemble_pattern = r'^(?P<experiment_type>ensemble)_(?P<method>[^_]+)_(?P<similarity_type>URIEL|REAL)_(?P<locale>[a-z]{2}-[A-Z]{2})_(?P<model_family>[^_]+(?:_[^_]+)*)_(?P<num_languages>\d+)lang_(?P<include_target>IT|ET)$'
         match = re.match(ensemble_pattern, dir_name)
         if match:
             result = match.groupdict()
@@ -222,8 +229,8 @@ class NamingManager:
             result['timestamp'] = None
             return result
 
-        # Alternative pattern: iterative_method_locale_model_family_num_languages
-        iterative_pattern = r'^(?P<experiment_type>iterative)_(?P<method>[^_]+)_(?P<similarity_type>URIEL|REAL)_(?P<locale>[a-z]{2}-[A-Z]{2})_(?P<model_family>[^_]+(?:_[^_]+)*)_(?P<num_languages>\d+)lang$'
+        # Alternative pattern: iterative_method_locale_model_family_num_languages_include_target
+        iterative_pattern = r'^(?P<experiment_type>iterative)_(?P<method>[^_]+)_(?P<similarity_type>URIEL|REAL)_(?P<locale>[a-z]{2}-[A-Z]{2})_(?P<model_family>[^_]+(?:_[^_]+)*)_(?P<num_languages>\d+)lang_(?P<include_target>IT|ET)$'
         match = re.match(iterative_pattern, dir_name)
         if match:
             result = match.groupdict()
@@ -231,7 +238,7 @@ class NamingManager:
             result['timestamp'] = None
             return result
 
-        # Legacy pattern: method_num_languages_locale (no similarity type, no timestamp)
+        # Legacy pattern without IT/ET: method_num_languages_locale (no similarity type, no timestamp)
         legacy_pattern = r'^(?P<method>[^_]+)_(?P<num_languages>\d+)lang_(?P<locale>[a-z]{2}-[A-Z]{2})$'
         match = re.match(legacy_pattern, dir_name)
         if match:
@@ -240,6 +247,17 @@ class NamingManager:
             result['similarity_type'] = 'URIEL'  # Default for legacy
             result['model_family'] = 'unknown'
             result['num_languages'] = int(result['num_languages'])
+            result['include_target'] = 'ET'  # Default to ET for backward compatibility
+            result['timestamp'] = None
+            return result
+
+        # New pattern without IT/ET for backward compatibility: experiment_type_method_similarity_type_locale_model_family_num_languages
+        general_pattern_legacy = r'^(?P<experiment_type>[^_]+)_(?P<method>[^_]+)_(?P<similarity_type>URIEL|REAL)_(?P<locale>[a-z]{2}-[A-Z]{2})_(?P<model_family>[^_]+(?:_[^_]+)*)_(?P<num_languages>\d+)lang$'
+        match = re.match(general_pattern_legacy, dir_name)
+        if match:
+            result = match.groupdict()
+            result['num_languages'] = int(result['num_languages'])
+            result['include_target'] = 'ET'  # Default to ET for backward compatibility
             result['timestamp'] = None
             return result
 
@@ -266,14 +284,26 @@ class NamingManager:
 
     def parse_merged_model_dir_name(self, dir_name: str) -> Dict[str, Any]:
         """Parse merged model directory name into components."""
-        # New pattern: ties_REAL_merge_af-ZA_xlm-roberta-base_4merged or average_REAL_merge_af-ZA_xlm-roberta-large_4merged
-        pattern = r'^(?P<method>[^_]+(?:_[^_]+)*)_(?P<similarity_type>URIEL|REAL)_merge_(?P<locale>[a-z]{2}-[A-Z]{2})_(?P<model_family>[^_]+(?:_[^_]+)*)_(?P<num_languages>\d+)merged$'
+        # New pattern: ties_REAL_merge_af-ZA_xlm-roberta-base_4merged_IT/ET or average_REAL_merge_af-ZA_xlm-roberta-large_4merged_IT/ET
+        pattern = r'^(?P<method>[^_]+(?:_[^_]+)*)_(?P<similarity_type>URIEL|REAL)_merge_(?P<locale>[a-z]{2}-[A-Z]{2})_(?P<model_family>[^_]+(?:_[^_]+)*)_(?P<num_languages>\d+)merged_(?P<include_target>IT|ET)$'
         match = re.match(pattern, dir_name)
 
         if match:
             result = match.groupdict()
             result['experiment_type'] = 'merging'
             result['num_languages'] = int(result['num_languages'])
+            result['timestamp'] = None
+            return result
+
+        # Legacy pattern without IT/ET for backward compatibility: ties_REAL_merge_af-ZA_xlm-roberta-base_4merged
+        pattern_legacy = r'^(?P<method>[^_]+(?:_[^_]+)*)_(?P<similarity_type>URIEL|REAL)_merge_(?P<locale>[a-z]{2}-[A-Z]{2})_(?P<model_family>[^_]+(?:_[^_]+)*)_(?P<num_languages>\d+)merged$'
+        match = re.match(pattern_legacy, dir_name)
+
+        if match:
+            result = match.groupdict()
+            result['experiment_type'] = 'merging'
+            result['num_languages'] = int(result['num_languages'])
+            result['include_target'] = 'ET'  # Default to ET for backward compatibility
             result['timestamp'] = None
             return result
 
@@ -285,6 +315,7 @@ class NamingManager:
             result['experiment_type'] = 'merging'
             result['model_family'] = 'unknown'  # Legacy models don't have family info
             result['num_languages'] = int(result['num_languages'])
+            result['include_target'] = 'ET'  # Default to ET for backward compatibility
             result['timestamp'] = None
             return result
 

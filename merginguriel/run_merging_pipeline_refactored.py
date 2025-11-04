@@ -62,6 +62,7 @@ class MergeConfig:
         # Similarity matrix options
     similarity_source: str = "sparse"  # 'sparse' (precomputed) or 'dense' (on-the-fly)
     similarity_type: str = "URIEL"  # 'URIEL' (linguistic features) or 'REAL' (empirical evaluation results)
+    include_target: bool = False  # Include target language model in merging (IT mode)
     top_k: int = 20
     sinkhorn_iters: int = 20
     # Fisher/dataset options
@@ -150,7 +151,7 @@ class SimilarityWeightCalculator(WeightCalculator):
 
         similar_languages = load_and_process_similarity(
             similarity_matrix_path, target_lang, config.num_languages,
-            config.top_k, config.sinkhorn_iters, verbose=True
+            config.top_k, config.sinkhorn_iters, config.include_target, verbose=True
         )
 
         if not similar_languages:
@@ -818,9 +819,18 @@ class OutputManager:
         except ValueError:
             pass  # Keep original base_model_name if extraction fails
 
-        # Include similarity type and base model in the naming convention
-        output_dir = os.path.join(self.project_root, self.merged_models_dir,
-                                 f"{config.mode}_{config.similarity_type}_merge_{config.target_lang}_{base_model_name}_{num_models}merged")
+        # Use centralized naming manager with IT/ET support
+        from merginguriel.naming_config import naming_manager
+        merged_model_dir_name = naming_manager.get_merged_model_dir_name(
+            experiment_type='merging',
+            method=config.mode,
+            similarity_type=config.similarity_type,
+            locale=config.target_lang,
+            model_family=base_model_name,
+            num_languages=num_models,
+            include_target=config.include_target
+        )
+        output_dir = os.path.join(self.project_root, self.merged_models_dir, merged_model_dir_name)
 
         os.makedirs(output_dir, exist_ok=True)
         merged_model.save_pretrained(output_dir)
@@ -934,6 +944,7 @@ def create_config_from_args(args) -> MergeConfig:
         base_model=args.base_model,
         similarity_source=args.similarity_source,
         similarity_type=args.similarity_type,
+        include_target=args.include_target,
         top_k=args.top_k,
         sinkhorn_iters=args.sinkhorn_iters,
         fisher_data_mode=args.fisher_data_mode,
@@ -1034,6 +1045,11 @@ def main():
         choices=["URIEL", "REAL"],
         default="URIEL",
         help="Type of similarity matrix to use: URIEL (linguistic features) or REAL (empirical evaluation results)"
+    )
+    parser.add_argument(
+        "--include-target",
+        action="store_true",
+        help="Include target language model in merging (IT mode). Default is exclude target (ET mode)."
     )
     parser.add_argument(
         "--top-k",

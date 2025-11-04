@@ -66,7 +66,7 @@ class AdvancedResultsAnalyzer:
         self.plots_dir = Path(plots_dir)
         self.merged_models_path = self.results_dir / "merged_models"
         self.ensemble_results_path = self.results_dir / "ensemble_results"
-        self.experiment_results_dir = self.results_dir / "results"  # Directory containing experiment results
+        self.experiment_results_dir = self.results_dir  # Directory containing experiment results
         self.num_languages_filter = num_languages_filter
         self.similarity_types = similarity_types  # Filter by similarity type: ['URIEL'], ['REAL'], or None for all
 
@@ -85,9 +85,16 @@ class AdvancedResultsAnalyzer:
         # Load latest aggregated results
         csv_files = glob.glob(str(self.results_dir / "results_*.csv"))
         if not csv_files:
-            # Try alternative naming patterns
+            # Try alternative naming patterns in results directory
             csv_files.extend(glob.glob(str(self.results_dir / "*results*.csv")))
             csv_files.extend(glob.glob(str(self.results_dir / "*comparison*.csv")))
+        if not csv_files:
+            # Try looking in current working directory
+            current_dir = Path.cwd()
+            csv_files = glob.glob(str(current_dir / "results_*.csv"))
+            if not csv_files:
+                csv_files.extend(glob.glob(str(current_dir / "*results*.csv")))
+                csv_files.extend(glob.glob(str(current_dir / "*comparison*.csv")))
 
         if not csv_files:
             raise FileNotFoundError("No results CSV files found!")
@@ -102,6 +109,10 @@ class AdvancedResultsAnalyzer:
 
         # Try to load N-x-N evaluation data
         nxn_files = glob.glob(str(self.results_dir / "nxn_results" / "*" / "evaluation_matrix.csv"))
+        if not nxn_files:
+            # Try current working directory
+            current_dir = Path.cwd()
+            nxn_files = glob.glob(str(current_dir / "nxn_results" / "*" / "evaluation_matrix.csv"))
         if nxn_files:
             latest_nxn = max(nxn_files, key=os.path.getctime)
             print(f"Loading N-x-N evaluation from: {latest_nxn}")
@@ -121,7 +132,21 @@ class AdvancedResultsAnalyzer:
         """Load results from individual experiment directories"""
         print("Loading experiment directories...")
 
-        # Look for experiment directories in the results/ subdirectory
+        # First check if there's a results.json file directly in the directory
+        direct_results_file = self.experiment_results_dir / "results.json"
+        if direct_results_file.exists():
+            result = self.load_experiment_result(self.experiment_results_dir)
+            if result:
+                # Apply similarity type filter if specified
+                if self.similarity_types is not None:
+                    if result['similarity_type'] not in self.similarity_types:
+                        pass
+                    else:
+                        self.experiment_results["direct"] = result
+                else:
+                    self.experiment_results["direct"] = result
+
+        # Then look for experiment directories in the results/ subdirectory
         # Patterns to match the actual directory naming conventions
         exp_patterns = [
             "*_*lang_*",  # average_19lang_af-ZA, similarity_5lang_sq-AL, etc.
@@ -176,6 +201,13 @@ class AdvancedResultsAnalyzer:
             performance = data.get('performance', {})
             model_info = data.get('model_info', {})
 
+            # Handle both old and new JSON structures
+            # New structure: accuracy in evaluation_info
+            # Old structure: accuracy in performance
+            accuracy = performance.get('accuracy', 0)
+            if accuracy == 0:  # Fallback to evaluation_info if performance doesn't have accuracy
+                accuracy = eval_info.get('accuracy', 0)
+
             return {
                 'directory': exp_dir.name,
                 'type': self.detect_experiment_type(exp_dir.name),
@@ -185,8 +217,8 @@ class AdvancedResultsAnalyzer:
                 'target_locale': locale or eval_info.get('locale') or data.get('target_locale'),
                 'method': method,
                 'experiment_type': experiment_type,
-                'accuracy': performance.get('accuracy', 0),
-                'baseline_accuracy': performance.get('baseline_accuracy', 0),
+                'accuracy': accuracy,
+                'baseline_accuracy': performance.get('baseline_accuracy', 0) or eval_info.get('baseline_accuracy', 0),
                 'experiment_info': eval_info,
                 'model_info': model_info,
                 'merge_details': self.load_merge_details(exp_dir) if 'merge' in exp_dir.name else None,
@@ -587,6 +619,29 @@ class AdvancedResultsAnalyzer:
                             return locales
                     except Exception:
                         continue
+
+          # Fallback: try to extract source locales from experiment results
+        # For IT/ET experiments, we can derive source locales from the experiment data
+        source_locales = set()
+
+        # Look through our experiment results to find ones for this target locale
+        for exp_key, exp_result in self.experiment_results.items():
+            if exp_result.get('target_locale') == target_locale:
+                # Extract source locales from the experiment result
+                exp_source_locales = exp_result.get('source_locales', [])
+                if exp_source_locales:
+                    source_locales.update(exp_source_locales)
+
+        if source_locales:
+            return list(source_locales)
+
+        # If no source locales found in experiments, try to infer from the similarity matrix
+        # For the given target, get top similar locales (excluding target itself)
+        if self.nxn_df is not None and target_locale in self.nxn_df.columns:
+            target_column = self.nxn_df[target_locale].drop(target_locale, errors='ignore')
+            # Get top 3-5 most similar locales
+            top_locales = target_column.nlargest(5).index.tolist()
+            return top_locales
 
         return []
 
@@ -1355,6 +1410,7 @@ class AdvancedResultsAnalyzer:
         self.plots_dir.mkdir(exist_ok=True)
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         plots_dir = self.plots_dir  # For backward compatibility with existing code
+        print(f"Plots will be saved to: {plots_dir}")
 
         # Analyze advanced merging methods
         merging_results = self.analyze_advanced_merging_methods()
@@ -1367,10 +1423,10 @@ class AdvancedResultsAnalyzer:
 
         if summary_df is not None:
             # Generate individual plots for each method and comparison type
-            self.generate_pure_scores_plots(summary_df, plots_dir, timestamp)
-            self.generate_vs_avg_zero_plots(summary_df, plots_dir, timestamp)
-            self.generate_vs_best_zero_plots(summary_df, plots_dir, timestamp)
-            self.generate_vs_best_source_plots(summary_df, plots_dir, timestamp)
+            self.generate_pure_scores_plots(summary_df, self.plots_dir, timestamp)
+            self.generate_vs_avg_zero_plots(summary_df, self.plots_dir, timestamp)
+            self.generate_vs_best_zero_plots(summary_df, self.plots_dir, timestamp)
+            self.generate_vs_best_source_plots(summary_df, self.plots_dir, timestamp)
 
             # Generate comprehensive num_languages separated plots for ALL methods
             if self.num_languages_filter is not None or len(merging_results) > 0:
@@ -1453,6 +1509,10 @@ class AdvancedResultsAnalyzer:
         # Look for merged model directories for this locale and method
         merged_models_path = self.results_dir / "merged_models"
 
+        # Check if merged_models directory exists
+        if not merged_models_path.exists():
+            return None
+
         # Pattern: {method}_{similarity_type}_merge_{locale}_{num}merged or {method}_merge_{locale}_{num}merged
         base_method = method
         match = re.match(r'(.+?)_(\d+)lang$', method)
@@ -1462,19 +1522,25 @@ class AdvancedResultsAnalyzer:
         # Try new naming convention first
         for similarity_type in ['URIEL', 'REAL']:
             pattern = f"{base_method}_{similarity_type}_merge_{locale}_(\\d+)merged"
+            try:
+                for entry in merged_models_path.iterdir():
+                    if entry.is_dir():
+                        match = re.search(pattern, entry.name)
+                        if match:
+                            return int(match.group(1))
+            except FileNotFoundError:
+                continue
+
+        # Fallback to legacy naming convention
+        pattern = f"{base_method}_merge_{locale}_(\\d+)merged"
+        try:
             for entry in merged_models_path.iterdir():
                 if entry.is_dir():
                     match = re.search(pattern, entry.name)
                     if match:
                         return int(match.group(1))
-
-        # Fallback to legacy naming convention
-        pattern = f"{base_method}_merge_{locale}_(\\d+)merged"
-        for entry in merged_models_path.iterdir():
-            if entry.is_dir():
-                match = re.search(pattern, entry.name)
-                if match:
-                    return int(match.group(1))
+        except FileNotFoundError:
+            pass
 
         return None
 
@@ -2126,6 +2192,8 @@ def main():
 
     try:
         analyzer = AdvancedResultsAnalyzer(
+            results_dir=args.results_dir,
+            plots_dir=args.plots_dir,
             num_languages_filter=num_languages_filter,
             similarity_types=similarity_types_filter
         )

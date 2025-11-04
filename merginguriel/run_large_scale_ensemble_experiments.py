@@ -104,7 +104,7 @@ def run_ensemble_inference(voting_method: str, target_lang: str, extra_args: Lis
 
 def save_ensemble_results(target_lang: str, voting_method: str, ensemble_data: Dict,
                         results_dir: str = "results", model_family: str = None,
-                        similarity_type: str = "URIEL", num_models: int = None) -> bool:
+                        similarity_type: str = "URIEL", num_models: int = None, include_target: bool = False) -> bool:
     """Save ensemble results in format compatible with aggregate_results.py."""
     try:
         # Create folder name using centralized naming system
@@ -114,7 +114,8 @@ def save_ensemble_results(target_lang: str, voting_method: str, ensemble_data: D
             similarity_type=similarity_type,
             locale=target_lang,
             model_family=model_family,
-            num_languages=num_models
+            num_languages=num_models,
+            include_target=include_target
         )
         results_folder = os.path.join(REPO_ROOT, results_dir, folder_name)
         os.makedirs(results_folder, exist_ok=True)
@@ -185,6 +186,7 @@ def run_experiment_for_locale(
     models_root: str = "haryos_model",
     similarity_type: str = "URIEL",
     num_languages: int = 5,
+    include_target: bool = False,
 ):
     """Run the requested ensemble experiments for a single locale."""
     print(f"\n{'='*60}")
@@ -235,7 +237,8 @@ def run_experiment_for_locale(
                     locale, voting_method, ensemble_data,
                     model_family=model_family,
                     similarity_type=similarity_type,
-                    num_models=num_languages
+                    num_models=num_languages,
+                    include_target=include_target
                 )
                 results[voting_method] = save_success
             else:
@@ -276,6 +279,8 @@ def main():
     # Additional options for consistency with merging experiments
     parser.add_argument("--similarity-type", type=str, choices=["URIEL","REAL"], default="URIEL",
                        help="Type of similarity matrix to use: URIEL (linguistic features) or REAL (empirical evaluation results)")
+    parser.add_argument("--include-target", action="store_true",
+                       help="Include target language model in ensemble (IT mode). Default is exclude target (ET mode).")
     parser.add_argument("--models-root", type=str, default="haryos_model",
                        help="Root directory containing models (default: haryos_model)")
 
@@ -321,10 +326,14 @@ def main():
     # Build pass-through args for ensemble inference
     ensemble_extra_args = [
         "--num-languages", str(args.num_languages),
+        "--include-target" if args.include_target else None,
         "--top-k", str(args.top_k),
         "--sinkhorn-iters", str(args.sinkhorn_iters),
         "--output-dir", args.output_dir
     ]
+
+    # Remove None values (for conditional args like --include-target)
+    ensemble_extra_args = [arg for arg in ensemble_extra_args if arg is not None]
 
     # Only add num-examples if specified (for full test set evaluation)
     if args.num_examples is not None:
@@ -333,7 +342,7 @@ def main():
     for i, locale in enumerate(locales):
         print(f"\nProcessing locale {i+1}/{len(locales)}: {locale}")
         results = run_experiment_for_locale(locale, args.voting_methods, ensemble_extra_args,
-                                          args.models_root, args.similarity_type, args.num_languages)
+                                          args.models_root, args.similarity_type, args.num_languages, args.include_target)
 
         overall_results[locale] = results
 

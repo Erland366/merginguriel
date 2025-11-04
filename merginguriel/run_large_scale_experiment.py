@@ -1,16 +1,3 @@
-#!/usr/bin/env python3
-# Moved into merginguriel/ package
-"""
-Large-scale experiment runner that orchestrates merging + evaluation across locales.
-
-Refactor highlights:
-- Specify what to run via --modes (e.g., baseline similarity average fisher_dataset),
-  instead of skip flags.
-- Uses run_merging_pipeline_refactored.py and passes through relevant options.
-- Extensible: discovers available merge methods; adding a new method shouldn't require
-  editing this script—just include it in --modes.
-"""
-
 import os
 import sys
 import pandas as pd
@@ -29,12 +16,7 @@ SUBMODULES_DIR = os.path.join(REPO_ROOT, "submodules", "auto_merge_llm")
 if SUBMODULES_DIR not in sys.path:
     sys.path.insert(0, SUBMODULES_DIR)
 
-try:
-    from auto_merge_llm.methods import merging_methods_dict
-except Exception:
-    merging_methods_dict = {}
-
-# Import centralized naming system
+from auto_merge_llm.methods import merging_methods_dict
 from merginguriel.naming_config import naming_manager
 
 def get_all_locales_from_similarity_matrix(similarity_type="URIEL"):
@@ -164,6 +146,7 @@ def run_experiment_for_locale(
     num_languages: int = 5,
     merged_models_dir: str = "merged_models",
     results_dir: str = "results",
+    include_target: bool = False,
 ):
     """Run the requested experiment modes for a single locale."""
     print(f"\n{'='*60}")
@@ -252,7 +235,8 @@ def run_experiment_for_locale(
                     similarity_type=similarity_type,
                     locale=locale,
                     model_family=model_family,
-                    num_languages=num_languages
+                    num_languages=num_languages,
+                    include_target=include_target
                 )
                 # Create the results directory before passing it to evaluation script
                 results_full_path = os.path.join(REPO_ROOT, results_dir, results_dir_name)
@@ -302,6 +286,8 @@ def main():
                        help="Use precomputed sparse CSV or compute dense similarities on-the-fly")
     parser.add_argument("--similarity-type", type=str, choices=["URIEL","REAL"], default="URIEL",
                        help="Type of similarity matrix to use: URIEL (linguistic features) or REAL (empirical evaluation results)")
+    parser.add_argument("--include-target", action="store_true",
+                       help="Include target language model in merging (IT mode). Default is exclude target (ET mode).")
     parser.add_argument("--top-k", type=int, default=20,
                        help="Top-K neighbors per language for on-the-fly similarity")
     parser.add_argument("--sinkhorn-iters", type=int, default=20,
@@ -394,6 +380,7 @@ def main():
         "--num-languages", str(args.num_languages),
         "--similarity-source", args.similarity_source,
         "--similarity-type", args.similarity_type,
+        "--include-target" if args.include_target else None,
         "--top-k", str(args.top_k),
         "--sinkhorn-iters", str(args.sinkhorn_iters),
         "--dataset-name", args.dataset_name,
@@ -407,9 +394,12 @@ def main():
         "--base-model-dir", str(Path(REPO_ROOT) / args.models_root),
     ]
 
+    # Remove None values (for conditional args like --include-target)
+    merge_extra_args = [arg for arg in merge_extra_args if arg is not None]
+
     for i, locale in enumerate(locales):
         print(f"\nProcessing locale {i+1}/{len(locales)}: {locale}")
-        results = run_experiment_for_locale(locale, args.modes, merge_extra_args, args.cleanup_after_eval, args.models_root, args.similarity_type, args.num_languages, args.merged_models_dir, args.results_dir)
+        results = run_experiment_for_locale(locale, args.modes, merge_extra_args, args.cleanup_after_eval, args.models_root, args.similarity_type, args.num_languages, args.merged_models_dir, args.results_dir, args.include_target)
         
         overall_results[locale] = results
         
