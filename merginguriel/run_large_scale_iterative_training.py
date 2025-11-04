@@ -73,9 +73,17 @@ def get_available_locales(models_root="haryos_model"):
     available_locales = []
     if os.path.exists(models_dir):
         for item in os.listdir(models_dir):
-            if os.path.isdir(os.path.join(models_dir, item)) and item.startswith("xlm-roberta-base_massive_k_"):
-                locale = item.replace("xlm-roberta-base_massive_k_", "")
-                available_locales.append(locale)
+            if os.path.isdir(os.path.join(models_dir, item)):
+                # Use model-agnostic detection to find massive_k pattern
+                if "_massive_k_" in item:
+                    try:
+                        # Extract locale from pattern like "model-family_massive_k_locale"
+                        parts = item.split("_massive_k_")
+                        if len(parts) == 2:
+                            locale = parts[1]
+                            available_locales.append(locale)
+                    except Exception:
+                        pass
     return sorted(available_locales)
 
 

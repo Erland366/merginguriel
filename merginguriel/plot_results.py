@@ -51,9 +51,19 @@ class AdvancedResultsAnalyzer:
     enhanced_analysis.py and comprehensive_analysis.py
     """
 
-    def __init__(self, results_dir: str = ".", num_languages_filter: Optional[List[int]] = None,
+    def _safe_float(self, value):
+        """Safely convert a value to float, handling various edge cases"""
+        if pd.isna(value) or value == '' or value is None:
+            return 0.0
+        try:
+            return float(value)
+        except (ValueError, TypeError):
+            return 0.0
+
+    def __init__(self, results_dir: str = ".", plots_dir: str = "plots", num_languages_filter: Optional[List[int]] = None,
                  similarity_types: Optional[List[str]] = None):
         self.results_dir = Path(results_dir)
+        self.plots_dir = Path(plots_dir)
         self.merged_models_path = self.results_dir / "merged_models"
         self.ensemble_results_path = self.results_dir / "ensemble_results"
         self.experiment_results_dir = self.results_dir / "results"  # Directory containing experiment results
@@ -86,7 +96,7 @@ class AdvancedResultsAnalyzer:
         latest_csv = max(csv_files, key=os.path.getctime)
         print(f"Loading main results from: {latest_csv}")
 
-        self.main_results_df = pd.read_csv(latest_csv)
+        self.main_results_df = pd.read_csv(latest_csv, na_values=['', 'NA', 'N/A', 'null', 'None'])
         # Don't drop all NaN rows, just clean up empty locale rows
         self.main_results_df = self.main_results_df.dropna(subset=['locale'])
 
@@ -602,13 +612,28 @@ class AdvancedResultsAnalyzer:
                 continue
 
             main_data = locale_row.iloc[0]
-            locale_data['baseline'] = main_data.get('baseline', 0)
+
+            # Ensure baseline is numeric, handle empty/NaN values
+            baseline_val = main_data.get('baseline', 0)
+            if pd.isna(baseline_val) or baseline_val == '' or baseline_val is None:
+                locale_data['baseline'] = 0
+            else:
+                try:
+                    locale_data['baseline'] = float(baseline_val)
+                except (ValueError, TypeError):
+                    locale_data['baseline'] = 0
 
             # Capture every method/variant column dynamically
             num_lang_map = {}
             for method_key in method_columns:
                 if method_key in main_data and pd.notna(main_data[method_key]):
-                    locale_data[method_key] = main_data[method_key]
+                    # Ensure method values are numeric
+                    method_val = main_data[method_key]
+                    if method_val != '' and method_val is not None:
+                        try:
+                            locale_data[method_key] = float(method_val)
+                        except (ValueError, TypeError):
+                            continue
                     match = re.search(r'_(\d+)lang$', method_key)
                     if match:
                         try:
@@ -779,7 +804,7 @@ class AdvancedResultsAnalyzer:
 
         plt.tight_layout()
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        plt.savefig(f'plots/advanced_merging_comparison_{timestamp}.png', dpi=300, bbox_inches='tight')
+        plt.savefig(f'{self.plots_dir}/advanced_merging_comparison_{timestamp}.png', dpi=300, bbox_inches='tight')
         plt.close()
 
     def create_ensemble_comparison_plot(self, ensemble_results: List[Dict]):
@@ -862,7 +887,7 @@ class AdvancedResultsAnalyzer:
 
         plt.tight_layout()
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        plt.savefig(f'plots/ensemble_comparison_{timestamp}.png', dpi=300, bbox_inches='tight')
+        plt.savefig(f'{self.plots_dir}/ensemble_comparison_{timestamp}.png', dpi=300, bbox_inches='tight')
         plt.close()
 
     def create_comprehensive_summary(self, merging_results: List[Dict], ensemble_results: List[Dict], nvn_df=None, available_locales=None):
@@ -888,10 +913,10 @@ class AdvancedResultsAnalyzer:
             locale = result['target_locale']
             entry = locale_data.setdefault(locale, {
                 'locale': locale,
-                'baseline': result.get('baseline', 0),
-                'avg_zero_shot': result.get('avg_zero_shot', 0),
-                'best_zero_shot': result.get('best_zero_shot', 0),
-                'best_source': result.get('best_source', 0),
+                'baseline': self._safe_float(result.get('baseline', 0)),
+                'avg_zero_shot': self._safe_float(result.get('avg_zero_shot', 0)),
+                'best_zero_shot': self._safe_float(result.get('best_zero_shot', 0)),
+                'best_source': self._safe_float(result.get('best_source', 0)),
                 'source_locales': result.get('source_locales', [])
             })
 
@@ -935,11 +960,11 @@ class AdvancedResultsAnalyzer:
             # Add ensemble method
             locale_data[locale][method] = accuracy
             # Calculate improvements vs all three baselines
-            if locale_data[locale]['avg_zero_shot'] > 0:
+            if locale_data[locale]['avg_zero_shot'] and not pd.isna(locale_data[locale]['avg_zero_shot']):
                 locale_data[locale][f'{method}_vs_avg_zero'] = accuracy - locale_data[locale]['avg_zero_shot']
-            if locale_data[locale]['best_zero_shot'] > 0:
+            if locale_data[locale]['best_zero_shot'] and not pd.isna(locale_data[locale]['best_zero_shot']):
                 locale_data[locale][f'{method}_vs_best_zero'] = accuracy - locale_data[locale]['best_zero_shot']
-            if locale_data[locale]['best_source'] > 0:
+            if locale_data[locale]['best_source'] and not pd.isna(locale_data[locale]['best_source']):
                 locale_data[locale][f'{method}_vs_best_source'] = accuracy - locale_data[locale]['best_source']
 
         summary_records = []
@@ -1327,9 +1352,9 @@ class AdvancedResultsAnalyzer:
         print("="*80)
 
         # Create plots directory
-        plots_dir = Path("plots")
-        plots_dir.mkdir(exist_ok=True)
+        self.plots_dir.mkdir(exist_ok=True)
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        plots_dir = self.plots_dir  # For backward compatibility with existing code
 
         # Analyze advanced merging methods
         merging_results = self.analyze_advanced_merging_methods()
@@ -1359,7 +1384,7 @@ class AdvancedResultsAnalyzer:
         print(f"- Individual vs avg zero-shot comparison plots for each method")
         print(f"- Individual vs best zero-shot comparison plots for each method")
         print(f"- Individual vs best source comparison plots for each method (FAIR COMPARISON)")
-        print(f"All plots saved in plots/ directory with {timestamp} suffix")
+        print(f"All plots saved in {self.plots_dir} directory with {timestamp} suffix")
 
         return summary_df
 
@@ -2030,6 +2055,10 @@ def main():
                        help='List available num_languages values in data')
     parser.add_argument('--list-similarity-types', action='store_true',
                        help='List available similarity types in data')
+    parser.add_argument('--results-dir', type=str, default="results",
+                       help='Directory containing experiment results (default: results)')
+    parser.add_argument('--plots-dir', type=str, default="plots",
+                       help='Directory for saving plots (default: plots)')
 
     args = parser.parse_args()
 
@@ -2057,7 +2086,7 @@ def main():
     # If listing num_languages, create analyzer and show available values
     if args.list_num_languages:
         try:
-            analyzer = AdvancedResultsAnalyzer()
+            analyzer = AdvancedResultsAnalyzer(results_dir=args.results_dir, plots_dir=args.plots_dir)
             # Find available num_languages from merge details
             available_num_langs = set()
             for locale in analyzer.main_results_df['locale'].unique():
@@ -2079,7 +2108,7 @@ def main():
     # If listing similarity types, create analyzer and show available values
     if args.list_similarity_types:
         try:
-            analyzer = AdvancedResultsAnalyzer()
+            analyzer = AdvancedResultsAnalyzer(results_dir=args.results_dir, plots_dir=args.plots_dir)
             # Find available similarity types from experiment results
             available_similarity_types = set()
             for exp_name, exp_data in analyzer.experiment_results.items():

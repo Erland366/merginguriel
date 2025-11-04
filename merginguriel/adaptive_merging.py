@@ -14,9 +14,6 @@ from datetime import datetime, timedelta
 from dataclasses import dataclass, field
 from collections import deque
 
-# Loguru logger imported from merginguriel package
-
-
 @dataclass
 class PerformanceMetrics:
     """Performance metrics for a single locale."""

@@ -71,13 +71,14 @@ def get_model_for_locale(locale, models_root="haryos_model"):
     return model_path
 
 
-def run_merge(mode: str, target_lang: str, extra_args: List[str], base_model: Optional[str] = None) -> bool:
+def run_merge(mode: str, target_lang: str, extra_args: List[str], base_model: Optional[str] = None, merged_models_dir: str = "merged_models") -> bool:
     """Run the merging pipeline for a specific mode and target language."""
     print(f"Running {mode} merge for {target_lang}...")
 
     cmd = [sys.executable, os.path.join(REPO_ROOT, "merginguriel", "run_merging_pipeline_refactored.py"),
            "--mode", mode,
-           "--target-lang", target_lang]
+           "--target-lang", target_lang,
+           "--merged-models-dir", merged_models_dir]
     if base_model:
         cmd.extend(["--base-model", base_model])
     if extra_args:
@@ -161,6 +162,8 @@ def run_experiment_for_locale(
     models_root: str = "haryos_model",
     similarity_type: str = "URIEL",
     num_languages: int = 5,
+    merged_models_dir: str = "merged_models",
+    results_dir: str = "results",
 ):
     """Run the requested experiment modes for a single locale."""
     print(f"\n{'='*60}")
@@ -172,7 +175,7 @@ def run_experiment_for_locale(
 
     if not base_model_path:
         print(f"Skipping {locale} - no model found")
-        return False
+        return {}
 
     # Get model family name using centralized naming system
     try:
@@ -180,7 +183,7 @@ def run_experiment_for_locale(
         print(f"✓ Detected model family: {model_family}")
     except Exception as e:
         print(f"❌ Failed to detect model family: {e}")
-        return False
+        return {}
 
     # Validate required components
     try:
@@ -194,7 +197,7 @@ def run_experiment_for_locale(
         )
     except ValueError as e:
         print(f"❌ Validation failed: {e}")
-        return False
+        return {}
 
     results: Dict[str, bool] = {}
 
@@ -214,27 +217,26 @@ def run_experiment_for_locale(
             continue
 
         print(f"\n--- {mode} Merge for {locale} ---")
-        # Extract base model name from base_model_path
+        # Extract base model name using model-agnostic detection
         base_model_name = None
         if base_model_path:
-            if "xlm-roberta-base" in base_model_path:
-                base_model_name = "xlm-roberta-base"
-            elif "xlm-roberta-large" in base_model_path:
-                base_model_name = "xlm-roberta-large"
+            try:
+                base_model_name = naming_manager.extract_model_family(base_model_path)
+            except ValueError:
+                pass
 
-        merge_success = run_merge(mode, locale, merge_extra_args, base_model_name)
+        merge_success = run_merge(mode, locale, merge_extra_args, base_model_name, merged_models_dir)
         if merge_success:
             # Find the actual merged model directory using the merged model naming convention
-            merged_models_dir = os.path.join(REPO_ROOT, "merged_models")
-            # Convert model_family to the expected format (xlm-roberta-base, xlm-roberta-large)
-            lookup_model_family = model_family
-            if "xlm-roberta-base_massive_k" in model_family:
-                lookup_model_family = "xlm-roberta-base"
-            elif "xlm-roberta-large_massive_k" in model_family:
-                lookup_model_family = "xlm-roberta-large"
+            merged_models_dir_full = os.path.join(REPO_ROOT, merged_models_dir)
+            # Extract model family using model-agnostic detection
+            try:
+                lookup_model_family = naming_manager.extract_model_family(model_family)
+            except ValueError:
+                lookup_model_family = model_family  # fallback to original value
 
             merged_model_path = naming_manager.find_merged_model_directory(
-                merged_models_dir,
+                merged_models_dir_full,
                 method=mode,
                 similarity_type=similarity_type,
                 locale=locale,
@@ -253,7 +255,7 @@ def run_experiment_for_locale(
                     num_languages=num_languages
                 )
                 # Create the results directory before passing it to evaluation script
-                results_full_path = os.path.join(REPO_ROOT, "results", results_dir_name)
+                results_full_path = os.path.join(REPO_ROOT, results_dir, results_dir_name)
                 os.makedirs(results_full_path, exist_ok=True)
 
                 # Pass the full path to evaluation script
@@ -326,6 +328,10 @@ def main():
                         help="Delete merged model files after evaluation to save storage space")
     parser.add_argument("--models-root", type=str, default="haryos_model",
                         help="Root directory containing models (default: haryos_model)")
+    parser.add_argument("--results-dir", type=str, default="results",
+                        help="Directory for experiment results (default: results)")
+    parser.add_argument("--merged-models-dir", type=str, default="merged_models",
+                        help="Directory for merged models (default: merged_models)")
 
     args = parser.parse_args()
     
@@ -403,12 +409,14 @@ def main():
 
     for i, locale in enumerate(locales):
         print(f"\nProcessing locale {i+1}/{len(locales)}: {locale}")
-        results = run_experiment_for_locale(locale, args.modes, merge_extra_args, args.cleanup_after_eval, args.models_root, args.similarity_type, args.num_languages)
+        results = run_experiment_for_locale(locale, args.modes, merge_extra_args, args.cleanup_after_eval, args.models_root, args.similarity_type, args.num_languages, args.merged_models_dir, args.results_dir)
         
         overall_results[locale] = results
         
         # Save progress after each locale
-        progress_file = os.path.join(REPO_ROOT, "experiment_progress.json")
+        results_dir_full = os.path.join(REPO_ROOT, args.results_dir)
+        os.makedirs(results_dir_full, exist_ok=True)
+        progress_file = os.path.join(REPO_ROOT, f"{args.results_dir}_progress.json")
         with open(progress_file, 'w') as f:
             json.dump({
                 'timestamp': datetime.now().isoformat(),
@@ -433,16 +441,17 @@ def main():
     # Dynamic summary per mode
     mode_success_counts: Dict[str, int] = {}
     for locale, res in overall_results.items():
-        for mode, ok in res.items():
-            if ok is True:
-                mode_success_counts[mode] = mode_success_counts.get(mode, 0) + 1
+        if isinstance(res, dict):  # Ensure res is a dictionary
+            for mode, ok in res.items():
+                if ok is True:
+                    mode_success_counts[mode] = mode_success_counts.get(mode, 0) + 1
     if mode_success_counts:
         print("Successful runs per mode:")
         for mode, cnt in sorted(mode_success_counts.items()):
             print(f"  - {mode}: {cnt}")
     
     # Save final results
-    final_results_file = os.path.join(REPO_ROOT, "experiment_final_results.json")
+    final_results_file = os.path.join(REPO_ROOT, f"{args.results_dir}_final_results.json")
     with open(final_results_file, 'w') as f:
         json.dump({
             'timestamp': datetime.now().isoformat(),

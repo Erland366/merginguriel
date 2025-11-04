@@ -341,9 +341,10 @@ def extract_accuracy(results):
         return results['performance']['accuracy']
     return None
 
-def get_experiment_folders():
+def get_experiment_folders(results_dir="results"):
     """Get all experiment folders from the results directory."""
-    results_dir = "results"
+    if not results_dir:
+        results_dir = "results"
     if not os.path.exists(results_dir):
         return []
 
@@ -424,14 +425,14 @@ def get_baseline_for_target(target_locale: str, source_locales: List[str], evalu
     return baseline
 
 
-def aggregate_results(evaluation_matrix: Optional[pd.DataFrame] = None):
+def aggregate_results(evaluation_matrix: Optional[pd.DataFrame] = None, results_dir: str = "results"):
     """Aggregate results from all experiment folders with dynamic parsing."""
-    folders = get_experiment_folders()
+    folders = get_experiment_folders(results_dir)
 
     data = []
 
     for folder in folders:
-        folder_path = os.path.join("results", folder)
+        folder_path = os.path.join(results_dir, folder)
         results = load_results_from_folder(folder_path)
 
         if results:
@@ -456,21 +457,23 @@ def aggregate_results(evaluation_matrix: Optional[pd.DataFrame] = None):
                 # Default legacy merges without explicit counts to 4
                 num_languages = 4
 
-            # Extract base model from folder_name (since model_name doesn't contain base model info for merges)
+            # Extract base model using model-agnostic detection
             base_model = None
+            from merginguriel.naming_config import naming_manager
+
             # Try to extract from folder name first
             if folder:
-                if "xlm-roberta-base" in folder:
-                    base_model = "xlm-roberta-base"
-                elif "xlm-roberta-large" in folder:
-                    base_model = "xlm-roberta-large"
+                try:
+                    base_model = naming_manager.extract_model_family(folder)
+                except ValueError:
+                    pass
 
             # Fallback to model_name for baseline models
             if not base_model and model_name:
-                if "xlm-roberta-base" in model_name:
-                    base_model = "xlm-roberta-base"
-                elif "xlm-roberta-large" in model_name:
-                    base_model = "xlm-roberta-large"
+                try:
+                    base_model = naming_manager.extract_model_family(model_name)
+                except ValueError:
+                    pass
 
             experiment_variant = determine_experiment_variant(
                 metadata.merge_mode or metadata.experiment_type,
@@ -933,6 +936,8 @@ def main():
                        help="Filter results to specific experiment types only")
     parser.add_argument("--verbose", action="store_true",
                        help="Enable verbose logging")
+    parser.add_argument("--results-dir", type=str, default="results",
+                       help="Directory containing experiment results (default: results)")
 
     args = parser.parse_args()
 
@@ -962,7 +967,7 @@ def main():
 
     # Load and aggregate results
     logger.info("Aggregating experiment results...")
-    df = aggregate_results(evaluation_matrix)
+    df = aggregate_results(evaluation_matrix, args.results_dir)
 
     if len(df) == 0:
         logger.error("No results found in the results directory.")

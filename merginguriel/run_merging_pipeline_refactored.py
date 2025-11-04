@@ -795,8 +795,9 @@ class ModelMerger:
 class OutputManager:
     """Manages saving models and results."""
 
-    def __init__(self, project_root: str):
+    def __init__(self, project_root: str, merged_models_dir: str = "merged_models"):
         self.project_root = project_root
+        self.merged_models_dir = merged_models_dir
 
     def save_model_and_details(self, merged_model: Any, tokenizer: Any, config: MergeConfig,
                               models_and_weights: Dict[str, ModelInfo], base_model_info: ModelInfo) -> str:
@@ -810,14 +811,15 @@ class OutputManager:
         if "/" in base_model_name:
             base_model_name = base_model_name.split("/")[-1]  # Get last part after slash
 
-        # Extract just the model family (xlm-roberta-base, xlm-roberta-large) from full path
-        if "xlm-roberta-base" in base_model_name:
-            base_model_name = "xlm-roberta-base"
-        elif "xlm-roberta-large" in base_model_name:
-            base_model_name = "xlm-roberta-large"
+        # Extract model family using model-agnostic detection
+        from merginguriel.naming_config import naming_manager
+        try:
+            base_model_name = naming_manager.extract_model_family(base_model_name)
+        except ValueError:
+            pass  # Keep original base_model_name if extraction fails
 
         # Include similarity type and base model in the naming convention
-        output_dir = os.path.join(self.project_root, "merged_models",
+        output_dir = os.path.join(self.project_root, self.merged_models_dir,
                                  f"{config.mode}_{config.similarity_type}_merge_{config.target_lang}_{base_model_name}_{num_models}merged")
 
         os.makedirs(output_dir, exist_ok=True)
@@ -862,8 +864,9 @@ class OutputManager:
 class Evaluator:
     """Handles model evaluation."""
 
-    def __init__(self, project_root: str):
+    def __init__(self, project_root: str, merged_models_dir: str = "merged_models"):
         self.project_root = project_root
+        self.merged_models_dir = merged_models_dir
 
     def evaluate_model(self, model_path: str):
         """Evaluate the merged model."""
@@ -883,12 +886,12 @@ class Evaluator:
 class MergingPipeline:
     """Main pipeline orchestrator for model merging."""
 
-    def __init__(self, config: MergeConfig):
+    def __init__(self, config: MergeConfig, merged_models_dir: str = "merged_models"):
         self.config = config
         self.project_root = project_root
         self.weight_calculator = WeightCalculatorFactory.create_calculator(config.mode)
         self.model_merger = ModelMerger(config)
-        self.output_manager = OutputManager(self.project_root)
+        self.output_manager = OutputManager(self.project_root, merged_models_dir)
         self.evaluator = Evaluator(self.project_root)
 
     def run(self):
@@ -969,6 +972,12 @@ def main():
         type=str,
         default="",
         help="Optional override for the directory containing base-model checkpoints."
+    )
+    parser.add_argument(
+        "--merged-models-dir",
+        type=str,
+        default="merged_models",
+        help="Directory for saving merged models (default: merged_models)"
     )
     parser.add_argument(
         "--subfolder-pattern",
@@ -1068,7 +1077,7 @@ def main():
     args = parser.parse_args()
     config = create_config_from_args(args)
 
-    pipeline = MergingPipeline(config)
+    pipeline = MergingPipeline(config, args.merged_models_dir)
     pipeline.run()
 
 

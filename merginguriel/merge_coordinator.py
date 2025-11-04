@@ -333,7 +333,9 @@ class MergeCoordinator:
                 logger.info(f"  ✓ Using checkpoint path from state: {model_path}")
             else:
                 # Priority 2: Use haryos_model path structure (for pre-trained models)
-                model_path = f"/home/coder/Python_project/MergingUriel/haryos_model/xlm-roberta-base_massive_k_{locale}"
+                # Use model-agnostic path construction
+                from merginguriel.naming_config import naming_manager
+                model_path = os.path.join(project_root, "haryos_model", f"{naming_manager.extract_model_family(state.checkpoint_path or 'xlm-roberta-base')}_massive_k_{locale}")
 
                 # Check if model exists locally
                 if not os.path.exists(model_path):
@@ -396,8 +398,10 @@ class MergeCoordinator:
             if state.checkpoint_path and os.path.exists(state.checkpoint_path):
                 model_path = state.checkpoint_path
             else:
-                # Fallback to haryos_model structure
-                model_path = os.path.join(project_root, "haryos_model", f"xlm-roberta-base_massive_k_{locale}")
+                # Fallback to haryos_model structure with model-agnostic path construction
+                from merginguriel.naming_config import naming_manager
+                model_family = naming_manager.extract_model_family(state.checkpoint_path or 'xlm-roberta-base')
+                model_path = os.path.join(project_root, "haryos_model", f"{model_family}_massive_k_{locale}")
 
                 # If haryos_model doesn't exist, use the checkpoint path or locale
                 if not os.path.exists(model_path):

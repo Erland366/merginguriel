@@ -25,7 +25,7 @@ class NamingConfig:
     baseline_plot_pattern: str = "baseline_{model_family}"
 
     # Model directory pattern (unchanged - source models)
-    model_pattern: str = "{models_root}/xlm-roberta-{model_size}_massive_k_{locale}"
+    model_pattern: str = "{models_root}/{model_family}_massive_k_{locale}"
 
     # Valid similarity types
     similarity_types: list = None
@@ -141,6 +141,53 @@ class NamingManager:
 
         except Exception as e:
             raise ValueError(f"Failed to detect model family from {model_path}: {e}")
+
+    def extract_model_family(self, model_path_or_name: str) -> str:
+        """Extract model family from any model path, directory name, or model identifier.
+
+        This function expects models to follow the pattern: {model_family}_massive_k_{locale}
+        For example: "xlm-roberta-base_massive_k_af-ZA" -> "xlm-roberta-base"
+
+        Args:
+            model_path_or_name: Can be a full path, directory name, or model identifier
+
+        Returns:
+            The model family (e.g., "xlm-roberta-base", "bert-large-uncased")
+
+        Raises:
+            ValueError: If model family cannot be determined
+        """
+        if not model_path_or_name:
+            raise ValueError("model_path_or_name cannot be empty")
+
+        # Extract just the directory/file name if it's a full path
+        name = model_path_or_name
+        if '/' in name:
+            name = name.split('/')[-1]
+
+        # Remove common prefixes/suffixes that might interfere
+        name = name.strip()
+
+        # Pattern 1: Extract from directory names with massive_k pattern
+        # e.g., "xlm-roberta-base_massive_k_af-ZA" -> "xlm-roberta-base"
+        if "_massive_k_" in name:
+            model_family = name.split("_massive_k_")[0]
+            if model_family:
+                return model_family
+
+        # Pattern 2: Handle merged model directories
+        # e.g., "ties_REAL_merge_af-ZA_xlm-roberta-base_4merged" -> "xlm-roberta-base"
+        merged_pattern = r'^[a-zA-Z0-9_]+_[A-Z]+_merge_[a-z]{2}-[A-Z]{2}_([a-zA-Z0-9\-]+)_\d+merged$'
+        match = re.match(merged_pattern, name)
+        if match:
+            return match.group(1)
+
+        # Pattern 3: Fallback - just return the name as-is if it doesn't contain massive_k
+        # This handles cases where the input is already a model family name
+        if len(name) > 3:
+            return name
+
+        raise ValueError(f"Cannot determine model family from: {model_path_or_name}")
 
     def parse_results_dir_name(self, dir_name: str) -> Dict[str, Any]:
         """Parse results directory name into components."""
