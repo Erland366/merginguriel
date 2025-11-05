@@ -34,6 +34,7 @@ class ExperimentMetadata:
     merge_mode: Optional[str] = None
     similarity_type: Optional[str] = None
     num_languages: Optional[int] = None
+    include_target: Optional[str] = None
     timestamp: Optional[str] = None
     folder_name: Optional[str] = None
 
@@ -91,7 +92,8 @@ def determine_experiment_variant(experiment_type: str,
                                  num_languages: Optional[int],
                                  model_path: Optional[str],
                                  similarity_type: Optional[str] = None,
-                                 base_model: Optional[str] = None) -> str:
+                                 base_model: Optional[str] = None,
+                                 include_target: Optional[str] = None) -> str:
     """Build a display key that differentiates merges by language count, similarity type, and base model."""
     base_type = experiment_type or "unknown"
 
@@ -108,14 +110,20 @@ def determine_experiment_variant(experiment_type: str,
     # Include similarity type and full base model for non-baseline experiments
     if similarity_type and similarity_type in ['URIEL', 'REAL'] and base_type != 'baseline':
         if num_languages:
-            return f"{base_type}_{similarity_type}_{model_name}_{int(num_languages)}lang"
+            base_name = f"{base_type}_{similarity_type}_{model_name}_{int(num_languages)}lang"
         else:
-            return f"{base_type}_{similarity_type}_{model_name}_unknownlang"
+            base_name = f"{base_type}_{similarity_type}_{model_name}_unknownlang"
     else:
         if num_languages:
-            return f"{base_type}_{model_name}_{int(num_languages)}lang"
+            base_name = f"{base_type}_{model_name}_{int(num_languages)}lang"
         else:
-            return f"{base_type}_{model_name}_unknownlang"
+            base_name = f"{base_type}_{model_name}_unknownlang"
+
+    # Add include_target suffix if available
+    if include_target:
+        base_name = f"{base_name}_{include_target}"
+
+    return base_name
 
 def load_results_from_folder(folder_path):
     """Load results.json from a folder."""
@@ -228,6 +236,7 @@ def parse_experiment_metadata(folder_name: str,
                 merge_mode=parsed['method'],
                 similarity_type=parsed.get('similarity_type', 'URIEL'),
                 num_languages=parsed['num_languages'],
+                include_target=parsed.get('include_target'),
                 timestamp=parsed.get('timestamp'),
                 folder_name=folder_name
             )
@@ -245,6 +254,7 @@ def parse_experiment_metadata(folder_name: str,
                     merge_mode=parsed['method'],
                     similarity_type=parsed.get('similarity_type', 'URIEL'),
                     num_languages=parsed['num_languages'],
+                    include_target=parsed.get('include_target'),
                     timestamp=parsed.get('timestamp'),
                     folder_name=folder_name
                 )
@@ -462,15 +472,22 @@ def aggregate_results(evaluation_matrix: Optional[pd.DataFrame] = None, results_
             base_model = None
             from merginguriel.naming_config import naming_manager
 
-            # Try to extract from folder name first
-            if folder:
-                try:
-                    base_model = naming_manager.extract_model_family(folder)
-                except ValueError:
-                    pass
+            # Try to extract from folder name first (DISABLED - causes issues with complex folder names)
+            # if folder:
+            #     try:
+            #         base_model = naming_manager.extract_model_family(folder)
+            #     except ValueError:
+            #         pass
 
-            # Fallback to model_name for baseline models
-            if not base_model and model_name:
+            # Extract base model from model_name for merged models
+            if model_name and "merged_models" in model_name and "xlm-roberta" in model_name:
+                # Extract xlm-roberta-base or xlm-roberta-large from the merged model path
+                import re
+                match = re.search(r'(xlm-roberta-(?:base|large))', model_name)
+                if match:
+                    base_model = match.group(1)
+            # Fallback for baseline models
+            elif not base_model and model_name:
                 try:
                     base_model = naming_manager.extract_model_family(model_name)
                 except ValueError:
@@ -481,20 +498,22 @@ def aggregate_results(evaluation_matrix: Optional[pd.DataFrame] = None, results_
                 num_languages,
                 model_name,
                 eval_info.get('similarity_type') or metadata.__dict__.get('similarity_type', 'URIEL'),
-                base_model
+                base_model,
+                metadata.include_target
             )
 
             # Harmonize with evaluation prefix in folder name (e.g., average_19lang_locale)
             folder_prefix = folder.rsplit('_', 1)[0] if '_' in folder else folder
-            prefix_match = re.match(r'(?P<method>.+?)_(?P<count>\d+)lang$', folder_prefix)
-            if prefix_match:
-                experiment_variant = folder_prefix
-                if not metadata.experiment_type or metadata.experiment_type == 'unknown':
-                    metadata.experiment_type = prefix_match.group('method')
-                try:
-                    num_languages = int(prefix_match.group('count'))
-                except ValueError:
-                    pass
+            # DISABLED: This was overriding our IncTar/ExcTar experiment variants
+            # prefix_match = re.match(r'(?P<method>.+?)_(?P<count>\d+)lang$', folder_prefix)
+            # if prefix_match:
+            #     experiment_variant = folder_prefix
+            #     if not metadata.experiment_type or metadata.experiment_type == 'unknown':
+            #         metadata.experiment_type = prefix_match.group('method')
+            #     try:
+            #         num_languages = int(prefix_match.group('count'))
+            #     except ValueError:
+            #         pass
 
             # Calculate baseline data if evaluation matrix is available
             baseline_data = None

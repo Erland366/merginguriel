@@ -61,7 +61,7 @@ class NamingManager:
             if num_languages is None:
                 raise ValueError(f"num_languages is required for {experiment_type} experiments")
 
-            include_target_suffix = "IT" if include_target else "ET"
+            include_target_suffix = "IncTar" if include_target else "ExcTar"
             return self.config.results_dir_pattern.format(
                 experiment_type=experiment_type,
                 method=method,
@@ -79,7 +79,7 @@ class NamingManager:
         if experiment_type == 'baseline':
             raise ValueError("Baseline experiments don't create merged models")
 
-        include_target_suffix = "IT" if include_target else "ET"
+        include_target_suffix = "IncTar" if include_target else "ExcTar"
         return self.config.merged_model_pattern.format(
             method=method,
             similarity_type=similarity_type,
@@ -100,7 +100,7 @@ class NamingManager:
             )
         else:
             # For method plots
-            include_target_suffix = "IT" if include_target else "ET"
+            include_target_suffix = "IncTar" if include_target else "ExcTar"
             return self.config.plot_filename_pattern.format(
                 method=method,
                 model_family=model_family,
@@ -212,30 +212,36 @@ class NamingManager:
 
         # General pattern: merging_similarity_REAL_sq-AL_xlm-roberta-base-uncased_5lang_IT/ET
         # Pattern: experiment_type_method_similarity_type_locale_model_family_num_languages_include_target
-        general_pattern = r'^(?P<experiment_type>[^_]+)_(?P<method>[^_]+)_(?P<similarity_type>URIEL|REAL)_(?P<locale>[a-z]{2}-[A-Z]{2})_(?P<model_family>[^_]+(?:_[^_]+)*)_(?P<num_languages>\d+)lang_(?P<include_target>IT|ET)$'
+        general_pattern = r'^(?P<experiment_type>[^_]+)_(?P<method>[^_]+)_(?P<similarity_type>URIEL|REAL)_(?P<locale>[a-z]{2}-[A-Z]{2})_(?P<model_family>[^_]+(?:_[^_]+)*)_(?P<num_languages>\d+)lang_(?P<include_target>IncTar|ExcTar|IT|ET)$'
         match = re.match(general_pattern, dir_name)
         if match:
             result = match.groupdict()
             result['num_languages'] = int(result['num_languages'])
             result['timestamp'] = None
+            # Normalize include_target values
+            result['include_target'] = self.normalize_include_target(result['include_target'])
             return result
 
         # Alternative pattern: ensemble_method_locale_model_family_num_languages_include_target
-        ensemble_pattern = r'^(?P<experiment_type>ensemble)_(?P<method>[^_]+)_(?P<similarity_type>URIEL|REAL)_(?P<locale>[a-z]{2}-[A-Z]{2})_(?P<model_family>[^_]+(?:_[^_]+)*)_(?P<num_languages>\d+)lang_(?P<include_target>IT|ET)$'
+        ensemble_pattern = r'^(?P<experiment_type>ensemble)_(?P<method>[^_]+)_(?P<similarity_type>URIEL|REAL)_(?P<locale>[a-z]{2}-[A-Z]{2})_(?P<model_family>[^_]+(?:_[^_]+)*)_(?P<num_languages>\d+)lang_(?P<include_target>IncTar|ExcTar|IT|ET)$'
         match = re.match(ensemble_pattern, dir_name)
         if match:
             result = match.groupdict()
             result['num_languages'] = int(result['num_languages'])
             result['timestamp'] = None
+            # Normalize include_target values
+            result['include_target'] = self.normalize_include_target(result['include_target'])
             return result
 
         # Alternative pattern: iterative_method_locale_model_family_num_languages_include_target
-        iterative_pattern = r'^(?P<experiment_type>iterative)_(?P<method>[^_]+)_(?P<similarity_type>URIEL|REAL)_(?P<locale>[a-z]{2}-[A-Z]{2})_(?P<model_family>[^_]+(?:_[^_]+)*)_(?P<num_languages>\d+)lang_(?P<include_target>IT|ET)$'
+        iterative_pattern = r'^(?P<experiment_type>iterative)_(?P<method>[^_]+)_(?P<similarity_type>URIEL|REAL)_(?P<locale>[a-z]{2}-[A-Z]{2})_(?P<model_family>[^_]+(?:_[^_]+)*)_(?P<num_languages>\d+)lang_(?P<include_target>IncTar|ExcTar|IT|ET)$'
         match = re.match(iterative_pattern, dir_name)
         if match:
             result = match.groupdict()
             result['num_languages'] = int(result['num_languages'])
             result['timestamp'] = None
+            # Normalize include_target values
+            result['include_target'] = self.normalize_include_target(result['include_target'])
             return result
 
         # Legacy pattern without IT/ET: method_num_languages_locale (no similarity type, no timestamp)
@@ -285,7 +291,7 @@ class NamingManager:
     def parse_merged_model_dir_name(self, dir_name: str) -> Dict[str, Any]:
         """Parse merged model directory name into components."""
         # New pattern: ties_REAL_merge_af-ZA_xlm-roberta-base_4merged_IT/ET or average_REAL_merge_af-ZA_xlm-roberta-large_4merged_IT/ET
-        pattern = r'^(?P<method>[^_]+(?:_[^_]+)*)_(?P<similarity_type>URIEL|REAL)_merge_(?P<locale>[a-z]{2}-[A-Z]{2})_(?P<model_family>[^_]+(?:_[^_]+)*)_(?P<num_languages>\d+)merged_(?P<include_target>IT|ET)$'
+        pattern = r'^(?P<method>[^_]+(?:_[^_]+)*)_(?P<similarity_type>URIEL|REAL)_merge_(?P<locale>[a-z]{2}-[A-Z]{2})_(?P<model_family>[^_]+(?:_[^_]+)*)_(?P<num_languages>\d+)merged_(?P<include_target>IncTar|ExcTar|IT|ET)$'
         match = re.match(pattern, dir_name)
 
         if match:
@@ -293,6 +299,8 @@ class NamingManager:
             result['experiment_type'] = 'merging'
             result['num_languages'] = int(result['num_languages'])
             result['timestamp'] = None
+            # Normalize include_target values
+            result['include_target'] = self.normalize_include_target(result['include_target'])
             return result
 
         # Legacy pattern without IT/ET for backward compatibility: ties_REAL_merge_af-ZA_xlm-roberta-base_4merged
@@ -328,6 +336,16 @@ class NamingManager:
             return result
 
         raise ValueError(f"Cannot parse merged model directory name: {dir_name}")
+
+    def normalize_include_target(self, include_target: str) -> str:
+        """Normalize include_target values to use IncTar/ExcTar format"""
+        if include_target in ['IT', 'IncTar']:
+            return 'IncTar'
+        elif include_target in ['ET', 'ExcTar']:
+            return 'ExcTar'
+        else:
+            # Default to ExcTar for unknown values
+            return 'ExcTar'
 
     def find_results_directory(self, base_dir: str, experiment_type: str, method: str,
                              similarity_type: str, locale: str, model_family: str,

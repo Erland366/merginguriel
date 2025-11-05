@@ -1,19 +1,3 @@
-#!/usr/bin/env python3
-"""
-Advanced Results Analysis System for MergingUriel
-Follows the sophisticated analysis patterns from enhanced_analysis.py and comprehensive_analysis.py
-Includes advanced merging methods and ensemble analysis
-
-Features:
-- Advanced merging methods analysis (TIES, TaskArithmetic, SLERP, RegMean, DARE, Fisher)
-- Ensemble inference methods analysis (majority, weighted_majority, soft, uriel_logits)
-- Zero-shot performance comparison using N-x-N evaluation matrices
-- Merge details extraction from merge_details.txt files
-- Weight extraction and analysis from merge details
-- Comprehensive baseline comparisons against both average and best zero-shot
-- Publication-ready styling following user's established patterns
-"""
-
 import os
 import re
 import pandas as pd
@@ -27,15 +11,7 @@ import warnings
 from datetime import datetime
 from typing import Dict, List, Tuple, Optional, Any
 import argparse
-
-# Import centralized naming system
-try:
-    from merginguriel.naming_config import naming_manager
-except ImportError:
-    # Fallback if the module structure is different
-    import sys
-    sys.path.append(os.path.join(os.path.dirname(__file__), 'merginguriel'))
-    from naming_config import naming_manager
+from merginguriel.naming_config import naming_manager
 
 warnings.filterwarnings('ignore')
 
@@ -46,19 +22,10 @@ plt.rcParams['figure.facecolor'] = 'white'
 plt.rcParams['figure.dpi'] = 300
 
 class AdvancedResultsAnalyzer:
-    """
-    Advanced results analyzer that follows user's established patterns from
-    enhanced_analysis.py and comprehensive_analysis.py
-    """
-
     def _safe_float(self, value):
-        """Safely convert a value to float, handling various edge cases"""
         if pd.isna(value) or value == '' or value is None:
             return 0.0
-        try:
-            return float(value)
-        except (ValueError, TypeError):
-            return 0.0
+        return float(value)
 
     def __init__(self, results_dir: str = ".", plots_dir: str = "plots", num_languages_filter: Optional[List[int]] = None,
                  similarity_types: Optional[List[str]] = None):
@@ -174,109 +141,68 @@ class AdvancedResultsAnalyzer:
         if not results_file.exists():
             return None
 
-        try:
-            with open(results_file, 'r') as f:
-                data = json.load(f)
+        with open(results_file, 'r') as f:
+            data = json.load(f)
 
-            # Try to parse directory name using centralized naming system
-            try:
-                parsed = naming_manager.parse_results_dir_name(exp_dir.name)
-                similarity_type = parsed['similarity_type']
-                model_family = parsed['model_family']
-                num_languages = parsed['num_languages']
-                locale = parsed['locale']
-                method = parsed['method']
-                experiment_type = parsed['experiment_type']
-            except ValueError:
-                # Fallback to manual extraction for legacy directories
-                similarity_type = self.extract_similarity_type(exp_dir.name)
-                model_family = 'unknown'
-                num_languages = None
-                locale = data.get('evaluation_info', {}).get('locale')
-                method = 'unknown'
-                experiment_type = 'unknown'
+        parsed = naming_manager.parse_results_dir_name(exp_dir.name)
+        similarity_type = parsed['similarity_type']
+        model_family = parsed['model_family']
+        num_languages = parsed['num_languages']
+        locale = parsed['locale']
+        method = parsed['method']
+        experiment_type = parsed['experiment_type']
 
-            # Extract key information from results data
-            eval_info = data.get('evaluation_info', {})
-            performance = data.get('performance', {})
-            model_info = data.get('model_info', {})
+        # Extract key information from results data
+        eval_info = data.get('evaluation_info', {})
+        performance = data.get('performance', {})
+        model_info = data.get('model_info', {})
 
-            # Handle both old and new JSON structures
-            # New structure: accuracy in evaluation_info
-            # Old structure: accuracy in performance
-            accuracy = performance.get('accuracy', 0)
-            if accuracy == 0:  # Fallback to evaluation_info if performance doesn't have accuracy
-                accuracy = eval_info.get('accuracy', 0)
+        # Handle both old and new JSON structures
+        # New structure: accuracy in evaluation_info
+        # Old structure: accuracy in performance
+        accuracy = performance.get('accuracy', 0)
+        if accuracy == 0:  # Fallback to evaluation_info if performance doesn't have accuracy
+            accuracy = eval_info.get('accuracy', 0)
 
-            return {
-                'directory': exp_dir.name,
-                'type': self.detect_experiment_type(exp_dir.name),
-                'similarity_type': similarity_type,
-                'model_family': model_family,
-                'num_languages': num_languages,
-                'target_locale': locale or eval_info.get('locale') or data.get('target_locale'),
-                'method': method,
-                'experiment_type': experiment_type,
-                'accuracy': accuracy,
-                'baseline_accuracy': performance.get('baseline_accuracy', 0) or eval_info.get('baseline_accuracy', 0),
-                'experiment_info': eval_info,
-                'model_info': model_info,
-                'merge_details': self.load_merge_details(exp_dir) if 'merge' in exp_dir.name else None,
-                'model_family_name': eval_info.get('model_family_name') or model_family,
-                'num_models': model_info.get('num_models') or num_languages
-            }
-        except Exception as e:
-            print(f"Error loading {exp_dir}: {e}")
-            return None
+        return {
+            'directory': exp_dir.name,
+            'type': self.detect_experiment_type(exp_dir.name),
+            'similarity_type': similarity_type,
+            'model_family': model_family,
+            'num_languages': num_languages,
+            'target_locale': locale or eval_info.get('locale') or data.get('target_locale'),
+            'method': method,
+            'experiment_type': experiment_type,
+            'accuracy': accuracy,
+            'baseline_accuracy': performance.get('baseline_accuracy', 0) or eval_info.get('baseline_accuracy', 0),
+            'experiment_info': eval_info,
+            'model_info': model_info,
+            'merge_details': self.load_merge_details(exp_dir) if 'merge' in exp_dir.name else None,
+            'model_family_name': eval_info.get('model_family_name') or model_family,
+            'num_models': model_info.get('num_models') or num_languages
+        }
 
     def detect_experiment_type(self, dir_name: str) -> str:
         """Detect experiment type from directory name using centralized naming system"""
-        try:
-            parsed = naming_manager.parse_results_dir_name(dir_name)
-            experiment_type = parsed['experiment_type']
+        parsed = naming_manager.parse_results_dir_name(dir_name)
+        experiment_type = parsed['experiment_type']
 
-            # Convert experiment_type to expected format
-            if experiment_type == 'baseline':
-                return 'baseline'
-            elif experiment_type == 'ensemble':
-                return 'ensemble'
-            elif experiment_type in ['merging', 'iterative']:
-                # Return merge_method format for consistency
-                return f"merge_{parsed['method']}"
-            else:
-                return 'unknown'
-        except ValueError:
-            # Fallback to manual parsing for legacy directories
-            if 'baseline' in dir_name:
-                return 'baseline'
-            elif 'ensemble' in dir_name:
-                return 'ensemble'
-            elif 'merge' in dir_name:
-                # Extract merge method (similarity, average, ties, task_arithmetic, etc.)
-                for method in ['similarity', 'average', 'ties', 'task_arithmetic', 'slerp', 'regmean', 'dare', 'fisher']:
-                    if re.match(rf'^{method}(_(?:URIEL|REAL))?_merge_', dir_name) or f'_{method}_' in dir_name:
-                        return f'merge_{method}'
-                return 'merge_unknown'
-            else:
-                return 'unknown'
+        # Convert experiment_type to expected format
+        if experiment_type == 'baseline':
+            return 'baseline'
+        elif experiment_type == 'ensemble':
+            return 'ensemble'
+        elif experiment_type in ['merging', 'iterative']:
+            # Return merge_method format for consistency
+            return f"merge_{parsed['method']}"
+        else:
+            return 'unknown'
 
     def extract_similarity_type(self, dir_name: str) -> str:
         """Extract similarity type (URIEL/REAL) from directory name using centralized naming system"""
-        try:
-            parsed = naming_manager.parse_results_dir_name(dir_name)
-            similarity_type = parsed['similarity_type']
-            return similarity_type if similarity_type else 'unknown'
-        except ValueError:
-            # Fallback to manual parsing for legacy directories
-            match = re.search(r'_(URIEL|REAL)_', dir_name)
-            if match:
-                return match.group(1)
-
-            # For legacy naming without similarity type, assume URIEL
-            if 'merge' in dir_name or any(method in dir_name for method in ['similarity', 'average', 'ties', 'task_arithmetic', 'slerp', 'regmean', 'dare', 'fisher']):
-                return 'URIEL'
-
-            return 'unknown'
+        parsed = naming_manager.parse_results_dir_name(dir_name)
+        similarity_type = parsed['similarity_type']
+        return similarity_type if similarity_type else 'unknown'
 
     def load_merge_details(self, exp_dir: Path) -> Optional[Dict]:
         """Load merge details from merge_details.txt file"""
@@ -284,58 +210,36 @@ class AdvancedResultsAnalyzer:
         if not merge_details_file.exists():
             return None
 
-        try:
-            with open(merge_details_file, 'r') as f:
-                content = f.read()
+        with open(merge_details_file, 'r') as f:
+            content = f.read()
 
-            # Parse locales and weights
-            locales = []
-            weights = {}
+        locales = []
+        weights = {}
 
-            # Pattern to match locale lines
-            locale_pattern = re.compile(r"^\s*- Locale:\s*([a-zA-Z]{2}-[a-zA-Z]{2})", re.MULTILINE)
-            locales = locale_pattern.findall(content)
+        # Pattern to match locale lines
+        locale_pattern = re.compile(r"^\s*- Locale:\s*([a-zA-Z]{2}-[a-zA-Z]{2})", re.MULTILINE)
+        locales = locale_pattern.findall(content)
 
-            # Pattern to match locale-weight pairs
-            weight_pattern = re.compile(r"^\s*- Locale:\s*([a-zA-Z]{2}-[a-zA-Z]{2}).*?Weight:\s*([0-9.]+)",
-                                       re.MULTILINE | re.DOTALL)
-            weight_matches = weight_pattern.findall(content)
-            weights = {locale: float(weight) for locale, weight in weight_matches}
+        # Pattern to match locale-weight pairs
+        weight_pattern = re.compile(r"^\s*- Locale:\s*([a-zA-Z]{2}-[a-zA-Z]{2}).*?Weight:\s*([0-9.]+)",
+                                    re.MULTILINE | re.DOTALL)
+        weight_matches = weight_pattern.findall(content)
+        weights = {locale: float(weight) for locale, weight in weight_matches}
 
-            return {
-                'source_locales': locales,
-                'weights': weights,
-                'content': content
-            }
-        except Exception as e:
-            print(f"Error loading merge details from {exp_dir}: {e}")
-            return None
+        return {
+            'source_locales': locales,
+            'weights': weights,
+            'content': content
+        }
 
     def format_method_key_for_filename(self, method_key: str, model_family: str = None, similarity_type: str = None) -> str:
-        """Convert method keys like similarity_roberta-base_2lang to similarity_roberta-base_REAL_merged2 for file names."""
-        match = re.search(r'_(\d+)lang$', method_key)
-        if match:
-            base = method_key[:match.start()]
-            # Build the filename with model family and similarity type
-            parts = [base]
-            if model_family and model_family != 'unknown':
-                parts.append(model_family)
-            if similarity_type and similarity_type != 'unknown':
-                parts.append(similarity_type)
-            parts.append(f"merged{match.group(1)}")
-            return "_".join(parts)
-
-        # If no lang suffix, include model family and similarity type
-        parts = [method_key]
-        if model_family and model_family != 'unknown':
-            parts.append(model_family)
-        if similarity_type and similarity_type != 'unknown':
-            parts.append(similarity_type)
-        return "_".join(parts)
+        """Convert method keys to clean filenames."""
+        # Just return the method key as-is since it already contains all necessary information
+        return method_key
 
     def format_method_key_for_display(self, method_key: str, model_family: str = None, similarity_type: str = None) -> str:
         """Friendly display name for method keys with model family and merged count."""
-        match = re.search(r'_(\d+)lang$', method_key)
+        match = re.search(r'_(\d+)lang(?:_(?:IncTar|ExcTar))?$', method_key)
         if match:
             base = method_key[:match.start()]
             # Special handling for ties and task_arithmetic to keep them consistent
@@ -440,7 +344,7 @@ class AdvancedResultsAnalyzer:
         """Return the set of num_languages associated with a given method column."""
         counts = set()
 
-        match = re.search(r'_(\d+)lang$', method)
+        match = re.search(r'_(\d+)lang(?:_(?:IncTar|ExcTar))?$', method)
         if match:
             try:
                 counts.add(int(match.group(1)))
@@ -497,14 +401,11 @@ class AdvancedResultsAnalyzer:
         if not merge_details_file.exists():
             return []
 
-        try:
-            with open(merge_details_file, 'r') as f:
-                content = f.read()
+        with open(merge_details_file, 'r') as f:
+            content = f.read()
 
-            locale_pattern = re.compile(r"^\s*- Locale:\s*([a-zA-Z]{2}-[a-zA-Z]{2})", re.MULTILINE)
-            return locale_pattern.findall(content)
-        except Exception:
-            return []
+        locale_pattern = re.compile(r"^\s*- Locale:\s*([a-zA-Z]{2}-[a-zA-Z]{2})", re.MULTILINE)
+        return locale_pattern.findall(content)
 
     def get_zero_shot_scores(self, target_locale: str, source_locales: List[str]) -> Dict[str, float]:
         """Get zero-shot scores for target locale from source locales"""
@@ -551,16 +452,13 @@ class AdvancedResultsAnalyzer:
         if not merge_details_file:
             return None
 
-        try:
-            with open(merge_details_file, 'r') as f:
-                content = f.read()
+        with open(merge_details_file, 'r') as f:
+            content = f.read()
 
-            # Count the number of models using the pattern
-            model_pattern = re.compile(r"^\s*\d+\.\s*Model:", re.MULTILINE)
-            matches = model_pattern.findall(content)
-            return len(matches) if matches else None
-        except Exception:
-            return None
+        # Count the number of models using the pattern
+        model_pattern = re.compile(r"^\s*\d+\.\s*Model:", re.MULTILINE)
+        matches = model_pattern.findall(content)
+        return len(matches) if matches else None
 
     def extract_source_locales_from_details(self, target_locale: str) -> List[str]:
         """Extract source locales from merge_details.txt files for any merge type"""
@@ -591,34 +489,27 @@ class AdvancedResultsAnalyzer:
             if merge_details_files:
                 # Use the first one found
                 merge_details_file = merge_details_files[0]
-                try:
-                    with open(merge_details_file, 'r') as f:
-                        content = f.read()
+                with open(merge_details_file, 'r') as f:
+                    content = f.read()
 
-                    # Extract locales using regex pattern for the new format
-                    locale_pattern = re.compile(r"^\s*- Locale:\s*([a-zA-Z]{2}-[a-zA-Z]{2})", re.MULTILINE)
-                    locales = locale_pattern.findall(content)
-                    if locales:
-                        return locales
-                except Exception as e:
-                    print(f"Error reading {merge_details_file}: {e}")
-                    continue
+                # Extract locales using regex pattern for the new format
+                locale_pattern = re.compile(r"^\s*- Locale:\s*([a-zA-Z]{2}-[a-zA-Z]{2})", re.MULTILINE)
+                locales = locale_pattern.findall(content)
+                if locales:
+                    return locales
 
         # Fallback: try to find from any directory containing the target locale
         for exp_dir in self.results_dir.glob(f"merged_models/*{target_locale}"):
             if exp_dir.is_dir():
                 merge_details_file = exp_dir / "merge_details.txt"
                 if merge_details_file.exists():
-                    try:
-                        with open(merge_details_file, 'r') as f:
-                            content = f.read()
+                    with open(merge_details_file, 'r') as f:
+                        content = f.read()
 
-                        locale_pattern = re.compile(r"^\s*- Locale:\s*([a-zA-Z]{2}-[a-zA-Z]{2})", re.MULTILINE)
-                        locales = locale_pattern.findall(content)
-                        if locales:
-                            return locales
-                    except Exception:
-                        continue
+                    locale_pattern = re.compile(r"^\s*- Locale:\s*([a-zA-Z]{2}-[a-zA-Z]{2})", re.MULTILINE)
+                    locales = locale_pattern.findall(content)
+                    if locales:
+                        return locales
 
           # Fallback: try to extract source locales from experiment results
         # For IT/ET experiments, we can derive source locales from the experiment data
@@ -673,10 +564,7 @@ class AdvancedResultsAnalyzer:
             if pd.isna(baseline_val) or baseline_val == '' or baseline_val is None:
                 locale_data['baseline'] = 0
             else:
-                try:
-                    locale_data['baseline'] = float(baseline_val)
-                except (ValueError, TypeError):
-                    locale_data['baseline'] = 0
+                locale_data['baseline'] = float(baseline_val)
 
             # Capture every method/variant column dynamically
             num_lang_map = {}
@@ -685,16 +573,10 @@ class AdvancedResultsAnalyzer:
                     # Ensure method values are numeric
                     method_val = main_data[method_key]
                     if method_val != '' and method_val is not None:
-                        try:
-                            locale_data[method_key] = float(method_val)
-                        except (ValueError, TypeError):
-                            continue
+                        locale_data[method_key] = float(method_val)
                     match = re.search(r'_(\d+)lang$', method_key)
                     if match:
-                        try:
-                            num_lang_map[method_key] = int(match.group(1))
-                        except ValueError:
-                            continue
+                        num_lang_map[method_key] = int(match.group(1))
 
             if num_lang_map:
                 locale_data['num_languages_map'] = num_lang_map
@@ -1059,8 +941,6 @@ class AdvancedResultsAnalyzer:
 
         for method in method_cols:
             num_lang_counts = self.get_method_num_language_set(summary_df, method)
-            if len(num_lang_counts) <= 1:
-                continue
 
             # Get model family and similarity type for this method
             model_family = self.get_method_model_family(method)
@@ -1127,8 +1007,6 @@ class AdvancedResultsAnalyzer:
         for col in vs_avg_cols:
             method_name = col.replace('_vs_avg_zero', '')
             num_lang_counts = self.get_method_num_language_set(summary_df, method_name)
-            if len(num_lang_counts) <= 1:
-                continue
 
             # Get model family and similarity type for this method
             model_family = self.get_method_model_family(method_name)
@@ -1204,8 +1082,6 @@ class AdvancedResultsAnalyzer:
         for col in vs_best_cols:
             method_name = col.replace('_vs_best_zero', '')
             num_lang_counts = self.get_method_num_language_set(summary_df, method_name)
-            if len(num_lang_counts) <= 1:
-                continue
 
             # Get model family and similarity type for this method
             model_family = self.get_method_model_family(method_name)
@@ -1281,8 +1157,6 @@ class AdvancedResultsAnalyzer:
         for col in vs_best_source_cols:
             method_name = col.replace('_vs_best_source', '')
             num_lang_counts = self.get_method_num_language_set(summary_df, method_name)
-            if len(num_lang_counts) <= 1:
-                continue
 
             # Get model family and similarity type for this method
             model_family = self.get_method_model_family(method_name)
@@ -1522,25 +1396,19 @@ class AdvancedResultsAnalyzer:
         # Try new naming convention first
         for similarity_type in ['URIEL', 'REAL']:
             pattern = f"{base_method}_{similarity_type}_merge_{locale}_(\\d+)merged"
-            try:
-                for entry in merged_models_path.iterdir():
-                    if entry.is_dir():
-                        match = re.search(pattern, entry.name)
-                        if match:
-                            return int(match.group(1))
-            except FileNotFoundError:
-                continue
-
-        # Fallback to legacy naming convention
-        pattern = f"{base_method}_merge_{locale}_(\\d+)merged"
-        try:
             for entry in merged_models_path.iterdir():
                 if entry.is_dir():
                     match = re.search(pattern, entry.name)
                     if match:
                         return int(match.group(1))
-        except FileNotFoundError:
-            pass
+
+        # Fallback to legacy naming convention
+        pattern = f"{base_method}_merge_{locale}_(\\d+)merged"
+        for entry in merged_models_path.iterdir():
+            if entry.is_dir():
+                match = re.search(pattern, entry.name)
+                if match:
+                    return int(match.group(1))
 
         return None
 
@@ -1561,10 +1429,7 @@ class AdvancedResultsAnalyzer:
             raw_map = row.get('num_languages_map')
             num_lang_map = {}
             if isinstance(raw_map, str) and raw_map:
-                try:
-                    num_lang_map = json.loads(raw_map)
-                except Exception:
-                    num_lang_map = {}
+                num_lang_map = json.loads(raw_map)
 
             for method in methods:
                 if pd.notna(row[method]) and row[method] > 0:  # Only if method has results
@@ -1574,10 +1439,7 @@ class AdvancedResultsAnalyzer:
                     else:
                         match = re.match(r'(.+?)_(\d+)lang$', method)
                         if match:
-                            try:
-                                num_lang = int(match.group(2))
-                            except ValueError:
-                                num_lang = None
+                            num_lang = int(match.group(2))
                         if num_lang is None:
                             num_lang = self.get_num_languages_from_merged_models(locale, method)
 
@@ -2131,12 +1993,8 @@ def main():
     # Parse num_languages filter
     num_languages_filter = None
     if args.num_languages:
-        try:
-            num_languages_filter = [int(x.strip()) for x in args.num_languages.split(',')]
-            print(f"Filtering experiments with num_languages: {num_languages_filter}")
-        except ValueError:
-            print("Error: num_languages must be comma-separated integers")
-            return None
+        num_languages_filter = [int(x.strip()) for x in args.num_languages.split(',')]
+        print(f"Filtering experiments with num_languages: {num_languages_filter}")
 
     # Parse similarity types filter
     similarity_types_filter = None
@@ -2151,57 +2009,45 @@ def main():
 
     # If listing num_languages, create analyzer and show available values
     if args.list_num_languages:
-        try:
-            analyzer = AdvancedResultsAnalyzer(results_dir=args.results_dir, plots_dir=args.plots_dir)
-            # Find available num_languages from merge details
-            available_num_langs = set()
-            for locale in analyzer.main_results_df['locale'].unique():
-                for method in ['similarity', 'average', 'fisher']:
-                    num_lang = analyzer.extract_num_languages_from_details(locale, method)
-                    if num_lang is not None:
-                        available_num_langs.add(num_lang)
-                        break
+        analyzer = AdvancedResultsAnalyzer(results_dir=args.results_dir, plots_dir=args.plots_dir)
+        # Find available num_languages from merge details
+        available_num_langs = set()
+        for locale in analyzer.main_results_df['locale'].unique():
+            for method in ['similarity', 'average', 'fisher']:
+                num_lang = analyzer.extract_num_languages_from_details(locale, method)
+                if num_lang is not None:
+                    available_num_langs.add(num_lang)
+                    break
 
-            if available_num_langs:
-                print(f"Available num_languages in data: {sorted(list(available_num_langs))}")
-            else:
-                print("No num_languages information found in merge details")
-            return None
-        except Exception as e:
-            print(f"Error analyzing data: {e}")
-            return None
+        if available_num_langs:
+            print(f"Available num_languages in data: {sorted(list(available_num_langs))}")
+        else:
+            print("No num_languages information found in merge details")
+        return None
 
     # If listing similarity types, create analyzer and show available values
     if args.list_similarity_types:
-        try:
-            analyzer = AdvancedResultsAnalyzer(results_dir=args.results_dir, plots_dir=args.plots_dir)
-            # Find available similarity types from experiment results
-            available_similarity_types = set()
-            for exp_name, exp_data in analyzer.experiment_results.items():
-                if exp_data.get('similarity_type') and exp_data['similarity_type'] != 'unknown':
-                    available_similarity_types.add(exp_data['similarity_type'])
+        analyzer = AdvancedResultsAnalyzer(results_dir=args.results_dir, plots_dir=args.plots_dir)
+        # Find available similarity types from experiment results
+        available_similarity_types = set()
+        for exp_name, exp_data in analyzer.experiment_results.items():
+            if exp_data.get('similarity_type') and exp_data['similarity_type'] != 'unknown':
+                available_similarity_types.add(exp_data['similarity_type'])
 
-            if available_similarity_types:
-                print(f"Available similarity types in data: {sorted(list(available_similarity_types))}")
-            else:
-                print("No similarity type information found in experiment results")
-            return None
-        except Exception as e:
-            print(f"Error analyzing data: {e}")
-            return None
-
-    try:
-        analyzer = AdvancedResultsAnalyzer(
-            results_dir=args.results_dir,
-            plots_dir=args.plots_dir,
-            num_languages_filter=num_languages_filter,
-            similarity_types=similarity_types_filter
-        )
-        summary_df = analyzer.generate_advanced_analysis()
-        return summary_df
-    except Exception as e:
-        print(f"Error in advanced analysis: {e}")
+        if available_similarity_types:
+            print(f"Available similarity types in data: {sorted(list(available_similarity_types))}")
+        else:
+            print("No similarity type information found in experiment results")
         return None
+
+    analyzer = AdvancedResultsAnalyzer(
+        results_dir=args.results_dir,
+        plots_dir=args.plots_dir,
+        num_languages_filter=num_languages_filter,
+        similarity_types=similarity_types_filter
+    )
+    summary_df = analyzer.generate_advanced_analysis()
+    return summary_df
 
 if __name__ == "__main__":
     exit(main())
