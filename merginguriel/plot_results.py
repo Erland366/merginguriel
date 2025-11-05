@@ -301,6 +301,14 @@ class AdvancedResultsAnalyzer:
         # Default fallback
         return 'unknown'
 
+    def infer_model_family_from_method_key(self, method_key: str) -> Optional[str]:
+        """Attempt to infer the model family portion from a method key string."""
+        parts = method_key.split('_')
+        for part in parts:
+            if '-' in part:
+                return part
+        return None
+
     def get_method_similarity_type(self, method: str) -> str:
         """Get the similarity type for a method using centralized naming system."""
         # Look for this method in our experiment results
@@ -1204,6 +1212,103 @@ class AdvancedResultsAnalyzer:
             plt.close()
             print(f"  ✅ vs best source plot for {file_method} saved to: {output_file}")
 
+    def generate_baseline_comparison_plots(self, summary_df: pd.DataFrame, output_dir: Path, timestamp: str):
+        """Generate plots comparing baseline performance directly against each method."""
+        print("Generating baseline comparison plots...")
+
+        if 'locale' not in summary_df.columns or summary_df.empty:
+            print("No locale data found for baseline comparison plots")
+            return
+
+        locales = summary_df['locale'].tolist()
+        baseline_cols = [
+            col for col in summary_df.columns
+            if col.startswith('baseline_') and '_vs_' not in col
+        ]
+
+        if not baseline_cols:
+            print("No baseline columns found for comparison plots")
+            return
+
+        method_cols = [
+            col for col in summary_df.columns
+            if col not in ['locale', 'baseline', 'avg_zero_shot', 'best_zero_shot', 'best_source', 'source_locales', 'num_languages_map']
+            and not col.startswith('baseline')
+            and '_vs_' not in col
+        ]
+
+        if not method_cols:
+            print("No method columns found for baseline comparison plots")
+            return
+
+        for method in method_cols:
+            model_family = self.get_method_model_family(method)
+            inferred_family = self.infer_model_family_from_method_key(method)
+            if inferred_family:
+                model_family = inferred_family
+
+            baseline_col = f'baseline_{model_family}' if model_family and model_family != 'unknown' else None
+
+            if baseline_col not in summary_df.columns:
+                baseline_col = 'baseline' if 'baseline' in summary_df.columns else None
+
+            if not baseline_col:
+                continue
+
+            baseline_values = summary_df[baseline_col].fillna(0).tolist()
+            method_values = summary_df[method].fillna(0).tolist()
+            display_name = self.format_method_key_for_display(method, model_family, self.get_method_similarity_type(method))
+            file_method = self.format_method_key_for_filename(method, model_family, self.get_method_similarity_type(method))
+
+            differences = [m - b for m, b in zip(method_values, baseline_values)]
+
+            fig, ax = plt.subplots(figsize=(20, 8))
+            x = np.arange(len(locales))
+            width = 0.35
+
+            if baseline_col == 'baseline' or not model_family or model_family == 'unknown':
+                baseline_label = 'Baseline'
+            else:
+                baseline_label = f'Baseline ({model_family})'
+
+            ax.bar(x - width / 2, baseline_values, width, label=baseline_label, alpha=0.7, color='gray')
+            method_bars = ax.bar(x + width / 2, method_values, width, label=display_name, alpha=0.85, color='royalblue')
+
+            for idx, (bar, diff) in enumerate(zip(method_bars, differences)):
+                height = bar.get_height()
+                ax.text(
+                    bar.get_x() + bar.get_width() / 2.0,
+                    height,
+                    f'{diff:+.3f}',
+                    ha='center',
+                    va='bottom' if diff >= 0 else 'top',
+                    fontsize=8,
+                    fontweight='bold',
+                    color='darkgreen' if diff >= 0 else 'darkred'
+                )
+
+            diff_values = [d for d in differences if abs(d) > 1e-6]
+            if diff_values:
+                mean_diff = np.mean(diff_values)
+                positive = sum(1 for d in diff_values if d > 0)
+                stats_text = f'Mean Δ: {mean_diff:+.4f}\nImproved: {positive}/{len(diff_values)}'
+                ax.text(0.02, 0.95, stats_text, transform=ax.transAxes, fontsize=10,
+                        verticalalignment='top', bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.7))
+
+            ax.set_xlabel('Target Languages')
+            ax.set_ylabel('Accuracy')
+            ax.set_title(f'Baseline vs {display_name}')
+            ax.set_xticks(x)
+            ax.set_xticklabels(locales, rotation=45, ha='right')
+            ax.legend()
+            ax.grid(True, alpha=0.3)
+
+            plt.tight_layout()
+            output_file = output_dir / f"baseline_vs_{file_method}_{timestamp}.png"
+            plt.savefig(output_file, dpi=300, bbox_inches='tight')
+            plt.close()
+            print(f"  ✅ Baseline comparison plot for {file_method} saved to: {output_file}")
+
     def print_summary_statistics(self, summary_df: pd.DataFrame):
         """Print comprehensive summary statistics"""
         print("\n" + "="*80)
@@ -1289,6 +1394,7 @@ class AdvancedResultsAnalyzer:
             self.generate_vs_avg_zero_plots(summary_df, self.plots_dir, timestamp)
             self.generate_vs_best_zero_plots(summary_df, self.plots_dir, timestamp)
             self.generate_vs_best_source_plots(summary_df, self.plots_dir, timestamp)
+            self.generate_baseline_comparison_plots(summary_df, self.plots_dir, timestamp)
 
             # Generate comprehensive num_languages separated plots for ALL methods
             if self.num_languages_filter is not None or len(merging_results) > 0:
@@ -1302,6 +1408,7 @@ class AdvancedResultsAnalyzer:
         print(f"- Individual vs avg zero-shot comparison plots for each method")
         print(f"- Individual vs best zero-shot comparison plots for each method")
         print(f"- Individual vs best source comparison plots for each method (FAIR COMPARISON)")
+        print(f"- Baseline comparison plots for each method")
         print(f"All plots saved in {self.plots_dir} directory with {timestamp} suffix")
 
         return summary_df
