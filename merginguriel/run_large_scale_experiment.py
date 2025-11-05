@@ -194,7 +194,9 @@ def run_experiment_for_locale(
             locale=locale,
             model_family=model_family
         )
-        success = run_evaluation(base_model_path, locale, "baseline", results_dir_name)
+        results_full_path = os.path.join(REPO_ROOT, results_dir, results_dir_name)
+        os.makedirs(results_full_path, exist_ok=True)
+        success = run_evaluation(base_model_path, locale, "baseline", results_full_path)
         results['baseline'] = success
 
     merge_modes = [mode for mode in modes if mode != "baseline"]

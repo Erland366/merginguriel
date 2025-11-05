@@ -213,7 +213,11 @@ if __name__ == "__main__":
     parser.add_argument("--prefix", type=str, default=None, help="Prefix for results folder")
     args = parser.parse_args()
 
-    eval_folder = args.results_dir or create_results_folder(args.base_model, args.locale, args.prefix)
+    if args.results_dir:
+        eval_folder = args.results_dir
+        os.makedirs(eval_folder, exist_ok=True)
+    else:
+        eval_folder = create_results_folder(args.base_model, args.locale, args.prefix)
     logger.info(f"Results will be saved to: {eval_folder}")
     results = evaluate_specific_model(args.base_model, args.locale, eval_folder)
     if results:

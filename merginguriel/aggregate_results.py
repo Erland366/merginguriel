@@ -740,52 +740,66 @@ def generate_win_rate_analysis(df, comparison_df):
 
     return win_analysis
 
-def save_results(df, comparison_df, summary, win_analysis=None):
+def save_results(df, comparison_df, summary, win_analysis=None, output_dir: Optional[Path] = None):
     """Save all results to files with comprehensive exports."""
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
+    if output_dir is None:
+        output_dir = Path.cwd()
+    else:
+        output_dir = Path(output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+
     # Save raw data
     raw_filename = f'results_aggregated_{timestamp}.csv'
-    df.to_csv(raw_filename, index=False)
-    logger.info(f"Raw results saved to {raw_filename}")
+    raw_path = output_dir / raw_filename
+    df.to_csv(raw_path, index=False)
+    logger.info(f"Raw results saved to {raw_path}")
 
     # Save comparison table
     comparison_filename = f'results_comparison_{timestamp}.csv'
-    comparison_df.to_csv(comparison_filename, index=False)
-    logger.info(f"Comparison table saved to {comparison_filename}")
+    comparison_path = output_dir / comparison_filename
+    comparison_df.to_csv(comparison_path, index=False)
+    logger.info(f"Comparison table saved to {comparison_path}")
 
     # Save comprehensive results with all metrics in one file
     comprehensive_filename = f'results_comprehensive_{timestamp}.csv'
-    comparison_df.to_csv(comprehensive_filename, index=False)
-    logger.info(f"Comprehensive results saved to {comprehensive_filename}")
+    comprehensive_path = output_dir / comprehensive_filename
+    comparison_df.to_csv(comprehensive_path, index=False)
+    logger.info(f"Comprehensive results saved to {comprehensive_path}")
 
     # Save summary statistics
     summary_filename = f'results_summary_{timestamp}.json'
-    with open(summary_filename, 'w') as f:
+    summary_path = output_dir / summary_filename
+    with open(summary_path, 'w') as f:
         json.dump(summary, f, indent=2)
-    logger.info(f"Summary statistics saved to {summary_filename}")
+    logger.info(f"Summary statistics saved to {summary_path}")
 
     # Save win rate analysis if available
     if win_analysis:
         win_analysis_filename = f'results_win_analysis_{timestamp}.json'
-        with open(win_analysis_filename, 'w') as f:
+        win_analysis_path = output_dir / win_analysis_filename
+        with open(win_analysis_path, 'w') as f:
             json.dump(win_analysis, f, indent=2)
-        logger.info(f"Win rate analysis saved to {win_analysis_filename}")
+        logger.info(f"Win rate analysis saved to {win_analysis_path}")
+    else:
+        win_analysis_path = None
 
     # Save comprehensive markdown report
     markdown_content = create_comprehensive_markdown_report(comparison_df, summary, win_analysis)
     markdown_filename = f'results_report_{timestamp}.md'
-    with open(markdown_filename, 'w') as f:
+    markdown_path = output_dir / markdown_filename
+    with open(markdown_path, 'w') as f:
         f.write(markdown_content)
-    logger.info(f"Comprehensive report saved to {markdown_filename}")
+    logger.info(f"Comprehensive report saved to {markdown_path}")
 
     return {
-        'raw_filename': raw_filename,
-        'comparison_filename': comparison_filename,
-        'comprehensive_filename': comprehensive_filename,
-        'summary_filename': summary_filename,
-        'markdown_filename': markdown_filename,
-        'win_analysis_filename': win_analysis_filename if win_analysis else None
+        'raw_filename': str(raw_path),
+        'comparison_filename': str(comparison_path),
+        'comprehensive_filename': str(comprehensive_path),
+        'summary_filename': str(summary_path),
+        'markdown_filename': str(markdown_path),
+        'win_analysis_filename': str(win_analysis_path) if win_analysis_path else None
     }
 
 def create_comprehensive_markdown_report(comparison_df, summary, win_analysis=None):
@@ -1065,7 +1079,7 @@ def main():
 
     # Save results
     logger.info("Saving results...")
-    saved_files = save_results(df, comparison_df, summary, win_analysis)
+    saved_files = save_results(df, comparison_df, summary, win_analysis, output_dir=Path(args.results_dir))
 
     # Print file summary
     logger.info("Files generated:")
