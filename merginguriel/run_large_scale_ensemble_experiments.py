@@ -186,7 +186,7 @@ def run_experiment_for_locale(
     models_root: str = "haryos_model",
     similarity_type: str = "URIEL",
     num_languages: int = 5,
-    include_target: bool = False,
+    include_target_modes: List[bool] = None,
 ):
     """Run the requested ensemble experiments for a single locale."""
     print(f"\n{'='*60}")
@@ -221,32 +221,45 @@ def run_experiment_for_locale(
         print(f"❌ Validation failed: {e}")
         return {}
 
-    results: Dict[str, bool] = {}
+    if include_target_modes is None:
+        include_target_modes = [False]
 
-    for voting_method in voting_methods:
-        print(f"\n--- {voting_method} Ensemble for {locale} ---")
+    variant_results: Dict[str, Dict[str, bool]] = {}
 
-        # Run ensemble inference
-        ensemble_success = run_ensemble_inference(voting_method, locale, ensemble_extra_args)
+    for include_target in include_target_modes:
+        variant_label = "IncTar" if include_target else "ExcTar"
+        print(f"\n### Running target inclusion variant: {variant_label} ###")
 
-        if ensemble_success:
-            # Load results and save in compatible format
-            ensemble_data = load_ensemble_results(locale, voting_method)
-            if ensemble_data:
-                save_success = save_ensemble_results(
-                    locale, voting_method, ensemble_data,
-                    model_family=model_family,
-                    similarity_type=similarity_type,
-                    num_models=num_languages,
-                    include_target=include_target
-                )
-                results[voting_method] = save_success
+        variant_args = list(ensemble_extra_args)
+        if include_target:
+            variant_args.append("--include-target")
+
+        method_results: Dict[str, bool] = {}
+
+        for voting_method in voting_methods:
+            print(f"\n--- {voting_method} Ensemble for {locale} ({variant_label}) ---")
+
+            ensemble_success = run_ensemble_inference(voting_method, locale, variant_args)
+
+            if ensemble_success:
+                ensemble_data = load_ensemble_results(locale, voting_method)
+                if ensemble_data:
+                    save_success = save_ensemble_results(
+                        locale, voting_method, ensemble_data,
+                        model_family=model_family,
+                        similarity_type=similarity_type,
+                        num_models=num_languages,
+                        include_target=include_target
+                    )
+                    method_results[voting_method] = save_success
+                else:
+                    method_results[voting_method] = False
             else:
-                results[voting_method] = False
-        else:
-            results[voting_method] = False
+                method_results[voting_method] = False
 
-    return results
+        variant_results[variant_label] = method_results
+
+    return variant_results
 
 def main():
     parser = argparse.ArgumentParser(description="Run large-scale ensemble inference experiments")
@@ -279,8 +292,14 @@ def main():
     # Additional options for consistency with merging experiments
     parser.add_argument("--similarity-type", type=str, choices=["URIEL","REAL"], default="URIEL",
                        help="Type of similarity matrix to use: URIEL (linguistic features) or REAL (empirical evaluation results)")
-    parser.add_argument("--include-target", action="store_true",
-                       help="Include target language model in ensemble (IT mode). Default is exclude target (ET mode).")
+    parser.add_argument("--target-inclusion", type=str,
+                       choices=["IncTar", "ExcTar", "include", "exclude", "both"],
+                       default=None,
+                       help="Target inclusion mode for ensemble experiments. Default runs both variants.")
+    parser.add_argument("--include-target", action="store_true", dest="legacy_include_target",
+                       help="Deprecated alias for --target-inclusion IncTar.")
+    parser.add_argument("--exclude-target", action="store_true", dest="legacy_exclude_target",
+                       help="Deprecated alias for --target-inclusion ExcTar.")
     parser.add_argument("--models-root", type=str, default="haryos_model",
                        help="Root directory containing models (default: haryos_model)")
 
@@ -323,16 +342,38 @@ def main():
     # Track overall results
     overall_results = {}
 
+    if args.target_inclusion is None:
+        if args.legacy_include_target and args.legacy_exclude_target:
+            parser.error("Cannot specify both --include-target and --exclude-target.")
+        if args.legacy_include_target:
+            args.target_inclusion = "IncTar"
+        elif args.legacy_exclude_target:
+            args.target_inclusion = "ExcTar"
+        else:
+            args.target_inclusion = "both"
+    else:
+        if args.legacy_include_target or args.legacy_exclude_target:
+            parser.error("Do not mix --target-inclusion with legacy include/exclude flags.")
+
+    inclusion_map = {
+        "IncTar": [True],
+        "include": [True],
+        "ExcTar": [False],
+        "exclude": [False],
+        "both": [False, True]
+    }
+    include_target_modes = inclusion_map[args.target_inclusion]
+    print(f"Target inclusion modes: {args.target_inclusion}")
+
     # Build pass-through args for ensemble inference
     ensemble_extra_args = [
         "--num-languages", str(args.num_languages),
-        "--include-target" if args.include_target else None,
         "--top-k", str(args.top_k),
         "--sinkhorn-iters", str(args.sinkhorn_iters),
         "--output-dir", args.output_dir
     ]
 
-    # Remove None values (for conditional args like --include-target)
+    # Remove None values in case optional args are unused
     ensemble_extra_args = [arg for arg in ensemble_extra_args if arg is not None]
 
     # Only add num-examples if specified (for full test set evaluation)
@@ -341,8 +382,15 @@ def main():
 
     for i, locale in enumerate(locales):
         print(f"\nProcessing locale {i+1}/{len(locales)}: {locale}")
-        results = run_experiment_for_locale(locale, args.voting_methods, ensemble_extra_args,
-                                          args.models_root, args.similarity_type, args.num_languages, args.include_target)
+        results = run_experiment_for_locale(
+            locale,
+            args.voting_methods,
+            ensemble_extra_args,
+            args.models_root,
+            args.similarity_type,
+            args.num_languages,
+            include_target_modes,
+        )
 
         overall_results[locale] = results
 
@@ -356,6 +404,7 @@ def main():
                 'current_locale': locale,
                 'similarity_type': args.similarity_type,
                 'models_root': args.models_root,
+                'target_inclusion': args.target_inclusion,
                 'results': overall_results
             }, f, indent=2)
 
@@ -372,9 +421,19 @@ def main():
     # Dynamic summary per voting method
     method_success_counts: Dict[str, int] = {}
     for locale, res in overall_results.items():
-        for method, ok in res.items():
-            if ok is True:
-                method_success_counts[method] = method_success_counts.get(method, 0) + 1
+        if isinstance(res, dict):
+            for variant_label, variant_results in res.items():
+                if not isinstance(variant_results, dict):
+                    continue
+                for method, ok in variant_results.items():
+                    if ok is True:
+                        key = f"{method}_{variant_label}"
+                        method_success_counts[key] = method_success_counts.get(key, 0) + 1
+        else:
+            # Backward compatibility for flat structures
+            for method, ok in res.items():
+                if ok is True:
+                    method_success_counts[method] = method_success_counts.get(method, 0) + 1
 
     if method_success_counts:
         print("Successful runs per voting method:")
@@ -396,7 +455,8 @@ def main():
                 'sinkhorn_iters': args.sinkhorn_iters,
                 'output_dir': args.output_dir,
                 'similarity_type': args.similarity_type,
-                'models_root': args.models_root
+                'models_root': args.models_root,
+                'target_inclusion': args.target_inclusion
             },
             'summary': {
                 'total_locales': len(overall_results),

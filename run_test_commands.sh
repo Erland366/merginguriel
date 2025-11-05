@@ -1,6 +1,7 @@
 #!/bin/bash
 
 echo "Running model sanitization tests with IT/ET functionality..."
+echo "Note: large-scale runners now execute both variants by default; use --target-inclusion to run a single variant."
 
 # Command 1: af-ZA with large model (ET - Exclude Target)
 echo "=== af-ZA with large model (ET) ==="
@@ -9,6 +10,7 @@ echo "=== af-ZA with large model (ET) ==="
 #     --modes ties \
 #     --similarity-type REAL \
 #     --num-languages 3 \
+#     --target-inclusion ExcTar \
 #     --models-root haryos_model_large \
 #     --results-dir testing_chamber/results \
 #     --merged-models-dir testing_chamber/merged_models \
@@ -21,7 +23,7 @@ echo "=== af-ZA with large model (ET) ==="
 #     --modes ties \
 #     --similarity-type REAL \
 #     --num-languages 3 \
-#     --include-target \
+#     --target-inclusion IncTar \
 #     --models-root haryos_model_large \
 #     --results-dir testing_chamber/results \
 #     --merged-models-dir testing_chamber/merged_models \
@@ -34,6 +36,7 @@ echo "=== af-ZA with large model (ET) ==="
 #     --modes ties \
 #     --similarity-type REAL \
 #     --num-languages 3 \
+#     --target-inclusion ExcTar \
 #     --models-root haryos_model \
 #     --results-dir testing_chamber/results \
 #     --merged-models-dir testing_chamber/merged_models \
@@ -46,7 +49,7 @@ echo "=== af-ZA with large model (ET) ==="
 #     --modes ties \
 #     --similarity-type REAL \
 #     --num-languages 3 \
-#     --include-target \
+#     --target-inclusion IncTar \
 #     --models-root haryos_model \
 #     --results-dir testing_chamber/results \
 #     --merged-models-dir testing_chamber/merged_models \
@@ -59,6 +62,7 @@ echo "=== af-ZA with large model (ET) ==="
 #     --modes ties \
 #     --similarity-type REAL \
 #     --num-languages 3 \
+#     --target-inclusion ExcTar \
 #     --models-root haryos_model_large \
 #     --results-dir testing_chamber/results \
 #     --merged-models-dir testing_chamber/merged_models \
@@ -71,7 +75,7 @@ echo "=== af-ZA with large model (ET) ==="
 #     --modes ties \
 #     --similarity-type REAL \
 #     --num-languages 3 \
-#     --include-target \
+#     --target-inclusion IncTar \
 #     --models-root haryos_model_large \
 #     --results-dir testing_chamber/results \
 #     --merged-models-dir testing_chamber/merged_models \
@@ -84,6 +88,7 @@ echo "=== af-ZA with large model (ET) ==="
 #     --modes ties \
 #     --similarity-type REAL \
 #     --num-languages 3 \
+#     --target-inclusion ExcTar \
 #     --models-root haryos_model \
 #     --results-dir testing_chamber/results \
 #     --merged-models-dir testing_chamber/merged_models \
@@ -91,16 +96,26 @@ echo "=== af-ZA with large model (ET) ==="
 
 # # Command 8: am-ET with base model (IT - Include Target)
 # echo "=== am-ET with base model (IT) ==="
-# python merginguriel/run_large_scale_experiment.py \
-#     --locales am-ET \
-#     --modes ties \
-#     --similarity-type REAL \
-#     --num-languages 3 \
-#     --include-target \
-#     --models-root haryos_model \
-#     --results-dir testing_chamber/results \
-#     --merged-models-dir testing_chamber/merged_models \
-#     --cleanup-after-eval
+python merginguriel/run_large_scale_experiment.py \
+    --locales am-ET \
+    --modes ties \
+    --similarity-type REAL \
+    --num-languages 3 \
+    --target-inclusion IncTar \
+    --models-root haryos_model \
+    --results-dir testing_chamber/results \
+    --merged-models-dir testing_chamber/merged_models \
+    --cleanup-after-eval
+
+python merginguriel/run_large_scale_experiment.py \
+    --locales am-ET \
+    --modes ties \
+    --similarity-type REAL \
+    --num-languages 3 \
+    --models-root haryos_model \
+    --results-dir testing_chamber/results \
+    --merged-models-dir testing_chamber/merged_models \
+    --cleanup-after-eval
 
 echo "=== Aggregating results ==="
 python -m merginguriel.aggregate_results --results-dir testing_chamber/results --output-prefix final_results

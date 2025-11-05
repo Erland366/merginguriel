@@ -350,7 +350,8 @@ def extract_iterative_results(target_lang: str, mode: str, locale_output_dir: st
 
 def save_iterative_results(target_lang: str, mode: str, results: Dict[str, Any],
                          results_dir: str = "results", model_family: str = None,
-                         similarity_type: str = "URIEL", num_languages: int = None) -> bool:
+                         similarity_type: str = "URIEL", num_languages: int = None,
+                         include_target: bool = False) -> bool:
     """
     Save iterative training results in format compatible with aggregate_results.py.
 
@@ -374,7 +375,8 @@ def save_iterative_results(target_lang: str, mode: str, results: Dict[str, Any],
             similarity_type=similarity_type,
             locale=target_lang,
             model_family=model_family,
-            num_languages=num_languages
+            num_languages=num_languages,
+            include_target=include_target
         )
         results_folder = os.path.join(REPO_ROOT, results_dir, folder_name)
         os.makedirs(results_folder, exist_ok=True)
@@ -446,12 +448,12 @@ def run_experiment_for_locale(
     training_extra_args: List[str],
     output_base_dir: str,
     max_models: int,
+    include_target_modes: List[bool],
     similarity_type: str = "URIEL",
     models_root: str = "haryos_model",
     top_k: int = 20,
     sinkhorn_iters: int = 20,
-    include_target: bool = False
-) -> Dict[str, bool]:
+) -> Dict[str, Any]:
     """
     Run the iterative training experiment for a single locale.
 
@@ -501,52 +503,80 @@ def run_experiment_for_locale(
         logger.error(f"❌ Validation failed: {e}")
         return {'success': False, 'error': f'Validation failed: {e}'}
 
-    results = {}
+    variant_results: Dict[str, Any] = {}
+    aggregate_success = True
+    accuracy_map: Dict[str, float] = {}
 
-    # Auto-select source languages
-    source_locales = auto_select_iterative_sources(locale, max_models, similarity_type, models_root, top_k, sinkhorn_iters, include_target)
+    for include_target in include_target_modes:
+        variant_label = "IncTar" if include_target else "ExcTar"
+        logger.info(f"\n--- Iterative training variant: {variant_label} ---")
 
-    if not source_locales:
-        logger.error(f"No source languages found for {locale}")
-        return {'success': False, 'error': 'No source languages available'}
+        # Auto-select source languages for this variant
+        source_locales = auto_select_iterative_sources(
+            locale, max_models, similarity_type, models_root, top_k, sinkhorn_iters, include_target
+        )
 
-    # Monitor system resources before starting
-    resources_before = monitor_system_resources()
-    logger.info(f"System resources before training: CPU={resources_before.get('cpu_percent', 0):.1f}%, "
-               f"Memory={resources_before.get('memory_percent', 0):.1f}%, "
-               f"Disk={resources_before.get('disk_percent', 0):.1f}%")
+        variant_result: Dict[str, Any] = {}
 
-    # Run iterative training
-    training_success = run_iterative_training(
-        locale, source_locales, mode, training_extra_args, output_base_dir, include_target
-    )
+        if not source_locales:
+            logger.error(f"No source languages found for {locale} ({variant_label})")
+            variant_result['success'] = False
+            variant_result['error'] = 'No source languages available'
+            aggregate_success = False
+            variant_results[variant_label] = variant_result
+            continue
 
-    if training_success:
-        # Extract results from training output
-        itet_suffix = "IT" if include_target else "ET"
-        locale_output_dir = os.path.join(output_base_dir, f"iterative_{mode}_{locale}_{itet_suffix}")
-        training_results = extract_iterative_results(locale, mode, locale_output_dir)
+        resources_before = monitor_system_resources()
+        logger.info(f"System resources before training ({variant_label}): "
+                    f"CPU={resources_before.get('cpu_percent', 0):.1f}%, "
+                    f"Memory={resources_before.get('memory_percent', 0):.1f}%, "
+                    f"Disk={resources_before.get('disk_percent', 0):.1f}%")
 
-        if training_results:
-            # Save results in compatible format
-            save_success = save_iterative_results(locale, mode, training_results,
-                                                model_family=model_family,
-                                                similarity_type=similarity_type,
-                                                num_languages=max_models)
-            results['success'] = save_success
-            results['accuracy'] = training_results['performance']['accuracy']
+        training_success = run_iterative_training(
+            locale, source_locales, mode, training_extra_args, output_base_dir, include_target
+        )
+
+        if training_success:
+            itet_suffix = "IT" if include_target else "ET"
+            locale_output_dir = os.path.join(output_base_dir, f"iterative_{mode}_{locale}_{itet_suffix}")
+            training_results = extract_iterative_results(locale, mode, locale_output_dir)
+
+            if training_results:
+                save_success = save_iterative_results(
+                    locale,
+                    mode,
+                    training_results,
+                    model_family=model_family,
+                    similarity_type=similarity_type,
+                    num_languages=max_models,
+                    include_target=include_target
+                )
+                variant_result['success'] = save_success
+                accuracy = training_results['performance']['accuracy']
+                variant_result['accuracy'] = accuracy
+                accuracy_map[variant_label] = accuracy
+            else:
+                variant_result['success'] = False
+                variant_result['error'] = 'Failed to extract training results'
         else:
-            results['success'] = False
-            results['error'] = 'Failed to extract training results'
-    else:
-        results['success'] = False
-        results['error'] = 'Iterative training failed'
+            variant_result['success'] = False
+            variant_result['error'] = 'Iterative training failed'
 
-    # Monitor system resources after completion
-    resources_after = monitor_system_resources()
-    logger.info(f"System resources after training: CPU={resources_after.get('cpu_percent', 0):.1f}%, "
-               f"Memory={resources_after.get('memory_percent', 0):.1f}%, "
-               f"Disk={resources_after.get('disk_percent', 0):.1f}%")
+        resources_after = monitor_system_resources()
+        logger.info(f"System resources after training ({variant_label}): "
+                    f"CPU={resources_after.get('cpu_percent', 0):.1f}%, "
+                    f"Memory={resources_after.get('memory_percent', 0):.1f}%, "
+                    f"Disk={resources_after.get('disk_percent', 0):.1f}%")
+
+        aggregate_success = aggregate_success and variant_result.get('success', False)
+        variant_results[variant_label] = variant_result
+
+    results: Dict[str, Any] = {
+        'variants': variant_results,
+        'success': aggregate_success,
+    }
+    if accuracy_map:
+        results['accuracy'] = accuracy_map
 
     return results
 
@@ -599,8 +629,14 @@ def main():
     # Additional options for consistency with merging/ensemble experiments
     parser.add_argument("--similarity-type", type=str, choices=["URIEL","REAL"], default="URIEL",
                        help="Type of similarity matrix to use: URIEL (linguistic features) or REAL (empirical evaluation results)")
-    parser.add_argument("--include-target", action="store_true",
-                       help="Include target language model in iterative training (IT mode). Default is exclude target (ET mode).")
+    parser.add_argument("--target-inclusion", type=str,
+                       choices=["IncTar", "ExcTar", "include", "exclude", "both"],
+                       default=None,
+                       help="Target inclusion mode for iterative training. Default runs both variants.")
+    parser.add_argument("--include-target", action="store_true", dest="legacy_include_target",
+                       help="Deprecated alias for --target-inclusion IncTar.")
+    parser.add_argument("--exclude-target", action="store_true", dest="legacy_exclude_target",
+                       help="Deprecated alias for --target-inclusion ExcTar.")
     parser.add_argument("--models-root", type=str, default="haryos_model",
                        help="Root directory containing models (default: haryos_model)")
 
@@ -638,6 +674,29 @@ def main():
     # Track overall results
     overall_results = {}
 
+    if args.target_inclusion is None:
+        if args.legacy_include_target and args.legacy_exclude_target:
+            parser.error("Cannot specify both --include-target and --exclude-target.")
+        if args.legacy_include_target:
+            args.target_inclusion = "IncTar"
+        elif args.legacy_exclude_target:
+            args.target_inclusion = "ExcTar"
+        else:
+            args.target_inclusion = "both"
+    else:
+        if args.legacy_include_target or args.legacy_exclude_target:
+            parser.error("Do not mix --target-inclusion with legacy include/exclude flags.")
+
+    inclusion_map = {
+        "IncTar": [True],
+        "include": [True],
+        "ExcTar": [False],
+        "exclude": [False],
+        "both": [False, True]
+    }
+    include_target_modes = inclusion_map[args.target_inclusion]
+    logger.info(f"Target inclusion modes: {args.target_inclusion}")
+
     # Build pass-through args for iterative training
     training_extra_args = [
         "--epochs", str(args.epochs),
@@ -659,9 +718,16 @@ def main():
 
         start_time = time.time()
         results = run_experiment_for_locale(
-            locale, args.mode, training_extra_args, args.output_dir,
-            args.max_models, args.similarity_type, args.models_root,
-            args.top_k, args.sinkhorn_iters, args.include_target
+            locale,
+            args.mode,
+            training_extra_args,
+            args.output_dir,
+            args.max_models,
+            include_target_modes,
+            args.similarity_type,
+            args.models_root,
+            args.top_k,
+            args.sinkhorn_iters,
         )
         elapsed_time = time.time() - start_time
 
@@ -683,7 +749,8 @@ def main():
                     'mode': args.mode,
                     'max_models': args.max_models,
                     'epochs': args.epochs,
-                    'merge_frequency': args.merge_frequency
+                    'merge_frequency': args.merge_frequency,
+                    'target_inclusion': args.target_inclusion
                 }
             }, f, indent=2)
 
@@ -698,13 +765,33 @@ def main():
     total_locales = len(overall_results)
     successful_locales = sum(1 for r in overall_results.values() if r.get('success', False))
     logger.info(f"Total locales processed: {total_locales}")
-    logger.info(f"Successful experiments: {successful_locales}/{total_locales}")
+    logger.info(f"Successful experiments (all variants): {successful_locales}/{total_locales}")
 
-    if successful_locales > 0:
-        accuracies = [r['accuracy'] for r in overall_results.values() if r.get('accuracy') is not None]
-        if accuracies:
-            logger.info(f"Accuracy range: {min(accuracies):.4f} - {max(accuracies):.4f}")
-            logger.info(f"Mean accuracy: {sum(accuracies)/len(accuracies):.4f}")
+    total_variants = 0
+    successful_variants = 0
+    accuracies: List[float] = []
+
+    for result in overall_results.values():
+        variant_map = result.get('variants')
+        if isinstance(variant_map, dict):
+            total_variants += len(variant_map)
+            for variant_result in variant_map.values():
+                if variant_result.get('success'):
+                    successful_variants += 1
+                accuracy_val = variant_result.get('accuracy')
+                if isinstance(accuracy_val, (int, float)):
+                    accuracies.append(accuracy_val)
+        else:
+            accuracy_val = result.get('accuracy')
+            if isinstance(accuracy_val, (int, float)):
+                accuracies.append(accuracy_val)
+
+    if total_variants:
+        logger.info(f"Successful variant runs: {successful_variants}/{total_variants}")
+
+    if accuracies:
+        logger.info(f"Accuracy range: {min(accuracies):.4f} - {max(accuracies):.4f}")
+        logger.info(f"Mean accuracy: {sum(accuracies)/len(accuracies):.4f}")
 
     # Save final results
     final_results_file = os.path.join(REPO_ROOT, "iterative_large_scale_final_results.json")
@@ -724,7 +811,8 @@ def main():
                 'sinkhorn_iters': args.sinkhorn_iters,
                 'output_dir': args.output_dir,
                 'similarity_type': args.similarity_type,
-                'models_root': args.models_root
+                'models_root': args.models_root,
+                'target_inclusion': args.target_inclusion
             },
             'summary': {
                 'total_locales': len(overall_results),

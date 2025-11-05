@@ -140,13 +140,13 @@ def run_experiment_for_locale(
     locale: str,
     modes: List[str],
     merge_extra_args: List[str],
+    include_target_modes: List[bool],
     cleanup_after_eval: bool = False,
     models_root: str = "haryos_model",
     similarity_type: str = "URIEL",
     num_languages: int = 5,
     merged_models_dir: str = "merged_models",
     results_dir: str = "results",
-    include_target: bool = False,
 ):
     """Run the requested experiment modes for a single locale."""
     print(f"\n{'='*60}")
@@ -184,82 +184,88 @@ def run_experiment_for_locale(
 
     results: Dict[str, bool] = {}
 
-    for mode in modes:
-        if mode == "baseline":
-            print(f"\n--- Baseline Evaluation for {locale} ---")
-            # Create results directory with centralized naming
-            results_dir_name = naming_manager.get_results_dir_name(
-                experiment_type='baseline',
-                method='baseline',
-                similarity_type=None,
-                locale=locale,
-                model_family=model_family
-            )
-            success = run_evaluation(base_model_path, locale, mode, results_dir_name)
-            results['baseline'] = success
-            continue
+    # Baseline evaluation (run once regardless of target inclusion mode)
+    if "baseline" in modes:
+        print(f"\n--- Baseline Evaluation for {locale} ---")
+        results_dir_name = naming_manager.get_results_dir_name(
+            experiment_type='baseline',
+            method='baseline',
+            similarity_type=None,
+            locale=locale,
+            model_family=model_family
+        )
+        success = run_evaluation(base_model_path, locale, "baseline", results_dir_name)
+        results['baseline'] = success
 
-        print(f"\n--- {mode} Merge for {locale} ---")
-        # Extract base model name using model-agnostic detection
-        base_model_name = None
-        if base_model_path:
-            try:
-                base_model_name = naming_manager.extract_model_family(base_model_path)
-            except ValueError:
-                pass
+    merge_modes = [mode for mode in modes if mode != "baseline"]
 
-        merge_success = run_merge(mode, locale, merge_extra_args, base_model_name, merged_models_dir)
-        if merge_success:
-            # Find the actual merged model directory using the merged model naming convention
-            merged_models_dir_full = os.path.join(REPO_ROOT, merged_models_dir)
-            # Extract model family using model-agnostic detection
-            try:
-                lookup_model_family = naming_manager.extract_model_family(model_family)
-            except ValueError:
-                lookup_model_family = model_family  # fallback to original value
+    for include_target in include_target_modes:
+        variant_label = "IncTar" if include_target else "ExcTar"
+        print(f"\n### Running target inclusion variant: {variant_label} ###")
 
-            merged_model_path = naming_manager.find_merged_model_directory(
-                merged_models_dir_full,
-                method=mode,
-                similarity_type=similarity_type,
-                locale=locale,
-                model_family=lookup_model_family,
-                num_languages=num_languages
-            )
+        for mode in merge_modes:
+            print(f"\n--- {mode} Merge for {locale} ({variant_label}) ---")
+            # Extract base model name using model-agnostic detection
+            base_model_name = None
+            if base_model_path:
+                try:
+                    base_model_name = naming_manager.extract_model_family(base_model_path)
+                except ValueError:
+                    pass
 
-            if merged_model_path and os.path.exists(merged_model_path):
-                # Create results directory with centralized naming
-                results_dir_name = naming_manager.get_results_dir_name(
-                    experiment_type='merging',
+            variant_merge_args = list(merge_extra_args)
+            if include_target:
+                variant_merge_args.append("--include-target")
+
+            merge_success = run_merge(mode, locale, variant_merge_args, base_model_name, merged_models_dir)
+            result_key = f"{mode}_{variant_label}"
+
+            if merge_success:
+                merged_models_dir_full = os.path.join(REPO_ROOT, merged_models_dir)
+                try:
+                    lookup_model_family = naming_manager.extract_model_family(model_family)
+                except ValueError:
+                    lookup_model_family = model_family
+
+                merged_model_path = naming_manager.find_merged_model_directory(
+                    merged_models_dir_full,
                     method=mode,
                     similarity_type=similarity_type,
                     locale=locale,
-                    model_family=model_family,
+                    model_family=lookup_model_family,
                     num_languages=num_languages,
                     include_target=include_target
                 )
-                # Create the results directory before passing it to evaluation script
-                results_full_path = os.path.join(REPO_ROOT, results_dir, results_dir_name)
-                os.makedirs(results_full_path, exist_ok=True)
 
-                # Pass the full path to evaluation script
-                eval_success = run_evaluation(merged_model_path, locale, mode, results_full_path)
-                results[mode] = eval_success
+                if merged_model_path and os.path.exists(merged_model_path):
+                    results_dir_name = naming_manager.get_results_dir_name(
+                        experiment_type='merging',
+                        method=mode,
+                        similarity_type=similarity_type,
+                        locale=locale,
+                        model_family=model_family,
+                        num_languages=num_languages,
+                        include_target=include_target
+                    )
+                    results_full_path = os.path.join(REPO_ROOT, results_dir, results_dir_name)
+                    os.makedirs(results_full_path, exist_ok=True)
 
-                # Clean up merged model after successful evaluation if requested
-                if cleanup_after_eval and eval_success:
-                    try:
-                        import shutil
-                        print(f"🗑️  Cleaning up merged model: {merged_model_path}")
-                        shutil.rmtree(merged_model_path)
-                        print(f"✅ Successfully deleted {merged_model_path}")
-                    except Exception as e:
-                        print(f"⚠️  Failed to delete {merged_model_path}: {e}")
+                    eval_success = run_evaluation(merged_model_path, locale, mode, results_full_path)
+                    results[result_key] = eval_success
+
+                    if cleanup_after_eval and eval_success:
+                        try:
+                            import shutil
+                            print(f"🗑️  Cleaning up merged model: {merged_model_path}")
+                            shutil.rmtree(merged_model_path)
+                            print(f"✅ Successfully deleted {merged_model_path}")
+                        except Exception as e:
+                            print(f"⚠️  Failed to delete {merged_model_path}: {e}")
+                else:
+                    print(f"❌ Could not find merged model directory for {mode} merge of {locale} ({variant_label})")
+                    results[result_key] = False
             else:
-                print(f"❌ Could not find merged model directory for {mode} merge of {locale}")
-                results[mode] = False
-        else:
-            results[mode] = False
+                results[result_key] = False
 
     return results
 
@@ -286,8 +292,14 @@ def main():
                        help="Use precomputed sparse CSV or compute dense similarities on-the-fly")
     parser.add_argument("--similarity-type", type=str, choices=["URIEL","REAL"], default="URIEL",
                        help="Type of similarity matrix to use: URIEL (linguistic features) or REAL (empirical evaluation results)")
-    parser.add_argument("--include-target", action="store_true",
-                       help="Include target language model in merging (IT mode). Default is exclude target (ET mode).")
+    parser.add_argument("--target-inclusion", type=str,
+                       choices=["IncTar", "ExcTar", "include", "exclude", "both"],
+                       default=None,
+                       help="Target inclusion mode: IncTar (include target), ExcTar (exclude target), or both (default).")
+    parser.add_argument("--include-target", action="store_true", dest="legacy_include_target",
+                       help="Deprecated alias for --target-inclusion IncTar.")
+    parser.add_argument("--exclude-target", action="store_true", dest="legacy_exclude_target",
+                       help="Deprecated alias for --target-inclusion ExcTar.")
     parser.add_argument("--top-k", type=int, default=20,
                        help="Top-K neighbors per language for on-the-fly similarity")
     parser.add_argument("--sinkhorn-iters", type=int, default=20,
@@ -360,6 +372,29 @@ def main():
     
     # Track overall results
     overall_results = {}
+
+    # Resolve target inclusion modes
+    if args.target_inclusion is None:
+        if args.legacy_include_target and args.legacy_exclude_target:
+            parser.error("Cannot specify both --include-target and --exclude-target.")
+        if args.legacy_include_target:
+            args.target_inclusion = "IncTar"
+        elif args.legacy_exclude_target:
+            args.target_inclusion = "ExcTar"
+        else:
+            args.target_inclusion = "both"
+    else:
+        if args.legacy_include_target or args.legacy_exclude_target:
+            parser.error("Do not mix --target-inclusion with legacy include/exclude flags.")
+
+    inclusion_map = {
+        "IncTar": [True],
+        "include": [True],
+        "ExcTar": [False],
+        "exclude": [False],
+        "both": [False, True]
+    }
+    include_target_modes = inclusion_map[args.target_inclusion]
     
     # Apply preset defaults if requested (explicit CLI flags override presets)
     argv = sys.argv[1:]
@@ -380,7 +415,6 @@ def main():
         "--num-languages", str(args.num_languages),
         "--similarity-source", args.similarity_source,
         "--similarity-type", args.similarity_type,
-        "--include-target" if args.include_target else None,
         "--top-k", str(args.top_k),
         "--sinkhorn-iters", str(args.sinkhorn_iters),
         "--dataset-name", args.dataset_name,
@@ -399,7 +433,18 @@ def main():
 
     for i, locale in enumerate(locales):
         print(f"\nProcessing locale {i+1}/{len(locales)}: {locale}")
-        results = run_experiment_for_locale(locale, args.modes, merge_extra_args, args.cleanup_after_eval, args.models_root, args.similarity_type, args.num_languages, args.merged_models_dir, args.results_dir, args.include_target)
+        results = run_experiment_for_locale(
+            locale,
+            args.modes,
+            merge_extra_args,
+            include_target_modes,
+            args.cleanup_after_eval,
+            args.models_root,
+            args.similarity_type,
+            args.num_languages,
+            args.merged_models_dir,
+            args.results_dir,
+        )
         
         overall_results[locale] = results
         

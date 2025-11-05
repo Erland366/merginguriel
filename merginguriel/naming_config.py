@@ -374,10 +374,15 @@ class NamingManager:
         return None
 
     def find_merged_model_directory(self, base_dir: str, method: str, similarity_type: str,
-                                  locale: str, model_family: str, num_languages: Optional[int] = None) -> Optional[str]:
+                                  locale: str, model_family: str, num_languages: Optional[int] = None,
+                                  include_target: Optional[bool] = None) -> Optional[str]:
         """Find existing merged model directory matching given criteria."""
         if not os.path.exists(base_dir):
             return None
+
+        include_target_suffix = None
+        if include_target is not None:
+            include_target_suffix = "IncTar" if include_target else "ExcTar"
 
         for entry in sorted(os.listdir(base_dir), reverse=True):
             if not os.path.isdir(os.path.join(base_dir, entry)):
@@ -388,7 +393,8 @@ class NamingManager:
                 if (parsed['method'] == method and
                     parsed['similarity_type'] == similarity_type and
                     parsed['locale'] == locale and
-                    (parsed.get('model_family') == model_family or parsed.get('model_family') == 'unknown')):
+                    (parsed.get('model_family') == model_family or parsed.get('model_family') == 'unknown') and
+                    (include_target_suffix is None or parsed.get('include_target') == include_target_suffix)):
                     # For merged models, be more flexible about num_languages
                     # The directory name might not match the actual number of merged models
                     return os.path.join(base_dir, entry)
