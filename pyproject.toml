@@ -34,6 +34,7 @@ dev = [
     "ipywidgets>=8.1.7",
     "merginguriel",
     "pytest>=8.4.1",
+    "anyio>=4.4.0",
 ]
 
 [tool.uv.workspace]

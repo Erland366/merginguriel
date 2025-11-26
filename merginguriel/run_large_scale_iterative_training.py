@@ -63,7 +63,7 @@ def get_all_locales_from_similarity_matrix(similarity_type="URIEL"):
         raise ValueError(f"Unknown similarity type: {similarity_type}")
 
     df = pd.read_csv(similarity_matrix_path, index_col=0)
-    locales = sorted(df.index.tolist())
+    locales = sorted(set(df.index.tolist()))
     return locales
 
 
@@ -145,6 +145,51 @@ def auto_select_iterative_sources(target_lang: str, max_models: int, similarity_
         final_fallback = [loc for loc in fallback_locales if loc in available_locales][:max_models]
         logger.warning(f"Using fallback source languages: {final_fallback}")
         return final_fallback
+
+
+def results_already_exist(
+    experiment_type: str,
+    method: str,
+    similarity_type: str,
+    locale: str,
+    model_family: str,
+    results_dir: str,
+    num_languages: Optional[int],
+    include_target: Optional[bool],
+) -> Optional[str]:
+    """Return an existing results directory if it already holds results.json."""
+    base_dir = os.path.join(REPO_ROOT, results_dir)
+    if not os.path.exists(base_dir):
+        return None
+
+    existing = naming_manager.find_results_directory(
+        base_dir,
+        experiment_type=experiment_type,
+        method=method,
+        similarity_type=similarity_type,
+        locale=locale,
+        model_family=model_family,
+        num_languages=num_languages,
+        include_target=include_target,
+    )
+    if existing:
+        results_file = os.path.join(existing, "results.json")
+        if os.path.exists(results_file):
+            return existing
+    return None
+
+
+def load_accuracy_from_results(results_dir: str) -> Optional[float]:
+    """Extract accuracy from an existing results.json file if available."""
+    results_file = os.path.join(results_dir, "results.json")
+    if not os.path.exists(results_file):
+        return None
+    try:
+        with open(results_file, "r") as f:
+            data = json.load(f)
+        return data.get("performance", {}).get("accuracy")
+    except Exception:
+        return None
 
 
 def run_iterative_training(target_lang: str, source_locales: List[str], mode: str,
@@ -453,6 +498,8 @@ def run_experiment_for_locale(
     models_root: str = "haryos_model",
     top_k: int = 20,
     sinkhorn_iters: int = 20,
+    results_dir: str = "results",
+    resume: bool = True,
 ) -> Dict[str, Any]:
     """
     Run the iterative training experiment for a single locale.
@@ -511,12 +558,34 @@ def run_experiment_for_locale(
         variant_label = "IncTar" if include_target else "ExcTar"
         logger.info(f"\n--- Iterative training variant: {variant_label} ---")
 
+        variant_result: Dict[str, Any] = {}
+
+        existing_results = None
+        if resume:
+            existing_results = results_already_exist(
+                experiment_type="iterative",
+                method=mode,
+                similarity_type=similarity_type,
+                locale=locale,
+                model_family=model_family,
+                results_dir=results_dir,
+                num_languages=max_models,
+                include_target=include_target,
+            )
+        if existing_results:
+            logger.info(f"↩️  Skipping iterative training for {locale} ({variant_label}); results already at {existing_results}")
+            variant_result["success"] = True
+            existing_accuracy = load_accuracy_from_results(existing_results)
+            if existing_accuracy is not None:
+                variant_result["accuracy"] = existing_accuracy
+                accuracy_map[variant_label] = existing_accuracy
+            variant_results[variant_label] = variant_result
+            continue
+
         # Auto-select source languages for this variant
         source_locales = auto_select_iterative_sources(
             locale, max_models, similarity_type, models_root, top_k, sinkhorn_iters, include_target
         )
-
-        variant_result: Dict[str, Any] = {}
 
         if not source_locales:
             logger.error(f"No source languages found for {locale} ({variant_label})")
@@ -546,6 +615,7 @@ def run_experiment_for_locale(
                     locale,
                     mode,
                     training_results,
+                    results_dir=results_dir,
                     model_family=model_family,
                     similarity_type=similarity_type,
                     num_languages=max_models,
@@ -639,6 +709,10 @@ def main():
                        help="Deprecated alias for --target-inclusion ExcTar.")
     parser.add_argument("--models-root", type=str, default="haryos_model",
                        help="Root directory containing models (default: haryos_model)")
+    parser.add_argument("--results-dir", type=str, default="results",
+                       help="Directory for experiment results (default: results)")
+    parser.add_argument("--resume", action=argparse.BooleanOptionalAction, default=True,
+                       help="Reuse existing results when present (default: enabled). Use --no-resume to force rerun.")
 
     args = parser.parse_args()
 
@@ -670,6 +744,8 @@ def main():
     logger.info(f"Model Root: {args.models_root}")
     logger.info(f"Start from index: {args.start_from}")
     logger.info(f"Max models per locale: {args.max_models}")
+    logger.info(f"Results directory: {args.results_dir}")
+    logger.info(f"Resume using existing outputs: {args.resume}")
 
     # Track overall results
     overall_results = {}
@@ -728,6 +804,8 @@ def main():
             args.models_root,
             args.top_k,
             args.sinkhorn_iters,
+            args.results_dir,
+            args.resume,
         )
         elapsed_time = time.time() - start_time
 

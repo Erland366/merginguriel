@@ -1,30 +1,30 @@
 #!/usr/bin/env python3
 """
-Simple test for the new merging methods.
+Pytest verification that all advanced strategies are wired into the factory.
 """
 
-import sys
-import os
+from __future__ import annotations
 
-# Add project root to path
-project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "."))
-sys.path.insert(0, project_root)
+import pytest
 
-from merginguriel.run_merging_pipeline_refactored import MergingStrategyFactory
+from merginguriel.run_merging_pipeline_refactored import (
+    MergingStrategyFactory,
+    TiesStrategy,
+    TaskArithmeticStrategy,
+    SlerpStrategy,
+    RegMeanStrategy,
+)
 
-def test_strategy_factory():
-    """Test if all new strategies can be created."""
-    print("🧪 Testing MergingStrategyFactory for new methods...")
 
-    new_modes = ['ties', 'task_arithmetic', 'slerp', 'regmean']
-
-    for mode in new_modes:
-        print(f"Testing {mode}...", end=" ")
-        try:
-            strategy = MergingStrategyFactory.create(mode)
-            print(f"✅ {strategy.__class__.__name__}")
-        except Exception as e:
-            print(f"❌ - {e}")
-
-if __name__ == "__main__":
-    test_strategy_factory()
+@pytest.mark.parametrize(
+    ("mode", "expected_cls"),
+    [
+        ("ties", TiesStrategy),
+        ("task_arithmetic", TaskArithmeticStrategy),
+        ("slerp", SlerpStrategy),
+        ("regmean", RegMeanStrategy),
+    ],
+)
+def test_strategy_factory_returns_expected_type(mode, expected_cls):
+    strategy = MergingStrategyFactory.create(mode)
+    assert isinstance(strategy, expected_cls)

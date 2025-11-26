@@ -1,90 +1,41 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 """
-Test script to list all available MASSIVE dataset configurations (languages).
-
-This helps you see what language codes are available for training.
+Static checks that our local similarity matrix covers the README locales.
 """
 
-from datasets import load_dataset
-import logging
+from __future__ import annotations
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+from pathlib import Path
 
-def list_massive_configs():
-    """List all available MASSIVE dataset configurations."""
+import pandas as pd
+import pytest
 
-    try:
-        # Load the MASSIVE dataset builder to get available configs
-        dataset_module = load_dataset("AmazonScience/massive", trust_remote_code=False)
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+SIMILARITY_CSV = PROJECT_ROOT / "language_similarity_matrix_unified.csv"
 
-        # Get all available configurations
-        configs = dataset_module.builder_configs
+README_LOCALES = [
+    "af-ZA", "am-ET", "ar-SA", "az-AZ", "bn-BD", "ca-ES", "cy-GB", "da-DK",
+    "de-DE", "el-GR", "en-US", "es-ES", "fa-IR", "fi-FI", "fr-FR", "hi-IN",
+    "hu-HU", "hy-AM", "id-ID", "is-IS", "it-IT", "ja-JP", "jv-ID", "ka-GE",
+    "km-KH", "kn-IN", "ko-KR", "lv-LV", "ml-IN", "mn-MN", "ms-MY", "my-MM",
+    "nb-NO", "nl-NL", "pl-PL", "pt-PT", "ro-RO", "ru-RU", "sl-SI", "sq-AL",
+    "sw-KE", "ta-IN", "te-IN", "th-TH", "tl-PH", "tr-TR", "ur-PK", "vi-VN", "zh-TW",
+]
 
-        print("=== Available MASSIVE Dataset Configurations ===\n")
 
-        # Group by language family for better readability
-        language_groups = {
-            "English": ["en-US"],
-            "African languages": ["af-ZA", "am-ET", "ha-NE", "ig-NG", "rw-RW", "sw-KE", "yo-NG", "zu-ZA"],
-            "Arabic": ["ar-SA", "ar-AE", "ar-EG", "ar-DZ", "ar-JO", "ar-KW", "ar-MA", "ar-TN"],
-            "East Asian": ["zh-CN", "zh-TW", "ja-JP", "ko-KR"],
-            "European": ["de-DE", "en-GB", "es-ES", "es-MX", "fr-FR", "it-IT", "nl-NL", "pt-BR", "ru-RU", "sv-SE"],
-            "South Asian": ["bn-IN", "gu-IN", "hi-IN", "kn-IN", "ml-IN", "mr-IN", "pa-IN", "ta-IN", "te-IN", "ur-PK"],
-            "Southeast Asian": ["id-ID", "ms-MY", "th-TH", "tl-PH", "vi-VN"],
-            "Other": ["cy-GB", "da-DK", "el-GR", "fi-FI", "ga-IE", "he-IL", "hu-HU", "is-IS", "no-NO", "pl-PL", "pt-PT", "ro-RO", "sk-SK", "sl-SI", "tr-TR", "uk-UA"]
-        }
+@pytest.fixture(scope="module")
+def similarity_locales():
+    if not SIMILARITY_CSV.exists():
+        pytest.skip("language_similarity_matrix_unified.csv not available in workspace")
+    df = pd.read_csv(SIMILARITY_CSV, index_col=0)
+    assert set(df.index) == set(df.columns), "Similarity matrix should be square with aligned axes"
+    return set(df.index)
 
-        print("Usage examples:")
-        print(f"python training_bert.py --dataset_config_name en-US  # English (US)")
-        print(f"python training_bert.py --dataset_config_name af-ZA  # Afrikaans")
-        print(f"python training_bert.py --dataset_config_name sw-KE  # Swahili")
-        print(f"python training_bert.py --dataset_config_name fr-FR  # French")
-        print()
 
-        print("Available configurations by language group:")
-        print("=" * 60)
+def test_similarity_matrix_covers_readme_locales(similarity_locales):
+    missing = sorted(set(README_LOCALES) - similarity_locales)
+    assert not missing, f"Missing locales from similarity matrix: {missing}"
 
-        for group_name, lang_codes in language_groups.items():
-            print(f"\n{group_name}:")
-            for lang_code in lang_codes:
-                if lang_code in configs:
-                    print(f"  {lang_code}")
 
-        print(f"\nAll available configurations ({len(configs)} total):")
-        print("=" * 60)
-        for config_name in sorted(configs.keys()):
-            print(f"  {config_name}")
-
-        print("\n=== Quick Start Examples ===\n")
-
-        examples = [
-            ("English (US)", "en-US"),
-            ("Afrikaans", "af-ZA"),
-            ("Swahili", "sw-KE"),
-            ("French", "fr-FR"),
-            ("German", "de-DE"),
-            ("Chinese (Simplified)", "zh-CN"),
-            ("Japanese", "ja-JP"),
-            ("Arabic (Saudi Arabia)", "ar-SA"),
-            ("Hindi", "hi-IN"),
-            ("Spanish (Spain)", "es-ES"),
-            ("Portuguese (Brazil)", "pt-BR"),
-            ("Russian", "ru-RU")
-        ]
-
-        for desc, config in examples:
-            if config in configs:
-                print(f"# {desc}")
-                print(f"python training_bert.py --dataset_config_name {config} --do_train --do_eval --num-train-epochs 5")
-                print()
-
-        print("Note: Some languages may have less training data than others.")
-        print("The MASSIVE dataset contains intent classification data in 60 languages.")
-
-    except Exception as e:
-        logger.error(f"Failed to load MASSIVE dataset configurations: {e}")
-        print("Make sure you have internet connection and the datasets library installed.")
-
-if __name__ == "__main__":
-    list_massive_configs()
+def test_similarity_matrix_has_expected_cardinality(similarity_locales):
+    assert len(similarity_locales) >= len(README_LOCALES)

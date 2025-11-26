@@ -29,8 +29,8 @@ def get_all_locales_from_similarity_matrix(similarity_type="URIEL"):
         raise ValueError(f"Unknown similarity type: {similarity_type}")
 
     df = pd.read_csv(similarity_matrix_path, index_col=0)
-    # Return all locale codes from the index (and columns, they should be the same)
-    locales = sorted(df.index.tolist())
+    # Return unique locale codes from the index (and columns, they should be the same)
+    locales = sorted(set(df.index.tolist()))
     return locales
 
 def get_model_for_locale(locale, models_root="haryos_model"):
@@ -108,6 +108,58 @@ def detect_num_languages_from_model_path(model_path: Optional[str]) -> Optional[
     return None
 
 
+def results_already_exist(
+    experiment_type: str,
+    method: str,
+    similarity_type: Optional[str],
+    locale: str,
+    model_family: str,
+    results_dir: str,
+    num_languages: Optional[int] = None,
+    include_target: Optional[bool] = None,
+) -> Optional[str]:
+    """Return the path to an existing results directory if it contains results.json."""
+    base_dir = os.path.join(REPO_ROOT, results_dir)
+    if not os.path.exists(base_dir):
+        return None
+
+    existing = naming_manager.find_results_directory(
+        base_dir,
+        experiment_type=experiment_type,
+        method=method,
+        similarity_type=similarity_type,
+        locale=locale,
+        model_family=model_family,
+        num_languages=num_languages,
+        include_target=include_target,
+    )
+    if existing:
+        results_file = os.path.join(existing, "results.json")
+        if os.path.exists(results_file):
+            return existing
+    return None
+
+
+def merged_model_exists(
+    method: str,
+    similarity_type: str,
+    locale: str,
+    model_family: str,
+    merged_models_dir: str,
+    include_target: Optional[bool] = None,
+) -> Optional[str]:
+    """Return the path to an existing merged model directory if available."""
+    base_dir = os.path.join(REPO_ROOT, merged_models_dir)
+    return naming_manager.find_merged_model_directory(
+        base_dir,
+        method=method,
+        similarity_type=similarity_type,
+        locale=locale,
+        model_family=model_family,
+        include_target=include_target,
+    )
+
+
 def run_evaluation(model_path, locale, method_or_prefix, results_dir_name=None):
     """Run evaluation for a specific model using the consolidated model path."""
     print(f"Running evaluation for {model_path} with locale {locale}...")
@@ -147,6 +199,7 @@ def run_experiment_for_locale(
     num_languages: int = 5,
     merged_models_dir: str = "merged_models",
     results_dir: str = "results",
+    resume: bool = True,
 ):
     """Run the requested experiment modes for a single locale."""
     print(f"\n{'='*60}")
@@ -186,18 +239,32 @@ def run_experiment_for_locale(
 
     # Baseline evaluation (run once regardless of target inclusion mode)
     if "baseline" in modes:
-        print(f"\n--- Baseline Evaluation for {locale} ---")
-        results_dir_name = naming_manager.get_results_dir_name(
-            experiment_type='baseline',
-            method='baseline',
-            similarity_type=None,
-            locale=locale,
-            model_family=model_family
-        )
-        results_full_path = os.path.join(REPO_ROOT, results_dir, results_dir_name)
-        os.makedirs(results_full_path, exist_ok=True)
-        success = run_evaluation(base_model_path, locale, "baseline", results_full_path)
-        results['baseline'] = success
+        existing_baseline = None
+        if resume:
+            existing_baseline = results_already_exist(
+                experiment_type="baseline",
+                method="baseline",
+                similarity_type=None,
+                locale=locale,
+                model_family=model_family,
+                results_dir=results_dir,
+            )
+        if existing_baseline:
+            print(f"↩️  Skipping baseline for {locale}; found existing results at {existing_baseline}")
+            results["baseline"] = True
+        else:
+            print(f"\n--- Baseline Evaluation for {locale} ---")
+            results_dir_name = naming_manager.get_results_dir_name(
+                experiment_type='baseline',
+                method='baseline',
+                similarity_type=None,
+                locale=locale,
+                model_family=model_family
+            )
+            results_full_path = os.path.join(REPO_ROOT, results_dir, results_dir_name)
+            os.makedirs(results_full_path, exist_ok=True)
+            success = run_evaluation(base_model_path, locale, "baseline", results_full_path)
+            results['baseline'] = success
 
     merge_modes = [mode for mode in modes if mode != "baseline"]
 
@@ -215,21 +282,51 @@ def run_experiment_for_locale(
                 except ValueError:
                     pass
 
+            try:
+                lookup_model_family = naming_manager.extract_model_family(model_family)
+            except ValueError:
+                lookup_model_family = model_family
+
+            result_key = f"{mode}_{variant_label}"
             variant_merge_args = list(merge_extra_args)
             if include_target:
                 variant_merge_args.append("--include-target")
 
-            merge_success = run_merge(mode, locale, variant_merge_args, base_model_name, merged_models_dir)
-            result_key = f"{mode}_{variant_label}"
+            existing_results = None
+            if resume:
+                existing_results = results_already_exist(
+                    experiment_type="merging",
+                    method=mode,
+                    similarity_type=similarity_type,
+                    locale=locale,
+                    model_family=model_family,
+                    results_dir=results_dir,
+                    num_languages=num_languages,
+                    include_target=include_target,
+                )
+            if existing_results:
+                print(f"↩️  Skipping {mode} ({variant_label}) for {locale}; results already at {existing_results}")
+                results[result_key] = True
+                continue
+
+            existing_merge = None
+            if resume:
+                existing_merge = merged_model_exists(
+                    method=mode,
+                    similarity_type=similarity_type,
+                    locale=locale,
+                    model_family=lookup_model_family,
+                    merged_models_dir=merged_models_dir,
+                    include_target=include_target,
+                )
+                if existing_merge:
+                    print(f"↩️  Reusing existing merged model at {existing_merge}")
+
+            merge_success = True if existing_merge else run_merge(mode, locale, variant_merge_args, base_model_name, merged_models_dir)
 
             if merge_success:
                 merged_models_dir_full = os.path.join(REPO_ROOT, merged_models_dir)
-                try:
-                    lookup_model_family = naming_manager.extract_model_family(model_family)
-                except ValueError:
-                    lookup_model_family = model_family
-
-                merged_model_path = naming_manager.find_merged_model_directory(
+                merged_model_path = existing_merge or naming_manager.find_merged_model_directory(
                     merged_models_dir_full,
                     method=mode,
                     similarity_type=similarity_type,
@@ -255,7 +352,7 @@ def run_experiment_for_locale(
                     eval_success = run_evaluation(merged_model_path, locale, mode, results_full_path)
                     results[result_key] = eval_success
 
-                    if cleanup_after_eval and eval_success:
+                    if cleanup_after_eval and eval_success and not existing_merge:
                         try:
                             import shutil
                             print(f"🗑️  Cleaning up merged model: {merged_model_path}")
@@ -325,13 +422,15 @@ def main():
     parser.add_argument("--preset", type=str, choices=["none", "fairness", "target"], default="none",
                         help="Convenience presets for Fisher config: fairness = sources-only + equal preweights; target = target-only + URIEL preweights")
     parser.add_argument("--cleanup-after-eval", action="store_true",
-                        help="Delete merged model files after evaluation to save storage space")
+                       help="Delete merged model files after evaluation to save storage space")
     parser.add_argument("--models-root", type=str, default="haryos_model",
-                        help="Root directory containing models (default: haryos_model)")
+                       help="Root directory containing models (default: haryos_model)")
     parser.add_argument("--results-dir", type=str, default="results",
-                        help="Directory for experiment results (default: results)")
+                       help="Directory for experiment results (default: results)")
     parser.add_argument("--merged-models-dir", type=str, default="merged_models",
-                        help="Directory for merged models (default: merged_models)")
+                       help="Directory for merged models (default: merged_models)")
+    parser.add_argument("--resume", action=argparse.BooleanOptionalAction, default=True,
+                        help="Reuse existing merged models and results when present (default: enabled). Use --no-resume to force reruns.")
 
     args = parser.parse_args()
     
@@ -369,6 +468,7 @@ def main():
     print(f"Similarity Type: {args.similarity_type}")
     print(f"Model Root: {args.models_root}")
     print(f"Cleanup After Eval: {args.cleanup_after_eval}")
+    print(f"Resume Using Existing Outputs: {args.resume}")
     print(f"Modes: {args.modes}")
     print(f"Start from index: {args.start_from}")
     
@@ -446,6 +546,7 @@ def main():
             args.num_languages,
             args.merged_models_dir,
             args.results_dir,
+            args.resume,
         )
         
         overall_results[locale] = results

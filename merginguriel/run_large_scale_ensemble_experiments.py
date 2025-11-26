@@ -21,7 +21,7 @@ import json
 import argparse
 from datetime import datetime
 from pathlib import Path
-from typing import List, Dict
+from typing import List, Dict, Optional
 import shutil
 
 # Ensure project root on sys.path
@@ -42,7 +42,7 @@ def get_all_locales_from_similarity_matrix(similarity_type="URIEL"):
         raise ValueError(f"Unknown similarity type: {similarity_type}")
 
     df = pd.read_csv(similarity_matrix_path, index_col=0)
-    locales = sorted(df.index.tolist())
+    locales = sorted(set(df.index.tolist()))
     return locales
 
 def get_model_for_locale(locale, models_root="haryos_model"):
@@ -82,6 +82,37 @@ def get_available_locales():
                     except Exception:
                         pass
     return sorted(available_locales)
+
+def results_already_exist(
+    experiment_type: str,
+    method: str,
+    similarity_type: str,
+    locale: str,
+    model_family: str,
+    results_dir: str,
+    num_languages: Optional[int] = None,
+    include_target: Optional[bool] = None,
+) -> Optional[str]:
+    """Return the path to an existing results directory if it contains results.json."""
+    base_dir = os.path.join(REPO_ROOT, results_dir)
+    if not os.path.exists(base_dir):
+        return None
+
+    existing = naming_manager.find_results_directory(
+        base_dir,
+        experiment_type=experiment_type,
+        method=method,
+        similarity_type=similarity_type,
+        locale=locale,
+        model_family=model_family,
+        num_languages=num_languages,
+        include_target=include_target,
+    )
+    if existing:
+        results_file = os.path.join(existing, "results.json")
+        if os.path.exists(results_file):
+            return existing
+    return None
 
 def run_ensemble_inference(voting_method: str, target_lang: str, extra_args: List[str]) -> bool:
     """Run ensemble inference for a specific voting method and target language."""
@@ -187,6 +218,8 @@ def run_experiment_for_locale(
     similarity_type: str = "URIEL",
     num_languages: int = 5,
     include_target_modes: List[bool] = None,
+    results_dir: str = "results",
+    resume: bool = True,
 ):
     """Run the requested ensemble experiments for a single locale."""
     print(f"\n{'='*60}")
@@ -239,6 +272,23 @@ def run_experiment_for_locale(
         for voting_method in voting_methods:
             print(f"\n--- {voting_method} Ensemble for {locale} ({variant_label}) ---")
 
+            existing_results = None
+            if resume:
+                existing_results = results_already_exist(
+                    experiment_type="ensemble",
+                    method=voting_method,
+                    similarity_type=similarity_type,
+                    locale=locale,
+                    model_family=model_family,
+                    results_dir=results_dir,
+                    num_languages=num_languages,
+                    include_target=include_target,
+                )
+            if existing_results:
+                print(f"↩️  Skipping {voting_method} ({variant_label}) for {locale}; results already at {existing_results}")
+                method_results[voting_method] = True
+                continue
+
             ensemble_success = run_ensemble_inference(voting_method, locale, variant_args)
 
             if ensemble_success:
@@ -246,6 +296,7 @@ def run_experiment_for_locale(
                 if ensemble_data:
                     save_success = save_ensemble_results(
                         locale, voting_method, ensemble_data,
+                        results_dir=results_dir,
                         model_family=model_family,
                         similarity_type=similarity_type,
                         num_models=num_languages,
@@ -300,6 +351,10 @@ def main():
                        help="Deprecated alias for --target-inclusion IncTar.")
     parser.add_argument("--exclude-target", action="store_true", dest="legacy_exclude_target",
                        help="Deprecated alias for --target-inclusion ExcTar.")
+    parser.add_argument("--results-dir", type=str, default="results",
+                       help="Directory for experiment results (default: results)")
+    parser.add_argument("--resume", action=argparse.BooleanOptionalAction, default=True,
+                       help="Reuse existing results when present (default: enabled). Use --no-resume to force rerun.")
     parser.add_argument("--models-root", type=str, default="haryos_model",
                        help="Root directory containing models (default: haryos_model)")
 
@@ -390,6 +445,8 @@ def main():
             args.similarity_type,
             args.num_languages,
             include_target_modes,
+            args.results_dir,
+            args.resume,
         )
 
         overall_results[locale] = results

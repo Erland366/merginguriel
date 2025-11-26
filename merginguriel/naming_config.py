@@ -196,6 +196,12 @@ class NamingManager:
 
         raise ValueError(f"Cannot determine model family from: {model_path_or_name}")
 
+    def _strip_massive_suffix(self, model_family: Optional[str]) -> Optional[str]:
+        """Remove trailing _massive_k suffixes (with optional locale) from model family names."""
+        if not model_family:
+            return model_family
+        return re.sub(r'_massive_k(?:_[a-z]{2}-[A-Z]{2})?$', '', model_family)
+
     def parse_results_dir_name(self, dir_name: str) -> Dict[str, Any]:
         """Parse results directory name into components."""
         # Baseline pattern: baseline_sq-AL_xlm-roberta-base-uncased
@@ -203,6 +209,8 @@ class NamingManager:
         match = re.match(baseline_pattern, dir_name)
         if match:
             result = match.groupdict()
+            if 'model_family' in result:
+                result['model_family'] = self._strip_massive_suffix(result['model_family'])
             result['experiment_type'] = 'baseline'
             result['method'] = 'baseline'
             result['similarity_type'] = None
@@ -212,34 +220,66 @@ class NamingManager:
 
         # General pattern: merging_similarity_REAL_sq-AL_xlm-roberta-base-uncased_5lang_IT/ET
         # Pattern: experiment_type_method_similarity_type_locale_model_family_num_languages_include_target
-        general_pattern = r'^(?P<experiment_type>[^_]+)_(?P<method>[^_]+)_(?P<similarity_type>URIEL|REAL)_(?P<locale>[a-z]{2}-[A-Z]{2})_(?P<model_family>[^_]+(?:_[^_]+)*)_(?P<num_languages>\d+)lang_(?P<include_target>IncTar|ExcTar|IT|ET)$'
+        # Handle both model_family with and without _massive_k suffix
+        massive_suffix_pattern = r'(?:_massive_k(?:_[a-z]{2}-[A-Z]{2})?)'
+        general_pattern = (
+            r'^(?P<experiment_type>[^_]+)_(?P<method>[^_]+(?:_[^_]+)*)_(?P<similarity_type>URIEL|REAL)_'
+            r'(?P<locale>[a-z]{2}-[A-Z]{2})_(?P<model_family>[^_]+(?:_[^_]+)*)'
+            rf'(?P<_massive_k>{massive_suffix_pattern})?_(?P<num_languages>\d+)lang_'
+            r'(?P<include_target>IncTar|ExcTar|IT|ET)$'
+        )
         match = re.match(general_pattern, dir_name)
         if match:
             result = match.groupdict()
             result['num_languages'] = int(result['num_languages'])
             result['timestamp'] = None
+            # Remove the optional _massive_k group from the result
+            if '_massive_k' in result:
+                del result['_massive_k']
+            if 'model_family' in result:
+                result['model_family'] = self._strip_massive_suffix(result['model_family'])
             # Normalize include_target values
             result['include_target'] = self.normalize_include_target(result['include_target'])
             return result
 
         # Alternative pattern: ensemble_method_locale_model_family_num_languages_include_target
-        ensemble_pattern = r'^(?P<experiment_type>ensemble)_(?P<method>[^_]+)_(?P<similarity_type>URIEL|REAL)_(?P<locale>[a-z]{2}-[A-Z]{2})_(?P<model_family>[^_]+(?:_[^_]+)*)_(?P<num_languages>\d+)lang_(?P<include_target>IncTar|ExcTar|IT|ET)$'
+        ensemble_pattern = (
+            r'^(?P<experiment_type>ensemble)_(?P<method>[^_]+(?:_[^_]+)*)_(?P<similarity_type>URIEL|REAL)_'
+            r'(?P<locale>[a-z]{2}-[A-Z]{2})_(?P<model_family>[^_]+(?:_[^_]+)*)'
+            rf'(?P<_massive_k>{massive_suffix_pattern})?_(?P<num_languages>\d+)lang_'
+            r'(?P<include_target>IncTar|ExcTar|IT|ET)$'
+        )
         match = re.match(ensemble_pattern, dir_name)
         if match:
             result = match.groupdict()
             result['num_languages'] = int(result['num_languages'])
             result['timestamp'] = None
+            # Remove the optional _massive_k group from the result
+            if '_massive_k' in result:
+                del result['_massive_k']
+            if 'model_family' in result:
+                result['model_family'] = self._strip_massive_suffix(result['model_family'])
             # Normalize include_target values
             result['include_target'] = self.normalize_include_target(result['include_target'])
             return result
 
         # Alternative pattern: iterative_method_locale_model_family_num_languages_include_target
-        iterative_pattern = r'^(?P<experiment_type>iterative)_(?P<method>[^_]+)_(?P<similarity_type>URIEL|REAL)_(?P<locale>[a-z]{2}-[A-Z]{2})_(?P<model_family>[^_]+(?:_[^_]+)*)_(?P<num_languages>\d+)lang_(?P<include_target>IncTar|ExcTar|IT|ET)$'
+        iterative_pattern = (
+            r'^(?P<experiment_type>iterative)_(?P<method>[^_]+(?:_[^_]+)*)_(?P<similarity_type>URIEL|REAL)_'
+            r'(?P<locale>[a-z]{2}-[A-Z]{2})_(?P<model_family>[^_]+(?:_[^_]+)*)'
+            rf'(?P<_massive_k>{massive_suffix_pattern})?_(?P<num_languages>\d+)lang_'
+            r'(?P<include_target>IncTar|ExcTar|IT|ET)$'
+        )
         match = re.match(iterative_pattern, dir_name)
         if match:
             result = match.groupdict()
             result['num_languages'] = int(result['num_languages'])
             result['timestamp'] = None
+            # Remove the optional _massive_k group from the result
+            if '_massive_k' in result:
+                del result['_massive_k']
+            if 'model_family' in result:
+                result['model_family'] = self._strip_massive_suffix(result['model_family'])
             # Normalize include_target values
             result['include_target'] = self.normalize_include_target(result['include_target'])
             return result
@@ -258,13 +298,22 @@ class NamingManager:
             return result
 
         # New pattern without IT/ET for backward compatibility: experiment_type_method_similarity_type_locale_model_family_num_languages
-        general_pattern_legacy = r'^(?P<experiment_type>[^_]+)_(?P<method>[^_]+)_(?P<similarity_type>URIEL|REAL)_(?P<locale>[a-z]{2}-[A-Z]{2})_(?P<model_family>[^_]+(?:_[^_]+)*)_(?P<num_languages>\d+)lang$'
+        general_pattern_legacy = (
+            r'^(?P<experiment_type>[^_]+)_(?P<method>[^_]+(?:_[^_]+)*)_(?P<similarity_type>URIEL|REAL)_'
+            r'(?P<locale>[a-z]{2}-[A-Z]{2})_(?P<model_family>[^_]+(?:_[^_]+)*)'
+            rf'(?P<_massive_k>{massive_suffix_pattern})?_(?P<num_languages>\d+)lang$'
+        )
         match = re.match(general_pattern_legacy, dir_name)
         if match:
             result = match.groupdict()
             result['num_languages'] = int(result['num_languages'])
             result['include_target'] = 'ET'  # Default to ET for backward compatibility
             result['timestamp'] = None
+            # Remove the optional _massive_k group from the result
+            if '_massive_k' in result:
+                del result['_massive_k']
+            if 'model_family' in result:
+                result['model_family'] = self._strip_massive_suffix(result['model_family'])
             return result
 
         # Pattern with timestamp (for backward compatibility)
@@ -291,7 +340,13 @@ class NamingManager:
     def parse_merged_model_dir_name(self, dir_name: str) -> Dict[str, Any]:
         """Parse merged model directory name into components."""
         # New pattern: ties_REAL_merge_af-ZA_xlm-roberta-base_4merged_IT/ET or average_REAL_merge_af-ZA_xlm-roberta-large_4merged_IT/ET
-        pattern = r'^(?P<method>[^_]+(?:_[^_]+)*)_(?P<similarity_type>URIEL|REAL)_merge_(?P<locale>[a-z]{2}-[A-Z]{2})_(?P<model_family>[^_]+(?:_[^_]+)*)_(?P<num_languages>\d+)merged_(?P<include_target>IncTar|ExcTar|IT|ET)$'
+        massive_suffix_pattern = r'(?:_massive_k(?:_[a-z]{2}-[A-Z]{2})?)'
+        pattern = (
+            r'^(?P<method>[^_]+(?:_[^_]+)*)_(?P<similarity_type>URIEL|REAL)_merge_'
+            r'(?P<locale>[a-z]{2}-[A-Z]{2})_(?P<model_family>[^_]+(?:_[^_]+)*)'
+            rf'(?P<_massive_k>{massive_suffix_pattern})?_(?P<num_languages>\d+)merged_'
+            r'(?P<include_target>IncTar|ExcTar|IT|ET)$'
+        )
         match = re.match(pattern, dir_name)
 
         if match:
@@ -299,12 +354,20 @@ class NamingManager:
             result['experiment_type'] = 'merging'
             result['num_languages'] = int(result['num_languages'])
             result['timestamp'] = None
+            if '_massive_k' in result:
+                del result['_massive_k']
+            if 'model_family' in result:
+                result['model_family'] = self._strip_massive_suffix(result['model_family'])
             # Normalize include_target values
             result['include_target'] = self.normalize_include_target(result['include_target'])
             return result
 
         # Legacy pattern without IT/ET for backward compatibility: ties_REAL_merge_af-ZA_xlm-roberta-base_4merged
-        pattern_legacy = r'^(?P<method>[^_]+(?:_[^_]+)*)_(?P<similarity_type>URIEL|REAL)_merge_(?P<locale>[a-z]{2}-[A-Z]{2})_(?P<model_family>[^_]+(?:_[^_]+)*)_(?P<num_languages>\d+)merged$'
+        pattern_legacy = (
+            r'^(?P<method>[^_]+(?:_[^_]+)*)_(?P<similarity_type>URIEL|REAL)_merge_'
+            r'(?P<locale>[a-z]{2}-[A-Z]{2})_(?P<model_family>[^_]+(?:_[^_]+)*)'
+            rf'(?P<_massive_k>{massive_suffix_pattern})?_(?P<num_languages>\d+)merged$'
+        )
         match = re.match(pattern_legacy, dir_name)
 
         if match:
@@ -313,6 +376,10 @@ class NamingManager:
             result['num_languages'] = int(result['num_languages'])
             result['include_target'] = 'ET'  # Default to ET for backward compatibility
             result['timestamp'] = None
+            if '_massive_k' in result:
+                del result['_massive_k']
+            if 'model_family' in result:
+                result['model_family'] = self._strip_massive_suffix(result['model_family'])
             return result
 
         # Legacy pattern for backward compatibility (without model_family)
@@ -333,6 +400,8 @@ class NamingManager:
         if match:
             result = match.groupdict()
             result['num_languages'] = int(result['num_languages'])
+            if 'model_family' in result:
+                result['model_family'] = self._strip_massive_suffix(result['model_family'])
             return result
 
         raise ValueError(f"Cannot parse merged model directory name: {dir_name}")
@@ -349,9 +418,21 @@ class NamingManager:
 
     def find_results_directory(self, base_dir: str, experiment_type: str, method: str,
                              similarity_type: str, locale: str, model_family: str,
-                             num_languages: Optional[int] = None) -> Optional[str]:
+                             num_languages: Optional[int] = None,
+                             include_target: Optional[bool] = None) -> Optional[str]:
         """Find existing results directory matching given criteria."""
         # Try multiple timestamps (most recent first)
+        include_target_suffix = None
+        if include_target is not None:
+            include_target_suffix = "IncTar" if include_target else "ExcTar"
+
+        # Normalize provided model family to be tolerant of massive_k suffix
+        normalized_model_family = model_family
+        try:
+            normalized_model_family = self.extract_model_family(model_family)
+        except Exception:
+            normalized_model_family = self._strip_massive_suffix(model_family)
+
         for entry in sorted(os.listdir(base_dir), reverse=True):
             if not os.path.isdir(os.path.join(base_dir, entry)):
                 continue
@@ -362,7 +443,8 @@ class NamingManager:
                     parsed['method'] == method and
                     parsed['similarity_type'] == similarity_type and
                     parsed['locale'] == locale and
-                    parsed['model_family'] == model_family):
+                    (parsed['model_family'] == model_family or parsed['model_family'] == normalized_model_family) and
+                    (include_target_suffix is None or parsed.get('include_target') == include_target_suffix)):
                     if num_languages is not None:
                         if parsed['num_languages'] == num_languages:
                             return os.path.join(base_dir, entry)
@@ -384,6 +466,12 @@ class NamingManager:
         if include_target is not None:
             include_target_suffix = "IncTar" if include_target else "ExcTar"
 
+        normalized_model_family = model_family
+        try:
+            normalized_model_family = self.extract_model_family(model_family)
+        except Exception:
+            normalized_model_family = self._strip_massive_suffix(model_family)
+
         for entry in sorted(os.listdir(base_dir), reverse=True):
             if not os.path.isdir(os.path.join(base_dir, entry)):
                 continue
@@ -393,7 +481,9 @@ class NamingManager:
                 if (parsed['method'] == method and
                     parsed['similarity_type'] == similarity_type and
                     parsed['locale'] == locale and
-                    (parsed.get('model_family') == model_family or parsed.get('model_family') == 'unknown') and
+                    (parsed.get('model_family') == model_family or
+                     parsed.get('model_family') == normalized_model_family or
+                     parsed.get('model_family') == 'unknown') and
                     (include_target_suffix is None or parsed.get('include_target') == include_target_suffix)):
                     # For merged models, be more flexible about num_languages
                     # The directory name might not match the actual number of merged models

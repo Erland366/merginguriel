@@ -1,92 +1,117 @@
 #!/usr/bin/env python3
 """
-Simple test script to verify the similarity_utils module works correctly.
+Pytest coverage for `merginguriel.similarity_utils`.
+
+These tests exercise the lightweight processing helpers that the README highlights
+for URIEL-based language selection, without touching heavyweight HF assets.
 """
 
-import os
-import sys
+from __future__ import annotations
 
-# Add project root to path
-project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-if project_root not in sys.path:
-    sys.path.insert(0, project_root)
+from pathlib import Path
+from typing import Tuple
 
-from merginguriel.similarity_utils import load_and_process_similarity
+import pandas as pd
+import pytest
 
-def test_similarity_utils():
-    """Test the similarity utilities module."""
-    print("Testing similarity_utils module...")
+from merginguriel.similarity_utils import (
+    load_and_process_similarity,
+    load_similarity_matrix,
+    process_similarity_matrix,
+    get_similarity_weights,
+)
 
-    # Test with a few target languages
-    test_languages = ["en-US", "fr-FR", "de-DE"]
 
-    similarity_matrix_path = os.path.join(project_root, "language_similarity_matrix_unified.csv")
+@pytest.fixture
+def toy_similarity_csv(tmp_path: Path) -> Tuple[Path, pd.DataFrame]:
+    """
+    Create a small similarity matrix that roughly mirrors the README examples.
 
-    for target_lang in test_languages:
-        print(f"\n--- Testing {target_lang} ---")
-        try:
-            # Test with 3 languages
-            similar_languages = load_and_process_similarity(
-                similarity_matrix_path,
-                target_lang,
-                num_languages=3,
-                top_k=20,
-                sinkhorn_iterations=20,
-                verbose=True
-            )
+    Layout:
+        en-US is closest to fr-FR, then de-DE
+        fr-FR is closest to en-US, then de-DE
+        de-DE prefers en-US over fr-FR
+    """
+    locales = ["en-US", "fr-FR", "de-DE"]
+    data = [
+        [1.0, 0.8, 0.4],
+        [0.8, 1.0, 0.6],
+        [0.7, 0.5, 1.0],
+    ]
+    df = pd.DataFrame(data, index=locales, columns=locales)
+    csv_path = tmp_path / "toy_similarity.csv"
+    df.to_csv(csv_path)
+    return csv_path, df
 
-            print(f"✓ Successfully processed {target_lang}")
-            print(f"  Found {len(similar_languages)} similar languages:")
-            for locale, weight in similar_languages:
-                print(f"    - {locale}: {weight:.6f}")
 
-        except Exception as e:
-            print(f"✗ Error processing {target_lang}: {e}")
+def test_load_similarity_matrix_reads_expected_shape(toy_similarity_csv):
+    csv_path, df = toy_similarity_csv
 
-    print("\n--- Testing model mapping integration ---")
+    loaded = load_similarity_matrix(str(csv_path), verbose=False)
 
-    # Test integration with haryo models
-    haryo_models_path = os.path.join(project_root, "haryoaw_k_models.csv")
+    assert loaded.shape == df.shape
+    assert list(loaded.index) == ["en-US", "fr-FR", "de-DE"]
 
-    if os.path.exists(haryo_models_path):
-        import pandas as pd
-        haryo_models_df = pd.read_csv(haryo_models_path)
 
-        print(f"Loaded {len(haryo_models_df)} models from haryoaw_k_models.csv")
-        print(f"Available locales: {list(haryo_models_df['locale'].values)}")
+def test_process_similarity_matrix_normalizes_rows(toy_similarity_csv):
+    _, df = toy_similarity_csv
 
-        # Test finding models for multiple target languages
-        for target_lang in ["en-US", "fr-FR", "de-DE", "es-ES", "it-IT"]:
-            similar_languages = load_and_process_similarity(
-                similarity_matrix_path,
-                target_lang,
-                num_languages=15,  # Get more languages to find matches
-                top_k=20,
-                sinkhorn_iterations=20,
-                verbose=False
-            )
+    processed = process_similarity_matrix(
+        df,
+        target_locale="en-US",
+        top_k=1,
+        sinkhorn_iterations=5,
+        verbose=False,
+    )
 
-            print(f"\nTarget: {target_lang}")
-            print("Similar languages that have available models:")
+    # Sinkhorn should force each row to sum to ~1 even after sparsification
+    for locale in processed.index:
+        assert processed.loc[locale].sum() == pytest.approx(1.0, rel=1e-3)
+        # With top_k=1 only the strongest neighbor remains non-zero
+        assert (processed.loc[locale] > 0).sum() <= 1
 
-            found_models = []
-            available_locales = set(haryo_models_df['locale'].values)
 
-            for locale, weight in similar_languages:
-                # Direct locale match - just like in the ensemble inference
-                if locale in available_locales:
-                    model_row = haryo_models_df[haryo_models_df['locale'] == locale].iloc[0]
-                    found_models.append((locale, weight, model_row['model_name']))
-                    print(f"  ✓ {locale}: {model_row['model_name']} (weight: {weight:.6f})")
-                else:
-                    print(f"  ✗ {locale}: No model available")
+def test_get_similarity_weights_respects_include_target_flag(toy_similarity_csv):
+    csv_path, _ = toy_similarity_csv
 
-            print(f"\nFound {len(found_models)} available models for {target_lang}")
+    include_target = get_similarity_weights(
+        load_similarity_matrix(str(csv_path), verbose=False),
+        target_locale="en-US",
+        num_languages=2,
+        include_target=True,
+        top_k=2,
+        sinkhorn_iterations=5,
+        verbose=False,
+    )
+    exclude_target = get_similarity_weights(
+        load_similarity_matrix(str(csv_path), verbose=False),
+        target_locale="en-US",
+        num_languages=2,
+        include_target=False,
+        top_k=2,
+        sinkhorn_iterations=5,
+        verbose=False,
+    )
 
-    else:
-        print("✗ haryoaw_k_models.csv not found")
+    assert include_target[0][0] == "en-US"
+    assert all(locale != "en-US" for locale, _ in exclude_target)
+    assert len(include_target) == 2
+    assert len(exclude_target) == 2
 
-    print("\n=== Test completed ===")
 
-if __name__ == "__main__":
-    test_similarity_utils()
+def test_load_and_process_similarity_returns_sorted_weights(toy_similarity_csv):
+    csv_path, _ = toy_similarity_csv
+
+    weights = load_and_process_similarity(
+        str(csv_path),
+        target_locale="en-US",
+        num_languages=2,
+        top_k=2,
+        sinkhorn_iterations=5,
+        include_target=False,
+        verbose=False,
+    )
+
+    assert len(weights) == 2
+    assert weights[0][1] >= weights[1][1]  # Sorted descending by weight
+    assert all(locale in {"fr-FR", "de-DE"} for locale, _ in weights)

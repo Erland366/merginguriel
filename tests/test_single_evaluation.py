@@ -1,48 +1,79 @@
 #!/usr/bin/env python3
 """
-Test script to debug a single evaluation before running the full NxN evaluation.
+Smoke-test evaluate_specific_model with heavy dependencies mocked out.
 """
 
-import sys
+from __future__ import annotations
+
+from types import SimpleNamespace
+
+import pytest
 import torch
-from evaluate_specific_model import evaluate_specific_model
 
-def test_single_evaluation():
-    """Test a single model evaluation to debug CUDA issues."""
+from merginguriel import evaluate_specific_model as eval_module
 
-    # Test parameters - using a simple example
-    model_name = "haryoaw/xlm-roberta-base_massive_k_en-US"
-    model_dir = "alpha_0.5_en-US_epoch-9"
-    locale = "en-US"
 
-    print(f"Testing single evaluation:")
-    print(f"Model: {model_name}")
-    print(f"Model dir: {model_dir}")
-    print(f"Locale: {locale}")
-    print(f"CUDA available: {torch.cuda.is_available()}")
-    if torch.cuda.is_available():
-        print(f"CUDA device: {torch.cuda.get_device_name()}")
-        print(f"CUDA memory: {torch.cuda.get_device_properties(0).total_memory / 1024**3:.1f} GB")
+class DummyTokenizer:
+    def __call__(self, texts, **kwargs):
+        if isinstance(texts, str):
+            batch = 1
+        else:
+            batch = len(texts)
+        return {"input_ids": torch.zeros((batch, 4), dtype=torch.long)}
 
-    # Test evaluation
-    try:
-        results = evaluate_specific_model(
-            model_name=model_name,
-            subfolder=model_dir,
-            locale=locale,
-            eval_folder="test_results"
+
+class DummyModel:
+    def __init__(self):
+        self.num_labels = 2
+        self.config = SimpleNamespace(
+            id2label={0: "intent_a", 1: "intent_b"},
+            label2id={"intent_a": 0, "intent_b": 1},
+            model_type="xlm-roberta",
+            architectures=["XLMRobertaForSequenceClassification"],
         )
 
-        if results:
-            print(f"✓ Evaluation successful!")
-            print(f"Accuracy: {results['performance']['accuracy']:.4f}")
-        else:
-            print("✗ Evaluation failed")
+    def __call__(self, **inputs):
+        batch = inputs["input_ids"].shape[0]
+        logits = torch.zeros((batch, self.num_labels))
+        return SimpleNamespace(logits=logits)
 
-    except Exception as e:
-        print(f"✗ Evaluation failed with error: {e}")
-        import traceback
-        traceback.print_exc()
 
-if __name__ == "__main__":
-    test_single_evaluation()
+class DummyDataset:
+    def __init__(self):
+        self._items = [
+            {"utt": "hello world", "intent": 0},
+            {"utt": "book flight", "intent": 1},
+        ]
+
+    def __len__(self):
+        return len(self._items)
+
+    def __getitem__(self, idx):
+        if isinstance(idx, slice):
+            subset = self._items[idx]
+            return {
+                "utt": [item["utt"] for item in subset],
+                "intent": [item["intent"] for item in subset],
+            }
+        return self._items[idx]
+
+    def __iter__(self):
+        return iter(self._items)
+
+
+@pytest.mark.usefixtures()
+def test_evaluate_specific_model_smoke(monkeypatch, tmp_path):
+    monkeypatch.setattr(eval_module.AutoTokenizer, "from_pretrained", classmethod(lambda cls, *a, **k: DummyTokenizer()))
+    monkeypatch.setattr(eval_module.AutoModelForSequenceClassification, "from_pretrained", classmethod(lambda cls, *a, **k: DummyModel()))
+    monkeypatch.setattr(eval_module, "load_dataset", lambda *a, **k: DummyDataset())
+    monkeypatch.setattr(eval_module.naming_manager, "detect_model_family_from_path", lambda *a, **k: "xlm-roberta-base")
+    monkeypatch.setattr(eval_module.torch.cuda, "is_available", lambda: False)
+
+    results = eval_module.evaluate_specific_model(
+        model_name="dummy/model",
+        locale="en-US",
+        eval_folder=str(tmp_path),
+    )
+
+    assert results["evaluation_info"]["locale"] == "en-US"
+    assert "accuracy" in results["performance"]

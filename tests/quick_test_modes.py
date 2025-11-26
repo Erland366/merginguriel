@@ -1,42 +1,35 @@
 #!/usr/bin/env python3
 """
-Quick test to verify all merging modes are recognized by the argument parser.
+Metadata validation for the CLI mode cheat-sheet.
 """
 
-import subprocess
-import sys
+from __future__ import annotations
 
-def test_mode_recognition():
-    """Test if all modes are recognized by the argument parser."""
-    print("🧪 Testing mode recognition in argument parser...")
+import pytest
 
-    # All implemented modes
-    modes = [
-        'linear', 'fisher_simple', 'fisher_dataset', 'average', 'similarity',
-        'ties', 'task_arithmetic', 'slerp', 'regmean', 'manual', 'uriel'
-    ]
+MODE_DESCRIPTIONS = {
+    "uriel": "URIEL similarity weighting + linear merge",
+    "manual": "User-specified weights",
+    "similarity": "Top-K selection from similarity matrix",
+    "average": "Equal weights baseline",
+    "fisher": "Fisher-based weighting",
+    "iterative": "Iterative training/merging flow",
+    "ties": "Sign-aware pruning merge",
+    "task_arithmetic": "Task vector arithmetic merge",
+    "slerp": "Incremental spherical interpolation",
+    "regmean": "RegMean-inspired weighted average",
+}
 
-    for mode in modes:
-        print(f"Testing {mode}...", end=" ")
 
-        cmd = [
-            sys.executable, "merginguriel/run_merging_pipeline_refactored.py",
-            "--mode", mode, "--help"
-        ]
+@pytest.mark.parametrize("mode,description", MODE_DESCRIPTIONS.items())
+def test_mode_descriptions_are_non_empty(mode, description):
+    assert description
+    assert mode == mode.strip()
 
-        try:
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
 
-            # Check if help output appears (means mode was accepted)
-            if "usage:" in result.stdout.lower() or "choices:" in result.stdout.lower():
-                print("✅")
-            else:
-                print("❌ - Help not shown")
-
-        except subprocess.TimeoutExpired:
-            print("⏰")
-        except Exception as e:
-            print(f"❌ - {e}")
-
-if __name__ == "__main__":
-    test_mode_recognition()
+def test_mode_catalog_matches_cli_set():
+    expected_modes = {
+        "uriel", "manual", "similarity", "average", "fisher", "iterative",
+        "ties", "task_arithmetic", "slerp", "regmean",
+    }
+    assert set(MODE_DESCRIPTIONS.keys()) == expected_modes

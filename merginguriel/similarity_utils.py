@@ -32,6 +32,22 @@ def load_similarity_matrix(matrix_path: str, verbose: bool = True) -> pd.DataFra
 
     df = pd.read_csv(matrix_path, index_col=0)
 
+    # Deduplicate rows/columns to avoid ambiguous lookups (some inputs have duplicate locales)
+    if df.index.has_duplicates:
+        if verbose:
+            duplicate_rows = df.index[df.index.duplicated()].unique().tolist()
+            print(f"Warning: duplicate locale rows found {duplicate_rows}; keeping first occurrence.")
+        df = df[~df.index.duplicated(keep="first")]
+    if df.columns.has_duplicates:
+        if verbose:
+            duplicate_cols = df.columns[df.columns.duplicated()].unique().tolist()
+            print(f"Warning: duplicate locale columns found {duplicate_cols}; keeping first occurrence.")
+        df = df.loc[:, ~df.columns.duplicated(keep="first")]
+
+    # Ensure square matrix with aligned index/columns after deduplication
+    common = df.index.intersection(df.columns)
+    df = df.loc[common, common]
+
     if verbose:
         print(f"Loaded similarity matrix with shape: {df.shape}")
         print(f"Available languages: {list(df.index)}")
