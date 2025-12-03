@@ -584,6 +584,19 @@ def create_comparison_table(df):
     baseline_columns = ['baseline']
     discovered_columns = [col for col in experiment_types if col not in baseline_columns]
 
+    # Populate the generic baseline column from any per-family baselines we discovered
+    baseline_variant_cols = [col for col in pivot_df.columns if isinstance(col, str) and col.startswith('baseline_')]
+    if 'baseline' not in pivot_df.columns:
+        pivot_df['baseline'] = None
+    if baseline_variant_cols:
+        pivot_df['baseline'] = pivot_df.apply(
+            lambda row: max(
+                [row[col] for col in baseline_variant_cols if pd.notna(row[col])],
+                default=None
+            ),
+            axis=1
+        )
+
     # Create final column order: locale, baseline, other experiment types, baseline data, improvements
     final_columns = ['locale'] + baseline_columns + discovered_columns
 
@@ -603,19 +616,37 @@ def create_comparison_table(df):
 
     # Calculate improvements against baseline
     if 'baseline' in pivot_df.columns:
+        baseline_variant_cols = [col for col in pivot_df.columns if isinstance(col, str) and col.startswith('baseline_')]
         for exp_type in discovered_columns:
-            if exp_type in pivot_df.columns:
-                improvement_col = f'{exp_type}_improvement'
-                pivot_df[improvement_col] = pivot_df.apply(
-                    lambda row: row[exp_type] - row['baseline']
-                    if row['baseline'] is not None and row[exp_type] is not None
-                    else None, axis=1
-                )
+            if exp_type.startswith('baseline_') or exp_type not in pivot_df.columns:
+                continue
+
+            matching_baseline = next(
+                (col for col in baseline_variant_cols if col.replace('baseline_', '') in exp_type),
+                None
+            )
+            if matching_baseline is None:
+                matching_baseline = 'baseline'
+
+            improvement_col = f'{exp_type}_improvement'
+            pivot_df[improvement_col] = pivot_df.apply(
+                lambda row: (
+                    row[exp_type] - row[matching_baseline]
+                    if matching_baseline in row
+                    and row[matching_baseline] is not None
+                    and row[exp_type] is not None
+                    and not pd.isna(row[matching_baseline])
+                    and not pd.isna(row[exp_type])
+                    else None
+                ),
+                axis=1
+            )
 
         # Calculate improvements against best source baseline
         if 'best_source_accuracy' in pivot_df.columns:
             for exp_type in discovered_columns:
-                if exp_type in pivot_df.columns:
+                if exp_type.startswith('baseline_') or exp_type not in pivot_df.columns:
+                    continue
                     improvement_col = f'{exp_type}_vs_best_source'
                     pivot_df[improvement_col] = pivot_df.apply(
                         lambda row: row[exp_type] - row['best_source_accuracy']
@@ -626,7 +657,8 @@ def create_comparison_table(df):
         # Calculate improvements against best overall baseline
         if 'best_overall_accuracy' in pivot_df.columns:
             for exp_type in discovered_columns:
-                if exp_type in pivot_df.columns:
+                if exp_type.startswith('baseline_') or exp_type not in pivot_df.columns:
+                    continue
                     improvement_col = f'{exp_type}_vs_best_overall'
                     pivot_df[improvement_col] = pivot_df.apply(
                         lambda row: row[exp_type] - row['best_overall_accuracy']

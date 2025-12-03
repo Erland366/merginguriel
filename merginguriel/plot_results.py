@@ -27,6 +27,30 @@ class AdvancedResultsAnalyzer:
             return 0.0
         return float(value)
 
+    def _extract_baselines(self, row: pd.Series) -> Tuple[float, Dict[str, float]]:
+        """Return the best available baseline and all per-family baselines for a row."""
+        baseline_map: Dict[str, float] = {}
+
+        for col in row.index:
+            if isinstance(col, str) and col.startswith('baseline_'):
+                raw_val = row[col]
+                if raw_val != '' and raw_val is not None and not pd.isna(raw_val):
+                    try:
+                        baseline_map[col.replace('baseline_', '')] = float(raw_val)
+                    except Exception:
+                        continue
+
+        baseline_candidates = list(baseline_map.values())
+        raw_baseline = row.get('baseline') if isinstance(row, (dict, pd.Series)) else None
+        if raw_baseline not in (None, '') and not pd.isna(raw_baseline):
+            try:
+                baseline_candidates.append(float(raw_baseline))
+            except Exception:
+                pass
+
+        best_baseline = max(baseline_candidates) if baseline_candidates else 0.0
+        return best_baseline, baseline_map
+
     def __init__(self, results_dir: str = ".", plots_dir: str = "plots", num_languages_filter: Optional[List[int]] = None,
                  similarity_types: Optional[List[str]] = None):
         self.results_dir = Path(results_dir)
@@ -542,6 +566,7 @@ class AdvancedResultsAnalyzer:
             if col not in ['locale', 'baseline', 'best_source_accuracy', 'best_overall_accuracy']
             and not col.endswith('_improvement')
             and '_vs_' not in col
+            and not col.startswith('baseline_')
         ]
         results = []
 
@@ -555,12 +580,10 @@ class AdvancedResultsAnalyzer:
 
             main_data = locale_row.iloc[0]
 
-            # Ensure baseline is numeric, handle empty/NaN values
-            baseline_val = main_data.get('baseline', 0)
-            if pd.isna(baseline_val) or baseline_val == '' or baseline_val is None:
-                locale_data['baseline'] = 0
-            else:
-                locale_data['baseline'] = float(baseline_val)
+            baseline_value, baseline_map = self._extract_baselines(main_data)
+            locale_data['baseline'] = baseline_value
+            for family, score in baseline_map.items():
+                locale_data[f'baseline_{family}'] = score
 
             # Capture every method/variant column dynamically
             num_lang_map = {}
@@ -630,8 +653,8 @@ class AdvancedResultsAnalyzer:
         for _, row in self.main_results_df.iterrows():
             locale = row['locale']
 
-            # Get baseline accuracy for comparison
-            baseline_accuracy = row.get('baseline', 0)
+            # Get baseline accuracy for comparison (prefer any per-family baselines)
+            baseline_accuracy, _ = self._extract_baselines(row)
 
             # Extract source locales from merge details (same as merging methods)
             source_locales = self.extract_source_locales_from_details(locale)
@@ -834,6 +857,7 @@ class AdvancedResultsAnalyzer:
         metadata_keys = {
             'target_locale',
             'baseline',
+            'baseline_map',
             'avg_zero_shot',
             'best_zero_shot',
             'best_source',
@@ -866,7 +890,10 @@ class AdvancedResultsAnalyzer:
             for method_key, value in result.items():
                 if method_key in metadata_keys:
                     continue
+                is_baseline_col = method_key.startswith('baseline_')
                 entry[method_key] = value
+                if is_baseline_col:
+                    continue
                 if entry['avg_zero_shot'] > 0:
                     entry[f'{method_key}_vs_avg_zero'] = value - entry['avg_zero_shot']
                 if entry['best_zero_shot'] > 0:
