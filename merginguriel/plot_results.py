@@ -27,6 +27,57 @@ class AdvancedResultsAnalyzer:
             return 0.0
         return float(value)
 
+    def _maybe_float(self, value: Any) -> Optional[float]:
+        """Return float(value) or None when not castable/empty."""
+        try:
+            if value in ('', None):
+                return None
+            if pd.isna(value):
+                return None
+            return float(value)
+        except Exception:
+            return None
+
+    def _detect_nxn_model_family(self) -> Optional[str]:
+        """Infer which model family an NxN matrix represents by comparing diagonals to known baselines."""
+        nxn = next(iter(self.nxn_matrices.values()), None)
+        if nxn is None or getattr(self, "main_results_df", None) is None:
+            return None
+
+        locales = set(nxn.index).intersection(set(self.main_results_df['locale'].tolist()))
+        base_diffs: List[float] = []
+        large_diffs: List[float] = []
+
+        for loc in locales:
+            diag = self._maybe_float(nxn.loc[loc, loc])
+            if diag is None:
+                continue
+
+            row = self.main_results_df[self.main_results_df['locale'] == loc]
+            if row.empty:
+                continue
+            rec = row.iloc[0]
+            base_val = self._maybe_float(rec.get('baseline_xlm-roberta-base'))
+            large_val = self._maybe_float(rec.get('baseline_xlm-roberta-large'))
+
+            if base_val is not None:
+                base_diffs.append(abs(diag - base_val))
+            if large_val is not None:
+                large_diffs.append(abs(diag - large_val))
+
+        if not base_diffs and not large_diffs:
+            return None
+
+        base_mean = sum(base_diffs) / len(base_diffs) if base_diffs else float('inf')
+        large_mean = sum(large_diffs) / len(large_diffs) if large_diffs else float('inf')
+
+        # Pick the closer family; use a buffer to avoid ties causing oscillations
+        if base_mean < large_mean * 0.8:
+            return 'xlm-roberta-base'
+        if large_mean < base_mean * 0.8:
+            return 'xlm-roberta-large'
+        return 'xlm-roberta-base' if base_mean <= large_mean else 'xlm-roberta-large'
+
     def _extract_baselines(self, row: pd.Series) -> Tuple[float, Dict[str, float]]:
         """Return the best available baseline and all per-family baselines for a row."""
         baseline_map: Dict[str, float] = {}
@@ -63,11 +114,12 @@ class AdvancedResultsAnalyzer:
 
         # Data storage
         self.results_dfs = {}
-        self.nxn_df = None
+        self.nxn_matrices: Dict[str, pd.DataFrame] = {}
         self.experiment_results = {}
 
         # Load all available data
         self.load_all_data()
+        self.nxn_model_family = None  # superseded by per-family matrices
 
     def load_all_data(self):
         """Load all available CSV files and N-x-N evaluation data"""
@@ -89,23 +141,40 @@ class AdvancedResultsAnalyzer:
         # Don't drop all NaN rows, just clean up empty locale rows
         self.main_results_df = self.main_results_df.dropna(subset=['locale'])
 
-        # Try to load N-x-N evaluation data
+        # Try to load per-family N-x-N evaluation data from architecture-named subdirectories only
         repo_root = Path(__file__).resolve().parents[1]
-        nxn_files = glob.glob(str(repo_root / "nxn_results" / "*" / "evaluation_matrix.csv"))
-        if not nxn_files:
+        arch_dirs = sorted((repo_root / "nxn_results").glob("*"), key=os.path.getmtime, reverse=True) if (repo_root / "nxn_results").exists() else []
+
+        def normalize_arch(name: str) -> str:
+            return name.replace("_", "-")
+
+        for arch_dir in arch_dirs:
+            if not arch_dir.is_dir():
+                continue
+            # Skip legacy timestamped run folders like nxn_eval_*
+            if arch_dir.name.startswith("nxn_eval_"):
+                continue
+            fam = normalize_arch(arch_dir.name)
+            pattern = sorted(arch_dir.glob("evaluation_matrix*.csv"), key=os.path.getmtime, reverse=True)
+            for nxn_path in pattern:
+                try:
+                    df = pd.read_csv(nxn_path, index_col=0).dropna()
+                    self.nxn_matrices.setdefault(fam, df)
+                    print(f"Loaded N-x-N evaluation for {fam} from: {nxn_path}")
+                    break
+                except Exception as exc:
+                    print(f"Warning: failed to load {nxn_path}: {exc}")
+
+        if not self.nxn_matrices:
             print("Warning: No N-x-N evaluation matrix found in repo nxn_results/")
-        else:
-            latest_nxn = max(nxn_files, key=os.path.getctime)
-            print(f"Loading N-x-N evaluation from: {latest_nxn}")
-            self.nxn_df = pd.read_csv(latest_nxn, index_col=0)
-            self.nxn_df = self.nxn_df.dropna()
 
         # Load experiment results from directories
         self.load_experiment_directories()
 
         print(f"Loaded main results for {len(self.main_results_df)} entries")
-        if self.nxn_df is not None:
-            print(f"Loaded N-x-N matrix with {len(self.nxn_df)} languages")
+        if self.nxn_matrices:
+            for fam, mat in self.nxn_matrices.items():
+                print(f"Loaded N-x-N matrix for {fam} with {len(mat)} languages")
 
     def load_experiment_directories(self):
         """Load results from individual experiment directories"""
@@ -287,28 +356,35 @@ class AdvancedResultsAnalyzer:
 
     def get_method_model_family(self, method: str) -> str:
         """Get the model family name for a method using centralized naming system."""
+        # 1) Prefer to infer directly from the method key itself (more reliable than arbitrary experiment order)
+        inferred = self.infer_model_family_from_method_key(method)
+        if inferred:
+            return inferred
+
+        # 2) Look for a matching experiment entry for this method
+        method_base = re.sub(r'_\d+lang(?:_(?:IncTar|ExcTar))?$', '', method)
+        method_base = re.sub(r'_.*?$', '', method_base)
+
+        matched_family = None
         # Look for this method in our experiment results
         for exp_name, exp_data in self.experiment_results.items():
             if exp_data['type'] == 'baseline':
                 continue
-
-            # Check if we have model_family_name directly from the parsed directory
-            if 'model_family_name' in exp_data and exp_data['model_family_name'] != 'unknown':
-                return exp_data['model_family_name']
 
             # Extract method name from experiment type
             exp_type = exp_data['type']
             if exp_type.startswith('merge_'):
                 exp_method = exp_type.replace('merge_', '')
 
-                # Check if this matches our method (ignoring model family and lang suffix)
-                method_base = re.sub(r'_\d+lang$', '', method)
-                # Remove model family name if present (e.g., similarity_roberta-base -> similarity)
-                method_base = re.sub(r'_.*?$', '', method_base)
                 if exp_method == method_base:
-                    # Try to get model family from experiment data
-                    if 'model_family' in exp_data and exp_data['model_family'] != 'unknown':
-                        return exp_data['model_family']
+                    # Prioritize explicit model_family_name, else fallback to parsed model_family
+                    if exp_data.get('model_family_name') and exp_data['model_family_name'] != 'unknown':
+                        return exp_data['model_family_name']
+                    if exp_data.get('model_family') and exp_data['model_family'] != 'unknown':
+                        matched_family = exp_data['model_family']
+
+        if matched_family:
+            return matched_family
 
         # Fallback: try to extract from method name
         if '_roberta-base' in method:
@@ -427,26 +503,50 @@ class AdvancedResultsAnalyzer:
         locale_pattern = re.compile(r"^\s*- Locale:\s*([a-zA-Z]{2}-[a-zA-Z]{2})", re.MULTILINE)
         return locale_pattern.findall(content)
 
-    def get_zero_shot_scores(self, target_locale: str, source_locales: List[str]) -> Dict[str, float]:
-        """Get zero-shot scores for target locale from source locales"""
-        if self.nxn_df is None:
+    def _get_nxn_for_family(self, model_family: Optional[str]) -> Optional[pd.DataFrame]:
+        """Return the NxN matrix for the given family, if available."""
+        if not model_family or not self.nxn_matrices:
+            return None
+        for fam_key, mat in self.nxn_matrices.items():
+            if model_family == fam_key:
+                return mat
+            if model_family.startswith(fam_key) or fam_key.startswith(model_family):
+                return mat
+        return None
+
+    def get_zero_shot_scores(self, target_locale: str, source_locales: List[str], model_family: Optional[str]) -> Dict[str, float]:
+        """Get zero-shot scores for target locale from source locales using family-matched NxN."""
+        nxn = self._get_nxn_for_family(model_family)
+        if nxn is None:
             return {}
 
         scores = {}
         for locale in source_locales:
-            if locale in self.nxn_df.index and target_locale in self.nxn_df.columns:
-                score = self.nxn_df.loc[locale, target_locale]
+            if locale in nxn.index and target_locale in nxn.columns:
+                score = nxn.loc[locale, target_locale]
                 if not pd.isna(score):
                     scores[locale] = float(score)
 
         return scores
 
-    def get_best_source_performance(self, target_locale: str, source_locales: List[str]) -> float:
-        """Get the best performance among the actual source languages used for a target locale"""
-        zero_shot_scores = self.get_zero_shot_scores(target_locale, source_locales)
+    def get_best_source_performance(self, target_locale: str, source_locales: List[str], model_family: Optional[str]) -> Optional[float]:
+        """Get the best performance among the actual source languages used for a target locale."""
+        zero_shot_scores = self.get_zero_shot_scores(target_locale, source_locales, model_family)
         if zero_shot_scores:
             return max(zero_shot_scores.values())
-        return 0.0
+        return None
+
+    def get_best_overall_zero_shot(self, target_locale: str, model_family: Optional[str]) -> Optional[float]:
+        """Get best zero-shot accuracy for target across all locales (excluding target)."""
+        nxn = self._get_nxn_for_family(model_family)
+        if nxn is None or target_locale not in nxn.columns:
+            return None
+        col = nxn[target_locale]
+        col = col.drop(target_locale, errors='ignore')
+        col = col[col.notna()]
+        if col.empty:
+            return None
+        return float(col.max())
 
     def extract_num_languages_from_details(self, target_locale: str, merge_type: str) -> Optional[int]:
         """Extract number of languages from merge_details.txt files"""
@@ -480,8 +580,9 @@ class AdvancedResultsAnalyzer:
         matches = model_pattern.findall(content)
         return len(matches) if matches else None
 
-    def extract_source_locales_from_details(self, target_locale: str) -> List[str]:
-        """Extract source locales from merge_details.txt files for any merge type"""
+    def extract_source_locales_from_details(self, target_locale: str, model_family: Optional[str] = None,
+                                            num_languages: Optional[int] = None) -> List[str]:
+        """Extract source locales from merge_details.txt; fallback to NxN top-K for matching family when missing."""
         # Try to find merge_details.txt from any merge type for this target locale
         # Support both new naming convention (with similarity type and merge count) and old naming
         merge_patterns = []
@@ -546,14 +647,16 @@ class AdvancedResultsAnalyzer:
         if source_locales:
             return list(source_locales)
 
-        # If no source locales found in experiments, try to infer from the similarity matrix
-        # For the given target, get top similar locales (excluding target itself)
-        if self.nxn_df is not None and target_locale in self.nxn_df.columns:
-            target_column = self.nxn_df[target_locale].drop(target_locale, errors='ignore')
-            # Get top 3-5 most similar locales
-            top_locales = target_column.nlargest(5).index.tolist()
-            return top_locales
+        # If no source locales found in experiments, try to infer from the NxN matrix for this family
+        nxn = self._get_nxn_for_family(model_family)
+        if nxn is not None and target_locale in nxn.columns:
+            target_column = nxn[target_locale].drop(target_locale, errors='ignore')
+            top_k = num_languages if num_languages is not None else 5
+            inferred = target_column.nlargest(top_k).index.tolist()
+            print(f"Warning: Using inferred sources from NxN for {target_locale}: {inferred}")
+            return inferred
 
+        print(f"Warning: No NxN matrix available to infer source locales for {target_locale}")
         return []
 
     def analyze_advanced_merging_methods(self) -> List[Dict]:
@@ -600,9 +703,21 @@ class AdvancedResultsAnalyzer:
             if num_lang_map:
                 locale_data['num_languages_map'] = num_lang_map
 
-            # Extract source locales from merge details
-            source_locales = self.extract_source_locales_from_details(locale)
-            zero_shot_scores = self.get_zero_shot_scores(locale, source_locales)
+            # Infer family: prefer baseline keys, else method keys that mention xlm-roberta-*
+            locale_family = None
+            if 'baseline_xlm-roberta-large' in baseline_map:
+                locale_family = 'xlm-roberta-large'
+            elif 'baseline_xlm-roberta-base' in baseline_map:
+                locale_family = 'xlm-roberta-base'
+            else:
+                for method_key in method_columns:
+                    if 'xlm-roberta-large' in method_key:
+                        locale_family = 'xlm-roberta-large'
+                        break
+                    if 'xlm-roberta-base' in method_key:
+                        locale_family = 'xlm-roberta-base'
+                        break
+            locale_data['zero_shot_family'] = locale_family
 
             # Extract num_languages for filtering - check similarity as representative
             num_languages = self.extract_num_languages_from_details(locale, 'similarity')
@@ -612,6 +727,10 @@ class AdvancedResultsAnalyzer:
                     num_languages = self.extract_num_languages_from_details(locale, method)
                     if num_languages is not None:
                         break
+
+            # Extract source locales from merge details (or infer)
+            source_locales = self.extract_source_locales_from_details(locale, locale_family, num_languages)
+            zero_shot_scores = self.get_zero_shot_scores(locale, source_locales, locale_family)
 
             # Apply num_languages filter if specified (fallback to similarity count)
             if self.num_languages_filter is not None:
@@ -627,14 +746,12 @@ class AdvancedResultsAnalyzer:
 
             if zero_shot_scores:
                 locale_data['avg_zero_shot'] = np.mean(list(zero_shot_scores.values()))
-                locale_data['best_zero_shot'] = max(zero_shot_scores.values())
-                locale_data['best_source'] = self.get_best_source_performance(locale, source_locales)
-                locale_data['source_locales'] = source_locales
             else:
-                locale_data['avg_zero_shot'] = 0
-                locale_data['best_zero_shot'] = 0
-                locale_data['best_source'] = 0
-                locale_data['source_locales'] = []
+                locale_data['avg_zero_shot'] = None
+
+            locale_data['best_zero_shot'] = self.get_best_overall_zero_shot(locale, locale_family)
+            locale_data['best_source'] = self.get_best_source_performance(locale, source_locales, locale_family)
+            locale_data['source_locales'] = source_locales or []
 
             # Add num_languages info
             locale_data['num_languages'] = num_languages
@@ -658,7 +775,12 @@ class AdvancedResultsAnalyzer:
 
             # Extract source locales from merge details (same as merging methods)
             source_locales = self.extract_source_locales_from_details(locale)
-            zero_shot_scores = self.get_zero_shot_scores(locale, source_locales)
+            locale_family = None
+            if 'baseline_xlm-roberta-large' in row.index and not pd.isna(row.get('baseline_xlm-roberta-large')):
+                locale_family = 'xlm-roberta-large'
+            elif 'baseline_xlm-roberta-base' in row.index and not pd.isna(row.get('baseline_xlm-roberta-base')):
+                locale_family = 'xlm-roberta-base'
+            zero_shot_scores = self.get_zero_shot_scores(locale, source_locales, locale_family)
 
             # Process each ensemble method that exists in the dataframe
             for method in ensemble_methods:
@@ -671,7 +793,8 @@ class AdvancedResultsAnalyzer:
                         'ensemble_method': method_name,
                         'ensemble_accuracy': row[method],
                         'baseline_accuracy': baseline_accuracy,
-                        'source_locales': source_locales
+                        'source_locales': source_locales,
+                        'zero_shot_family': locale_family
                     }
 
                     # Calculate zero-shot baseline for comparison using same source locales
@@ -680,9 +803,9 @@ class AdvancedResultsAnalyzer:
                         locale_data['best_zero_shot'] = max(zero_shot_scores.values())
                         locale_data['best_source'] = self.get_best_source_performance(locale, source_locales)
                     else:
-                        locale_data['avg_zero_shot'] = 0
-                        locale_data['best_zero_shot'] = 0
-                        locale_data['best_source'] = 0
+                        locale_data['avg_zero_shot'] = None
+                        locale_data['best_zero_shot'] = None
+                        locale_data['best_source'] = None
 
                     results.append(locale_data)
 
@@ -704,14 +827,14 @@ class AdvancedResultsAnalyzer:
 
         for result in merging_results:
             locales.append(result['target_locale'])
-            method_data['baseline'].append(result.get('baseline', 0))
-            method_data['similarity'].append(result.get('similarity', 0))
-            method_data['average'].append(result.get('average', 0))
-            method_data['avg_zero_shot'].append(result.get('avg_zero_shot', 0))
-            method_data['best_zero_shot'].append(result.get('best_zero_shot', 0))
+            method_data['baseline'].append(self._maybe_float(result.get('baseline')) or 0)
+            method_data['similarity'].append(self._maybe_float(result.get('similarity')) or 0)
+            method_data['average'].append(self._maybe_float(result.get('average')) or 0)
+            method_data['avg_zero_shot'].append(self._maybe_float(result.get('avg_zero_shot')) or 0)
+            method_data['best_zero_shot'].append(self._maybe_float(result.get('best_zero_shot')) or 0)
 
             for method in advanced_methods:
-                method_data[method].append(result.get(method, 0))
+                method_data[method].append(self._maybe_float(result.get(method)) or 0)
 
         # Create subplots for better readability
         fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(20, 16))
@@ -795,14 +918,22 @@ class AdvancedResultsAnalyzer:
         labels = []
 
         # Baseline
-        baseline_scores = [locale_data[locale].get('baseline', 0) for locale in locales]
+        baseline_scores = []
+        for locale in locales:
+            base_val = locale_data[locale].get('baseline', 0)
+            if base_val is None or pd.isna(base_val):
+                base_val = 0
+            baseline_scores.append(base_val)
         bars.append(ax1.bar(x - 1.5*width, baseline_scores, width, label='Baseline', alpha=0.7, color='gray'))
 
         # Ensemble methods
         for i, method in enumerate(methods):
             scores = []
             for locale in locales:
-                scores.append(locale_data[locale].get(method, 0))
+                val = locale_data[locale].get(method, 0)
+                if val is None or pd.isna(val):
+                    val = 0
+                scores.append(val)
             bars.append(ax1.bar(x + (i - 0.5)*width, scores, width,
                                label=method.replace('_', ' ').title(), alpha=0.8))
 
@@ -819,7 +950,11 @@ class AdvancedResultsAnalyzer:
             advantages = []
             for locale in locales:
                 ensemble_score = locale_data[locale].get(method, 0)
+                if ensemble_score is None or pd.isna(ensemble_score):
+                    ensemble_score = 0
                 avg_zero_shot = locale_data[locale].get('avg_zero_shot', 0)
+                if avg_zero_shot is None or pd.isna(avg_zero_shot):
+                    avg_zero_shot = 0
                 advantages.append(ensemble_score - avg_zero_shot)
 
             bars = ax2.bar(x + (i - 1.5)*width, advantages, width,
@@ -862,6 +997,7 @@ class AdvancedResultsAnalyzer:
             'best_zero_shot',
             'best_source',
             'source_locales',
+            'zero_shot_family',
             'num_languages',
             'num_languages_map'
         }
@@ -870,19 +1006,22 @@ class AdvancedResultsAnalyzer:
             locale = result['target_locale']
             entry = locale_data.setdefault(locale, {
                 'locale': locale,
-                'baseline': self._safe_float(result.get('baseline', 0)),
-                'avg_zero_shot': self._safe_float(result.get('avg_zero_shot', 0)),
-                'best_zero_shot': self._safe_float(result.get('best_zero_shot', 0)),
-                'best_source': self._safe_float(result.get('best_source', 0)),
-                'source_locales': result.get('source_locales', [])
+                'baseline': self._maybe_float(result.get('baseline')),
+                'avg_zero_shot': self._maybe_float(result.get('avg_zero_shot')),
+                'best_zero_shot': self._maybe_float(result.get('best_zero_shot')),
+                'best_source': self._maybe_float(result.get('best_source')),
+                'source_locales': result.get('source_locales', []),
+                'zero_shot_family': result.get('zero_shot_family')
             })
 
             # Merge metadata fields if newly discovered
             for key in ['baseline', 'avg_zero_shot', 'best_zero_shot', 'best_source']:
-                if key in result and (entry.get(key, 0) == 0 or entry.get(key) is None):
-                    entry[key] = result[key]
+                if key in result and (entry.get(key) in (None, 0)):
+                    entry[key] = self._maybe_float(result.get(key))
             if 'source_locales' in result and not entry.get('source_locales'):
                 entry['source_locales'] = result['source_locales']
+            if 'zero_shot_family' in result and not entry.get('zero_shot_family'):
+                entry['zero_shot_family'] = result.get('zero_shot_family')
             if 'num_languages_map' in result:
                 entry.setdefault('num_languages_map', {}).update(result['num_languages_map'])
 
@@ -891,41 +1030,66 @@ class AdvancedResultsAnalyzer:
                 if method_key in metadata_keys:
                     continue
                 is_baseline_col = method_key.startswith('baseline_')
-                entry[method_key] = value
+                method_val = self._maybe_float(value)
+                if method_val is None:
+                    continue
+                entry[method_key] = method_val
                 if is_baseline_col:
                     continue
-                if entry['avg_zero_shot'] > 0:
-                    entry[f'{method_key}_vs_avg_zero'] = value - entry['avg_zero_shot']
-                if entry['best_zero_shot'] > 0:
-                    entry[f'{method_key}_vs_best_zero'] = value - entry['best_zero_shot']
-                if entry['best_source'] > 0:
-                    entry[f'{method_key}_vs_best_source'] = value - entry['best_source']
+                method_family = self.get_method_model_family(method_key)
+                zero_family = entry.get('zero_shot_family')
+                family_mismatch = zero_family and method_family and zero_family != method_family
+
+                avg_zero = self._maybe_float(entry.get('avg_zero_shot'))
+                best_zero = self._maybe_float(entry.get('best_zero_shot'))
+                best_source = self._maybe_float(entry.get('best_source'))
+
+                if family_mismatch:
+                    avg_zero = best_zero = best_source = None
+
+                if avg_zero is not None:
+                    entry[f'{method_key}_vs_avg_zero'] = method_val - avg_zero
+                if best_zero is not None:
+                    entry[f'{method_key}_vs_best_zero'] = method_val - best_zero
+                if best_source is not None:
+                    entry[f'{method_key}_vs_best_source'] = method_val - best_source
 
         # Process ensemble results and merge into the same locale rows
         for result in ensemble_results:
             locale = result['target_locale']
             method = result['ensemble_method']  # 'majority', 'weighted_majority', 'soft', 'uriel_logits'
-            accuracy = result.get('ensemble_accuracy', 0)
+            accuracy = self._maybe_float(result.get('ensemble_accuracy', 0))
+            if accuracy is None:
+                continue
 
             if locale not in locale_data:
                 locale_data[locale] = {
                     'locale': locale,
-                    'baseline': result.get('baseline_accuracy', 0),
-                    'avg_zero_shot': result.get('avg_zero_shot', 0),
-                    'best_zero_shot': result.get('best_zero_shot', 0),
-                    'best_source': result.get('best_source', 0),
-                    'source_locales': result.get('source_locales', [])
+                    'baseline': self._maybe_float(result.get('baseline_accuracy')),
+                    'avg_zero_shot': self._maybe_float(result.get('avg_zero_shot')),
+                    'best_zero_shot': self._maybe_float(result.get('best_zero_shot')),
+                    'best_source': self._maybe_float(result.get('best_source')),
+                    'source_locales': result.get('source_locales', []),
+                    'zero_shot_family': result.get('zero_shot_family')
                 }
 
             # Add ensemble method
             locale_data[locale][method] = accuracy
-            # Calculate improvements vs all three baselines
-            if locale_data[locale]['avg_zero_shot'] and not pd.isna(locale_data[locale]['avg_zero_shot']):
-                locale_data[locale][f'{method}_vs_avg_zero'] = accuracy - locale_data[locale]['avg_zero_shot']
-            if locale_data[locale]['best_zero_shot'] and not pd.isna(locale_data[locale]['best_zero_shot']):
-                locale_data[locale][f'{method}_vs_best_zero'] = accuracy - locale_data[locale]['best_zero_shot']
-            if locale_data[locale]['best_source'] and not pd.isna(locale_data[locale]['best_source']):
-                locale_data[locale][f'{method}_vs_best_source'] = accuracy - locale_data[locale]['best_source']
+            zero_family = locale_data[locale].get('zero_shot_family')
+            avg_zero = self._maybe_float(locale_data[locale].get('avg_zero_shot'))
+            best_zero = self._maybe_float(locale_data[locale].get('best_zero_shot'))
+            best_source = self._maybe_float(locale_data[locale].get('best_source'))
+
+            if zero_family is None:
+                avg_zero = best_zero = best_source = None
+
+            # Calculate improvements vs all three baselines when compatible
+            if avg_zero is not None:
+                locale_data[locale][f'{method}_vs_avg_zero'] = accuracy - avg_zero
+            if best_zero is not None:
+                locale_data[locale][f'{method}_vs_best_zero'] = accuracy - best_zero
+            if best_source is not None:
+                locale_data[locale][f'{method}_vs_best_source'] = accuracy - best_source
 
         summary_records = []
         for locale, data in locale_data.items():
@@ -935,6 +1099,52 @@ class AdvancedResultsAnalyzer:
             summary_records.append(record)
 
         summary_df = pd.DataFrame(summary_records)
+
+        # Ensure improvement columns exist for all methods (family-aware, recomputed per method)
+        static_cols = {'locale', 'baseline', 'avg_zero_shot', 'best_zero_shot', 'best_source',
+                       'source_locales', 'num_languages_map', 'zero_shot_family'}
+        method_cols = [c for c in summary_df.columns if c not in static_cols and not c.startswith('baseline') and '_vs_' not in c]
+        for method in method_cols:
+            method_family = self.get_method_model_family(method)
+            vs_avg_col = f'{method}_vs_avg_zero'
+            vs_best_col = f'{method}_vs_best_zero'
+            vs_source_col = f'{method}_vs_best_source'
+
+            values = pd.to_numeric(summary_df[method], errors='coerce')
+            vs_avg_list = []
+            vs_best_list = []
+            vs_source_list = []
+
+            for idx, row in summary_df.iterrows():
+                val = values.iloc[idx]
+                if pd.isna(val):
+                    vs_avg_list.append(np.nan)
+                    vs_best_list.append(np.nan)
+                    vs_source_list.append(np.nan)
+                    continue
+
+                target_locale = row['locale']
+                source_locales = row.get('source_locales') or []
+                # source_locales stored as string? handle list/str
+                if isinstance(source_locales, str):
+                    try:
+                        source_locales = json.loads(source_locales)
+                    except Exception:
+                        source_locales = []
+
+                zs_scores = self.get_zero_shot_scores(target_locale, source_locales, method_family)
+                avg_zero = np.mean(list(zs_scores.values())) if zs_scores else np.nan
+                best_zero = self.get_best_overall_zero_shot(target_locale, method_family)
+                best_source = self.get_best_source_performance(target_locale, source_locales, method_family)
+
+                vs_avg_list.append(val - avg_zero if pd.notna(avg_zero) else np.nan)
+                vs_best_list.append(val - best_zero if best_zero is not None else np.nan)
+                vs_source_list.append(val - best_source if best_source is not None else np.nan)
+
+            summary_df[vs_avg_col] = vs_avg_list
+            summary_df[vs_best_col] = vs_best_list
+            summary_df[vs_source_col] = vs_source_list
+
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         summary_df.to_csv(f'advanced_analysis_summary_{timestamp}.csv', index=False)
 
@@ -1282,12 +1492,15 @@ class AdvancedResultsAnalyzer:
             if not baseline_col:
                 continue
 
-            baseline_values = summary_df[baseline_col].fillna(0).tolist()
-            method_values = summary_df[method].fillna(0).tolist()
+            # Coerce to numeric to avoid string subtraction issues
+            baseline_values = pd.to_numeric(summary_df[baseline_col], errors='coerce').fillna(0).tolist()
+            method_values = pd.to_numeric(summary_df[method], errors='coerce').fillna(0).tolist()
             display_name = self.format_method_key_for_display(method, model_family, self.get_method_similarity_type(method))
             file_method = self.format_method_key_for_filename(method, model_family, self.get_method_similarity_type(method))
 
-            differences = [m - b for m, b in zip(method_values, baseline_values)]
+            differences = []
+            for m, b in zip(method_values, baseline_values):
+                differences.append(m - b)
 
             fig, ax = plt.subplots(figsize=(20, 8))
             x = np.arange(len(locales))
@@ -1348,7 +1561,16 @@ class AdvancedResultsAnalyzer:
         if 'baseline' in summary_df.columns:
             print(f"\nAverage baseline: {summary_df['baseline'].mean():.4f}")
 
-        static_fields = {'locale', 'baseline', 'avg_zero_shot', 'best_zero_shot', 'best_source', 'source_locales', 'num_languages_map'}
+        static_fields = {
+            'locale',
+            'baseline',
+            'avg_zero_shot',
+            'best_zero_shot',
+            'best_source',
+            'source_locales',
+            'num_languages_map',
+            'zero_shot_family',
+        }
 
         # Dynamic method analysis (merges + ensembles)
         method_cols = [
@@ -1413,7 +1635,7 @@ class AdvancedResultsAnalyzer:
         ensemble_results = self.analyze_ensemble_methods()
 
         # Create comprehensive summary with all methods vs both baselines
-        summary_df = self.create_comprehensive_summary(merging_results, ensemble_results, self.nxn_df)
+        summary_df = self.create_comprehensive_summary(merging_results, ensemble_results, None)
 
         if summary_df is not None:
             # Generate individual plots for each method and comparison type
@@ -1554,7 +1776,8 @@ class AdvancedResultsAnalyzer:
                 num_lang_map = json.loads(raw_map)
 
             for method in methods:
-                if pd.notna(row[method]) and row[method] > 0:  # Only if method has results
+                val = pd.to_numeric(row.get(method), errors='coerce')
+                if pd.notna(val) and val > 0:  # Only if method has results
                     num_lang = None
                     if method in num_lang_map:
                         num_lang = num_lang_map[method]

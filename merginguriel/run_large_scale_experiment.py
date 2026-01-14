@@ -353,13 +353,15 @@ def run_experiment_for_locale(
                     results[result_key] = eval_success
 
                     if cleanup_after_eval and eval_success and not existing_merge:
-                        try:
-                            import shutil
-                            print(f"🗑️  Cleaning up merged model: {merged_model_path}")
-                            shutil.rmtree(merged_model_path)
-                            print(f"✅ Successfully deleted {merged_model_path}")
-                        except Exception as e:
-                            print(f"⚠️  Failed to delete {merged_model_path}: {e}")
+                        # Preserve merge_details before cleanup so aggregation/plots keep source info
+                        merge_details_file = os.path.join(merged_model_path, "merge_details.txt")
+                        if os.path.exists(merge_details_file):
+                            dest_details = os.path.join(results_full_path, "merge_details.txt")
+                            shutil.copyfile(merge_details_file, dest_details)
+                            print(f"📝 Saved merge details to {dest_details}")
+                        print(f"🗑️  Cleaning up merged model: {merged_model_path}")
+                        shutil.rmtree(merged_model_path)
+                        print(f"✅ Successfully deleted {merged_model_path}")
                 else:
                     print(f"❌ Could not find merged model directory for {mode} merge of {locale} ({variant_label})")
                     results[result_key] = False

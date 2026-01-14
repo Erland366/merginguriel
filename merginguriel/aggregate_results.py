@@ -368,24 +368,42 @@ def get_experiment_folders(results_dir="results"):
     return sorted(folders)
 
 
-def find_evaluation_matrix(nxn_results_dir: str = "nxn_results") -> Optional[str]:
-    """Find the most recent evaluation_matrix.csv file in nxn_results directories."""
+def _normalize_arch_name(name: str) -> str:
+    """Normalize architecture string to match model_family style."""
+    return name.replace("_", "-")
+
+
+def find_evaluation_matrices(nxn_results_dir: str = "nxn_results") -> Dict[str, str]:
+    """Find evaluation matrices keyed by model family.
+
+    Priority:
+    1) Look for subdirectories under nxn_results named for the architecture (e.g., xlm_roberta_base, xlm-roberta-large)
+       containing evaluation_matrix*.csv.
+    """
+    matrices: Dict[str, str] = {}
     if not os.path.exists(nxn_results_dir):
         logger.warning(f"N-x-N results directory not found: {nxn_results_dir}")
-        return None
+        return matrices
 
-    # Look for evaluation_matrix.csv files in subdirectories
-    pattern = os.path.join(nxn_results_dir, "*", "evaluation_matrix.csv")
-    matrix_files = glob.glob(pattern)
+    # 1) Architecture-named subdirectories
+    for sub in Path(nxn_results_dir).iterdir():
+        if not sub.is_dir():
+            continue
+        # Skip legacy timestamped run folders like nxn_eval_*
+        if sub.name.startswith("nxn_eval_"):
+            continue
+        arch = _normalize_arch_name(sub.name)
+        # Look for evaluation_matrix*.csv directly under the arch directory
+        files = sorted(sub.glob("evaluation_matrix*.csv"), key=os.path.getmtime, reverse=True)
+        if files:
+            matrices[arch] = str(files[0])
 
-    if not matrix_files:
-        logger.warning("No evaluation_matrix.csv files found in N-x-N results directories")
-        return None
-
-    # Return the most recent one based on directory modification time
-    latest_file = max(matrix_files, key=os.path.getmtime)
-    logger.info(f"Using evaluation matrix: {latest_file}")
-    return latest_file
+    if matrices:
+        for fam, path in matrices.items():
+            logger.info(f"Using evaluation matrix for {fam}: {path}")
+        return matrices
+    logger.warning("No evaluation_matrix found under architecture folders in nxn_results/")
+    return matrices
 
 
 def load_evaluation_matrix(matrix_path: str) -> Optional[pd.DataFrame]:
@@ -403,7 +421,7 @@ def get_baseline_for_target(target_locale: str, source_locales: List[str], evalu
     """Calculate baseline data for a target locale given source locales."""
     baseline = BaselineData()
 
-    if target_locale not in evaluation_matrix.index:
+    if evaluation_matrix is None or target_locale not in evaluation_matrix.index:
         logger.warning(f"Target locale {target_locale} not found in evaluation matrix")
         return baseline
 
@@ -437,10 +455,20 @@ def get_baseline_for_target(target_locale: str, source_locales: List[str], evalu
 
 
 def aggregate_results(evaluation_matrix: Optional[pd.DataFrame] = None, results_dir: str = "results"):
-    """Aggregate results from all experiment folders with dynamic parsing."""
+    """Aggregate results from all experiment folders with dynamic parsing.
+
+    evaluation_matrix can be a single matrix (legacy) or a dict {model_family: DataFrame}.
+    """
     folders = get_experiment_folders(results_dir)
 
     data = []
+
+    # Normalize evaluation_matrix into a mapping for per-family lookups
+    evaluation_map: Dict[str, pd.DataFrame] = {}
+    if isinstance(evaluation_matrix, dict):
+        evaluation_map = evaluation_matrix
+    elif evaluation_matrix is not None:
+        evaluation_map["xlm-roberta-base"] = evaluation_matrix
 
     for folder in folders:
         folder_path = os.path.join(results_dir, folder)
@@ -493,6 +521,16 @@ def aggregate_results(evaluation_matrix: Optional[pd.DataFrame] = None, results_
                 except ValueError:
                     pass
 
+            # Choose evaluation matrix for this family (if available)
+            eval_matrix_for_family = None
+            if base_model:
+                for fam_key, mat in evaluation_map.items():
+                    if base_model in fam_key or fam_key in base_model:
+                        eval_matrix_for_family = mat
+                        break
+            else:
+                eval_matrix_for_family = evaluation_map.get("xlm-roberta-base") if evaluation_map else None
+
             experiment_variant = determine_experiment_variant(
                 metadata.merge_mode or metadata.experiment_type,
                 num_languages,
@@ -517,11 +555,11 @@ def aggregate_results(evaluation_matrix: Optional[pd.DataFrame] = None, results_
 
             # Calculate baseline data if evaluation matrix is available
             baseline_data = None
-            if evaluation_matrix is not None and metadata.source_languages:
+            if eval_matrix_for_family is not None and metadata.source_languages:
                 baseline_data = get_baseline_for_target(
                     locale,
                     metadata.source_languages,
-                    evaluation_matrix
+                    eval_matrix_for_family
                 )
 
             # Build the data row with similarity type
@@ -992,8 +1030,7 @@ def main():
                        help="Show missing/failed experiments")
     parser.add_argument("--nxn-results-dir", type=str, default="nxn_results",
                        help="Directory containing N-x-N evaluation results (default: nxn_results)")
-    parser.add_argument("--evaluation-matrix", type=str, default=None,
-                       help="Path to specific evaluation_matrix.csv file")
+    # NxN matrices are auto-discovered from nxn_results/<arch>/evaluation_matrix*.csv
     parser.add_argument("--no-baselines", action="store_true",
                        help="Skip baseline integration (for faster processing)")
     parser.add_argument("--locales", nargs="+", default=None,
@@ -1016,18 +1053,16 @@ def main():
     # Load evaluation matrix for baseline comparison
     evaluation_matrix = None
     if not args.no_baselines:
-        if args.evaluation_matrix:
-            matrix_path = args.evaluation_matrix
-            logger.info(f"Using specified evaluation matrix: {matrix_path}")
-        else:
-            matrix_path = find_evaluation_matrix(args.nxn_results_dir)
+        matrix_map: Dict[str, pd.DataFrame] = {}
+        matrix_paths = find_evaluation_matrices(args.nxn_results_dir)
+        for fam, path in matrix_paths.items():
+            mat = load_evaluation_matrix(path)
+            if mat is not None:
+                matrix_map[fam] = mat
 
-        if matrix_path:
-            evaluation_matrix = load_evaluation_matrix(matrix_path)
-            if evaluation_matrix is not None:
-                logger.info(f"Loaded evaluation matrix with {evaluation_matrix.shape[0]} locales")
-            else:
-                logger.warning("Failed to load evaluation matrix, proceeding without baseline integration")
+        if matrix_map:
+            evaluation_matrix = matrix_map
+            logger.info(f"Loaded evaluation matrices for families: {list(matrix_map.keys())}")
         else:
             logger.info("No evaluation matrix found, proceeding without baseline integration")
 

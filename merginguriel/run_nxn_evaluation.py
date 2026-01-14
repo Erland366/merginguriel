@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """
 NxN cross-lingual evaluation that evaluates each local language model against all other locales.
-Models are discovered under a local root (default: ./haryos_model) using the
-folder naming pattern: xlm-roberta-base_massive_k_{locale} (e.g., ..._fr-FR).
+Models are discovered under a local root (default: ./haryos_model) using an
+architecture-specific folder naming pattern like xlm-roberta-base_massive_k_{locale}
+or xlm-roberta-large_massive_k_{locale}.
 
-Outputs a cross-lingual accuracy matrix and summary stats.
+Outputs a cross-lingual accuracy matrix and summary stats under nxn_results/<arch>/.
 """
 
 import os
@@ -23,14 +24,13 @@ from tqdm import tqdm
 from merginguriel.evaluate_specific_model import evaluate_specific_model
 
 
-def discover_locales(models_root: str) -> list[str]:
+def discover_locales(models_root: str, prefix: str) -> list[str]:
     """Scan the models root for locale-named folders and return sorted MASSIVE locales."""
     root = Path(models_root)
     if not root.exists():
         logger.warning(f"Models root does not exist: {models_root}")
         return []
     locales = []
-    prefix = "xlm-roberta-base_massive_k_"
     for entry in root.iterdir():
         if entry.is_dir() and entry.name.startswith(prefix):
             locale = entry.name[len(prefix):]
@@ -38,11 +38,11 @@ def discover_locales(models_root: str) -> list[str]:
                 locales.append(locale)
     return sorted(locales)
 
-def get_local_models_for_locales(locales: list[str], models_root: str) -> dict:
+def get_local_models_for_locales(locales: list[str], models_root: str, prefix: str) -> dict:
     """Resolve local model paths under haryos_model for given locales."""
     result = {}
     for locale in locales:
-        model_path = os.path.join(models_root, f"xlm-roberta-base_massive_k_{locale}")
+        model_path = os.path.join(models_root, f"{prefix}{locale}")
         if os.path.isdir(model_path):
             result[locale] = {
                 "locale": locale,
@@ -115,26 +115,25 @@ def evaluate_single_model_target(model_info, target_locale, results_base_dir):
             'error': str(e)
         }
 
-def run_nxn_evaluation(models_root: str, locales=None, max_workers=4, results_dir="nxn_results"):
+def run_nxn_evaluation(models_root: str, prefix: str, arch: str, locales=None, max_workers=4, results_dir="nxn_results"):
     """Run NxN cross-lingual evaluation."""
 
     # Discover locales from disk and optionally filter
-    discovered = discover_locales(models_root)
+    discovered = discover_locales(models_root, prefix)
     if locales:
         all_locales = [loc for loc in discovered if loc in locales]
     else:
         all_locales = discovered
 
     # Resolve model directories
-    models = get_local_models_for_locales(all_locales, models_root)
+    models = get_local_models_for_locales(all_locales, models_root, prefix)
 
     print(f"Found {len(models)} models for {len(all_locales)} locales")
     print(f"Models: {list(models.keys())}")
     print(f"Target locales: {all_locales}")
 
-    # Create results directory
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    results_base_dir = os.path.join(results_dir, f"nxn_eval_{timestamp}")
+    # Create (or reuse) architecture-specific results directory (no timestamp, deterministic)
+    results_base_dir = os.path.join(results_dir, arch)
     os.makedirs(results_base_dir, exist_ok=True)
 
     # Prepare evaluation tasks
@@ -257,6 +256,10 @@ def main():
     parser = argparse.ArgumentParser(description="Run NxN cross-lingual evaluation (local models)")
     parser.add_argument("--models-root", type=str, default="haryos_model",
                        help="Root folder containing local models (default: haryos_model)")
+    parser.add_argument("--arch", type=str, default="xlm_roberta_base",
+                       help="Architecture name used for folder naming and output dir (e.g., xlm_roberta_base, xlm_roberta_large)")
+    parser.add_argument("--prefix", type=str, default="xlm-roberta-base_massive_k_",
+                       help="Model folder prefix (e.g., xlm-roberta-base_massive_k_ or xlm-roberta-large_massive_k_)")
     parser.add_argument("--locales", nargs="+", default=None,
                        help="Specific locales to evaluate (default: all locales)")
     parser.add_argument("--max-workers", type=int, default=1,
@@ -270,7 +273,7 @@ def main():
 
     # List locales if requested
     if args.list_locales:
-        locales = discover_locales(args.models_root)
+        locales = discover_locales(args.models_root, args.prefix)
         print("Available locales:")
         for i, locale in enumerate(locales):
             print(f"  {i:2d}. {locale}")
@@ -279,6 +282,8 @@ def main():
 
     print(f"Starting NxN cross-lingual evaluation...")
     print(f"Models root: {args.models_root}")
+    print(f"Architecture: {args.arch}")
+    print(f"Prefix: {args.prefix}")
     print(f"Max workers: {args.max_workers}")
     print(f"Results directory: {args.results_dir}")
     if args.locales:
@@ -287,6 +292,8 @@ def main():
     # Run evaluation
     results, results_dir = run_nxn_evaluation(
         models_root=args.models_root,
+        prefix=args.prefix,
+        arch=args.arch,
         locales=args.locales,
         max_workers=args.max_workers,
         results_dir=args.results_dir
