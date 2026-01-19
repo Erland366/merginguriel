@@ -109,16 +109,26 @@ class AblationRunner:
         """
         records = []
         configs = self.config.generate_configs()
-        locales = self.config.fixed.get("locales", [None])
 
-        if not isinstance(locales, list):
-            locales = [locales]
+        # Get locales from fixed config (if not in sweep)
+        fixed_locales = self.config.fixed.get("locales", None)
 
         for exp_config in configs:
+            # Locales can come from sweep (in exp_config) or from fixed
+            if "locales" in exp_config:
+                # Single locale from sweep
+                locales = [exp_config["locales"]]
+            elif fixed_locales:
+                # Multiple locales from fixed
+                locales = fixed_locales if isinstance(fixed_locales, list) else [fixed_locales]
+            else:
+                # Fallback: try locale (singular) from exp_config
+                locales = [exp_config.get("locale", "")]
+
             for locale in locales:
                 record = ExperimentRecord(
                     ablation_name=self.config.name,
-                    locale=locale or exp_config.get("locale", ""),
+                    locale=locale,
                     method=exp_config.get("method", "similarity"),
                     similarity_type=exp_config.get("similarity_type", "URIEL"),
                     num_languages=exp_config.get("num_languages", 3),
