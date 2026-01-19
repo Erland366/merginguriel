@@ -99,7 +99,51 @@ Invoke after completing experiments to capture learnings.
 
 ---
 
-## 6. Domain-Specific Notes
+## 6. MergingUriel Research Context
+
+### Research Goals
+
+MergingUriel investigates **cross-lingual model merging** for NLU tasks:
+
+1. **Beat zero-shot cross-lingual performance**: A merged model should outperform individual source language models evaluated directly on the target language.
+
+2. **Significantly improve over baseline**: The merged model should substantially beat the pretrained multilingual model (XLM-RoBERTa) without task-specific fine-tuning.
+
+### The Task: MASSIVE Intent Classification
+
+- **Dataset**: AmazonScience/massive (49 locales, 60 intent classes)
+- **Task**: Sequence classification (intent prediction from utterance)
+- **Metric**: Accuracy = correct_predictions / total_predictions
+
+### Evaluation Framework
+
+**Correct evaluation**: `evaluate_specific_model.py` (MASSIVE intent classification)
+**Proxy metric**: `evaluate_base_encoder.py` (STS-B correlation) — NOT the final metric
+
+**Baselines from NxN matrix** (`nxn_results/*/evaluation_matrix.csv`):
+- Zero-shot: Source model tested directly on target language
+- Best source: Highest-performing source model for target
+- Best overall: Best zero-shot across all source models
+
+### Success Criteria
+
+```
+merged_accuracy > max(source_accuracies_on_target)  # Beat best zero-shot
+merged_accuracy > pretrained_xlm_roberta_baseline   # Beat raw pretrained
+```
+
+### Key Entry Points
+
+| Script | Purpose |
+|--------|---------|
+| `run_merging_pipeline_refactored.py` | Merge models and evaluate |
+| `run_large_scale_experiment.py` | Run merging across all locales |
+| `run_large_scale_ensemble_experiments.py` | Ensemble inference experiments |
+| `run_large_scale_iterative_training.py` | Iterative training with merging |
+
+---
+
+## 7. Domain-Specific Notes
 
 - Focus on reproducibility: log all hyperparameters
 - Track dataset versions and preprocessing
@@ -107,7 +151,7 @@ Invoke after completing experiments to capture learnings.
 
 ---
 
-## 7. Conventions
+## 8. Conventions
 
 - **File naming:** lowercase with hyphens (e.g., `my-experiment.md`)
 - **Skill naming:** `{topic}-{finding}` (e.g., `lora-rank-optimal`)

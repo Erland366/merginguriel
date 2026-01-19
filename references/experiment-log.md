@@ -51,4 +51,78 @@ Each entry should include:
 
 ---
 
+## 2026-01-19 – Observation: Research Goals and Evaluation Framework
+
+**Type:** Observation
+**General description:** Clarified MergingUriel's research objectives and the correct evaluation metrics.
+
+### Research Goals
+
+MergingUriel's primary objectives:
+
+1. **Beat zero-shot cross-lingual performance**: A merged model should outperform individual source models evaluated directly on the target language (zero-shot transfer).
+
+2. **Significantly improve over baseline**: The merged model should substantially beat the pretrained XLM-RoBERTa without any fine-tuning.
+
+### The Actual Task: MASSIVE Intent Classification
+
+- **Dataset**: AmazonScience/massive (49 locales, 60 intent classes)
+- **Task**: Sequence classification (intent prediction)
+- **Metric**: Accuracy = correct_predictions / total_predictions
+- **Evaluation script**: `evaluate_specific_model.py`
+
+### Baselines to Compare Against
+
+1. **Zero-shot baseline**: Source language model evaluated on target language test set
+   - Example: `af-ZA` model tested on `th-TH` → 44% accuracy
+   - Stored in `nxn_results/*/evaluation_matrix.csv` (49×49 cross-lingual matrix)
+
+2. **Best source baseline**: Best-performing source model for target (from NxN matrix)
+   - For target `th-TH`: find max across all source models
+
+3. **Best overall baseline**: Highest zero-shot accuracy from any model (excluding self)
+
+### Current Pipeline Issue
+
+The `run_merging_pipeline_refactored.py` currently evaluates using `evaluate_base_encoder.py` which measures **STS-B Spearman correlation** (semantic similarity) — this is a proxy metric, NOT the actual task.
+
+**Wrong metric**: STS-B Spearman correlation (~0.55-0.58)
+**Correct metric**: MASSIVE intent classification accuracy (~0.40-0.90 depending on language pair)
+
+### How to Properly Evaluate
+
+```python
+# After merging, evaluate on MASSIVE intent classification:
+from merginguriel.evaluate_specific_model import evaluate_specific_model
+
+results = evaluate_specific_model(
+    model_name="path/to/merged_model",
+    locale="th-TH",  # Target locale
+    eval_folder="results/merging_similarity_URIEL_th-TH_xlm-roberta-base_3lang_ExcTar"
+)
+
+# Compare results["performance"]["accuracy"] against:
+# 1. Zero-shot baseline from evaluation_matrix.csv
+# 2. Best source model accuracy
+# 3. Pretrained XLM-RoBERTa baseline
+```
+
+### Success Criteria
+
+For merged model targeting `th-TH`:
+- `merged_accuracy > avg(source_accuracies_on_th)` → beats average zero-shot
+- `merged_accuracy > max(source_accuracies_on_th)` → beats best zero-shot
+- `merged_accuracy > pretrained_baseline` → beats raw pretrained model
+
+### Key Files
+
+| File | Purpose |
+|------|---------|
+| `evaluate_specific_model.py` | Correct evaluation (MASSIVE intent classification) |
+| `evaluate_base_encoder.py` | Proxy metric (STS-B, not recommended for final eval) |
+| `nxn_results/*/evaluation_matrix.csv` | Pre-computed baselines (49×49 accuracy matrix) |
+| `run_nxn_evaluation.py` | Generate cross-lingual evaluation matrix |
+
+---
+
 <!-- New entries go above this line -->
