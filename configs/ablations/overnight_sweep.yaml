@@ -1,0 +1,29 @@
+# Overnight ablation sweep
+# Tests: URIEL vs REAL × IncTar vs ExcTar × diverse locales
+# Expected: ~24 experiments (2 similarity × 2 include_target × 6 locales)
+
+ablation:
+  name: "overnight_sweep_20260119"
+  description: "Compare URIEL vs REAL, IncTar vs ExcTar across diverse locales"
+
+  fixed:
+    method: "similarity"
+    num_languages: 3
+    model_family: "xlm-roberta-base"
+    models_root: "haryos_model"
+    merged_models_dir: "merged_models"
+    # Diverse locales: low-resource, different language families
+    locales:
+      - "sq-AL"   # Albanian (Indo-European, Balkan)
+      - "vi-VN"   # Vietnamese (Austroasiatic)
+      - "sw-KE"   # Swahili (Niger-Congo)
+      - "th-TH"   # Thai (Kra-Dai)
+      - "fi-FI"   # Finnish (Uralic)
+      - "tr-TR"   # Turkish (Turkic)
+
+  sweep:
+    similarity_type: ["URIEL", "REAL"]
+    include_target: [false, true]  # ExcTar vs IncTar
+
+  db_path: "experiments_overnight.db"
+  resume: true
