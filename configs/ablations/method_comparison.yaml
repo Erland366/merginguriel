@@ -1,0 +1,34 @@
+# Ablation: Compare different merging methods
+#
+# Purpose: Determine which merging method performs best
+#
+# Expected runs: 3 locales × 4 methods = 12 runs
+
+ablation:
+  name: "method_comparison_ablation"
+  description: "Compare similarity, average, fisher, and ties merging methods"
+
+  # Fixed parameters
+  fixed:
+    similarity_type: "URIEL"
+    num_languages: 3
+    include_target: false
+    model_family: "xlm-roberta-base"
+    models_root: "haryos_model"
+    cleanup_after_eval: false
+    locales:
+      - "sq-AL"
+      - "vi-VN"
+      - "sw-KE"
+
+  # Parameters to sweep
+  sweep:
+    method:
+      - "similarity"
+      - "average"
+      - "fisher"
+      - "ties"
+
+  results_base_dir: "results_ablation_methods"
+  db_path: "experiments.db"
+  resume: true
