@@ -18,6 +18,12 @@ if SUBMODULES_DIR not in sys.path:
 
 from auto_merge_llm.methods import merging_methods_dict
 from merginguriel.naming_config import naming_manager
+from merginguriel.config import (
+    MergingExperimentConfig,
+    ConfigLoader,
+    TrackProvidedArgsAction,
+    MERGING_EXPERIMENT_ARG_MAP,
+)
 
 def get_all_locales_from_similarity_matrix(similarity_type="URIEL"):
     """Extract all unique locales from the similarity matrix."""
@@ -370,16 +376,86 @@ def run_experiment_for_locale(
 
     return results
 
+def create_config_from_args(args) -> MergingExperimentConfig:
+    """Create a MergingExperimentConfig from parsed CLI arguments."""
+    from merginguriel.config import (
+        SimilarityConfig,
+        TargetConfig,
+        ModelConfig,
+        DatasetConfig,
+        FisherConfig,
+        OutputConfig,
+    )
+
+    # Determine target inclusion
+    inclusion = args.target_inclusion or "ExcTar"
+    if inclusion in ("include", "IncTar"):
+        inclusion = "IncTar"
+    elif inclusion in ("exclude", "ExcTar"):
+        inclusion = "ExcTar"
+
+    return MergingExperimentConfig(
+        locales=args.locales,
+        modes=args.modes,
+        similarity=SimilarityConfig(
+            type=args.similarity_type,
+            source=args.similarity_source,
+            top_k=args.top_k,
+            sinkhorn_iters=args.sinkhorn_iters,
+        ),
+        target=TargetConfig(
+            locale="",  # Will be set per-locale in run_experiment_for_locale
+            inclusion=inclusion,
+        ),
+        model=ModelConfig(
+            base_model="xlm-roberta-base",  # Detected from models_root
+            models_root=args.models_root,
+            num_languages=args.num_languages,
+        ),
+        dataset=DatasetConfig(
+            name=args.dataset_name,
+            split=args.dataset_split,
+            text_column=args.text_column,
+        ),
+        fisher=FisherConfig(
+            data_mode=args.fisher_data_mode,
+            preweight=args.preweight,
+            num_examples=args.num_fisher_examples,
+            batch_size=args.batch_size,
+            max_seq_length=args.max_seq_length,
+        ),
+        output=OutputConfig(
+            results_dir=args.results_dir,
+            merged_models_dir=args.merged_models_dir,
+            cleanup_after_eval=args.cleanup_after_eval,
+        ),
+        preset=args.preset,
+        resume=args.resume,
+        start_from=args.start_from,
+        max_locales=args.max_locales,
+    )
+
+
 def main():
     parser = argparse.ArgumentParser(description="Run large-scale merging experiments")
+
+    # Config file argument (new, preferred)
+    parser.add_argument("--config", type=Path, default=None,
+                       help="Path to YAML config file. When provided, CLI args override config values with deprecation warnings.")
+
+    # Experiment control arguments
     parser.add_argument("--locales", nargs="+", default=None,
+                       action=TrackProvidedArgsAction,
                        help="Specific locales to run (default: all locales)")
     parser.add_argument("--modes", nargs="+",
                        default=["baseline", "similarity", "average", "fisher", "ties", "task_arithmetic", "slerp", "regmean"],
+                       action=TrackProvidedArgsAction,
                        help="Which modes to run per locale (include 'baseline' to evaluate base model)")
     parser.add_argument("--start-from", type=int, default=0,
+                       action=TrackProvidedArgsAction,
                        help="Start from specific locale index (for resuming)")
     parser.add_argument("--max-locales", type=int, default=None,
+                       action=TrackProvidedArgsAction,
                        help="Maximum number of locales to process")
     parser.add_argument("--list-locales", action="store_true",
                        help="List all available locales and exit")
@@ -388,55 +464,125 @@ def main():
 
     # Pass-through options for run_merging_pipeline_refactored.py
     parser.add_argument("--num-languages", type=int, default=5,
+                       action=TrackProvidedArgsAction,
                        help="Top-K languages to include in merges that auto-select sources")
     parser.add_argument("--similarity-source", type=str, choices=["sparse","dense"], default="dense",
+                       action=TrackProvidedArgsAction,
                        help="Use precomputed sparse CSV or compute dense similarities on-the-fly")
     parser.add_argument("--similarity-type", type=str, choices=["URIEL","REAL"], default="URIEL",
+                       action=TrackProvidedArgsAction,
                        help="Type of similarity matrix to use: URIEL (linguistic features) or REAL (empirical evaluation results)")
     parser.add_argument("--target-inclusion", type=str,
                        choices=["IncTar", "ExcTar", "include", "exclude", "both"],
                        default=None,
+                       action=TrackProvidedArgsAction,
                        help="Target inclusion mode: IncTar (include target), ExcTar (exclude target), or both (default).")
     parser.add_argument("--include-target", action="store_true", dest="legacy_include_target",
                        help="Deprecated alias for --target-inclusion IncTar.")
     parser.add_argument("--exclude-target", action="store_true", dest="legacy_exclude_target",
                        help="Deprecated alias for --target-inclusion ExcTar.")
     parser.add_argument("--top-k", type=int, default=20,
+                       action=TrackProvidedArgsAction,
                        help="Top-K neighbors per language for on-the-fly similarity")
     parser.add_argument("--sinkhorn-iters", type=int, default=20,
+                       action=TrackProvidedArgsAction,
                        help="Sinkhorn iterations for on-the-fly similarity")
     parser.add_argument("--dataset-name", type=str, default="AmazonScience/massive",
+                       action=TrackProvidedArgsAction,
                        help="Dataset name for dataset-enabled Fisher")
     parser.add_argument("--dataset-split", type=str, default="train",
+                       action=TrackProvidedArgsAction,
                        help="Dataset split for Fisher ('train' or 'validation')")
     parser.add_argument("--text-column", type=str, default="utt",
+                       action=TrackProvidedArgsAction,
                        help="Text column to use (MASSIVE uses 'utt')")
     parser.add_argument("--num-fisher-examples", type=int, default=1000,
+                       action=TrackProvidedArgsAction,
                        help="Total examples for Fisher computation")
     parser.add_argument("--fisher-data-mode", type=str, choices=["target","sources","both"], default="target",
+                       action=TrackProvidedArgsAction,
                        help="Distribution to compute Fisher on")
     parser.add_argument("--preweight", type=str, choices=["equal","uriel"], default="equal",
+                       action=TrackProvidedArgsAction,
                        help="Pre-weighting for models before Fisher")
     parser.add_argument("--batch-size", type=int, default=16,
+                       action=TrackProvidedArgsAction,
                        help="Batch size for Fisher computation")
     parser.add_argument("--max-seq-length", type=int, default=128,
+                       action=TrackProvidedArgsAction,
                        help="Max sequence length for Fisher tokenization")
     parser.add_argument("--preset", type=str, choices=["none", "fairness", "target"], default="none",
-                        help="Convenience presets for Fisher config: fairness = sources-only + equal preweights; target = target-only + URIEL preweights")
+                       action=TrackProvidedArgsAction,
+                       help="Convenience presets for Fisher config: fairness = sources-only + equal preweights; target = target-only + URIEL preweights")
     parser.add_argument("--cleanup-after-eval", action="store_true",
                        help="Delete merged model files after evaluation to save storage space")
     parser.add_argument("--models-root", type=str, default="haryos_model",
+                       action=TrackProvidedArgsAction,
                        help="Root directory containing models (default: haryos_model)")
     parser.add_argument("--results-dir", type=str, default="results",
+                       action=TrackProvidedArgsAction,
                        help="Directory for experiment results (default: results)")
     parser.add_argument("--merged-models-dir", type=str, default="merged_models",
+                       action=TrackProvidedArgsAction,
                        help="Directory for merged models (default: merged_models)")
     parser.add_argument("--resume", action=argparse.BooleanOptionalAction, default=True,
                         help="Reuse existing merged models and results when present (default: enabled). Use --no-resume to force reruns.")
 
     args = parser.parse_args()
+
+    # Load config from file or create from CLI args
+    if args.config is not None:
+        print(f"Loading config from: {args.config}")
+        config = MergingExperimentConfig.from_yaml(args.config)
+
+        # Extended arg map for large-scale experiment specific args
+        extended_arg_map = {
+            **MERGING_EXPERIMENT_ARG_MAP,
+            "locales": "locales",
+            "modes": "modes",
+            "start_from": "start_from",
+            "max_locales": "max_locales",
+            "preset": "preset",
+            "resume": "resume",
+        }
+
+        # Merge CLI args with deprecation warnings
+        config = ConfigLoader.merge_cli_args(config, args, emit_warnings=True, arg_to_config_map=extended_arg_map)
+    else:
+        # Legacy path: create config from CLI args (no warnings)
+        config = create_config_from_args(args)
     
-    all_locales = get_all_locales_from_similarity_matrix(args.similarity_type)
+    # Handle legacy target inclusion flags (only relevant when not using config file)
+    if args.config is None:
+        if args.target_inclusion is None:
+            if args.legacy_include_target and args.legacy_exclude_target:
+                parser.error("Cannot specify both --include-target and --exclude-target.")
+            if args.legacy_include_target:
+                config.target.inclusion = "IncTar"
+            elif args.legacy_exclude_target:
+                config.target.inclusion = "ExcTar"
+            else:
+                config.target.inclusion = "both"
+        else:
+            if args.legacy_include_target or args.legacy_exclude_target:
+                parser.error("Do not mix --target-inclusion with legacy include/exclude flags.")
+            config.target.inclusion = args.target_inclusion
+
+    # Apply preset defaults if requested
+    argv = sys.argv[1:]
+    if config.preset != "none":
+        if config.preset == "fairness":
+            if "--fisher-data-mode" not in argv:
+                config.fisher.data_mode = "sources"
+            if "--preweight" not in argv:
+                config.fisher.preweight = "equal"
+        elif config.preset == "target":
+            if "--fisher-data-mode" not in argv:
+                config.fisher.data_mode = "target"
+            if "--preweight" not in argv:
+                config.fisher.preweight = "uriel"
+
+    all_locales = get_all_locales_from_similarity_matrix(config.similarity.type)
 
     if args.list_modes:
         if merging_methods_dict:
@@ -453,44 +599,31 @@ def main():
             print(f"  {i:2d}. {locale}")
         print(f"\nTotal: {len(all_locales)} locales")
         return
-    
+
     # Filter locales
-    if args.locales:
-        locales = [loc for loc in all_locales if loc in args.locales]
+    if config.locales:
+        locales = [loc for loc in all_locales if loc in config.locales]
     else:
         locales = all_locales
-    
+
     # Apply start index and max limit
-    if args.start_from > 0:
-        locales = locales[args.start_from:]
-    if args.max_locales:
-        locales = locales[:args.max_locales]
-    
+    if config.start_from > 0:
+        locales = locales[config.start_from:]
+    if config.max_locales:
+        locales = locales[:config.max_locales]
+
     print(f"Starting experiment for {len(locales)} locales")
-    print(f"Similarity Type: {args.similarity_type}")
-    print(f"Model Root: {args.models_root}")
-    print(f"Cleanup After Eval: {args.cleanup_after_eval}")
-    print(f"Resume Using Existing Outputs: {args.resume}")
-    print(f"Modes: {args.modes}")
-    print(f"Start from index: {args.start_from}")
-    
+    print(f"Similarity Type: {config.similarity.type}")
+    print(f"Model Root: {config.model.models_root}")
+    print(f"Cleanup After Eval: {config.output.cleanup_after_eval}")
+    print(f"Resume Using Existing Outputs: {config.resume}")
+    print(f"Modes: {config.modes}")
+    print(f"Start from index: {config.start_from}")
+
     # Track overall results
     overall_results = {}
 
     # Resolve target inclusion modes
-    if args.target_inclusion is None:
-        if args.legacy_include_target and args.legacy_exclude_target:
-            parser.error("Cannot specify both --include-target and --exclude-target.")
-        if args.legacy_include_target:
-            args.target_inclusion = "IncTar"
-        elif args.legacy_exclude_target:
-            args.target_inclusion = "ExcTar"
-        else:
-            args.target_inclusion = "both"
-    else:
-        if args.legacy_include_target or args.legacy_exclude_target:
-            parser.error("Do not mix --target-inclusion with legacy include/exclude flags.")
-
     inclusion_map = {
         "IncTar": [True],
         "include": [True],
@@ -498,38 +631,24 @@ def main():
         "exclude": [False],
         "both": [False, True]
     }
-    include_target_modes = inclusion_map[args.target_inclusion]
-    
-    # Apply preset defaults if requested (explicit CLI flags override presets)
-    argv = sys.argv[1:]
-    if args.preset != "none":
-        if args.preset == "fairness":
-            if "--fisher-data-mode" not in argv:
-                args.fisher_data_mode = "sources"
-            if "--preweight" not in argv:
-                args.preweight = "equal"
-        elif args.preset == "target":
-            if "--fisher-data-mode" not in argv:
-                args.fisher_data_mode = "target"
-            if "--preweight" not in argv:
-                args.preweight = "uriel"
+    include_target_modes = inclusion_map.get(config.target.inclusion, [False])
 
-    # Build pass-through args once
+    # Build pass-through args once (for subprocess calls)
     merge_extra_args = [
-        "--num-languages", str(args.num_languages),
-        "--similarity-source", args.similarity_source,
-        "--similarity-type", args.similarity_type,
-        "--top-k", str(args.top_k),
-        "--sinkhorn-iters", str(args.sinkhorn_iters),
-        "--dataset-name", args.dataset_name,
-        "--dataset-split", args.dataset_split,
-        "--text-column", args.text_column,
-        "--num-fisher-examples", str(args.num_fisher_examples),
-        "--fisher-data-mode", args.fisher_data_mode,
-        "--preweight", args.preweight,
-        "--batch-size", str(args.batch_size),
-        "--max-seq-length", str(args.max_seq_length),
-        "--base-model-dir", str(Path(REPO_ROOT) / args.models_root),
+        "--num-languages", str(config.model.num_languages),
+        "--similarity-source", config.similarity.source,
+        "--similarity-type", config.similarity.type,
+        "--top-k", str(config.similarity.top_k),
+        "--sinkhorn-iters", str(config.similarity.sinkhorn_iters),
+        "--dataset-name", config.dataset.name,
+        "--dataset-split", config.dataset.split,
+        "--text-column", config.dataset.text_column,
+        "--num-fisher-examples", str(config.fisher.num_examples),
+        "--fisher-data-mode", config.fisher.data_mode,
+        "--preweight", config.fisher.preweight,
+        "--batch-size", str(config.fisher.batch_size),
+        "--max-seq-length", str(config.fisher.max_seq_length),
+        "--base-model-dir", str(Path(REPO_ROOT) / config.model.models_root),
     ]
 
     # Remove None values (for conditional args like --include-target)
@@ -539,42 +658,42 @@ def main():
         print(f"\nProcessing locale {i+1}/{len(locales)}: {locale}")
         results = run_experiment_for_locale(
             locale,
-            args.modes,
+            config.modes,
             merge_extra_args,
             include_target_modes,
-            args.cleanup_after_eval,
-            args.models_root,
-            args.similarity_type,
-            args.num_languages,
-            args.merged_models_dir,
-            args.results_dir,
-            args.resume,
+            config.output.cleanup_after_eval,
+            config.model.models_root,
+            config.similarity.type,
+            config.model.num_languages,
+            config.output.merged_models_dir,
+            config.output.results_dir,
+            config.resume,
         )
-        
+
         overall_results[locale] = results
-        
+
         # Save progress after each locale
-        results_dir_full = os.path.join(REPO_ROOT, args.results_dir)
+        results_dir_full = os.path.join(REPO_ROOT, config.output.results_dir)
         os.makedirs(results_dir_full, exist_ok=True)
-        progress_file = os.path.join(REPO_ROOT, f"{args.results_dir}_progress.json")
+        progress_file = os.path.join(REPO_ROOT, f"{config.output.results_dir}_progress.json")
         with open(progress_file, 'w') as f:
             json.dump({
                 'timestamp': datetime.now().isoformat(),
                 'total_locales': len(all_locales),
                 'processed_locales': i + 1,
                 'current_locale': locale,
-                'similarity_type': args.similarity_type,
-                'models_root': args.models_root,
-                'cleanup_after_eval': args.cleanup_after_eval,
+                'similarity_type': config.similarity.type,
+                'models_root': config.model.models_root,
+                'cleanup_after_eval': config.output.cleanup_after_eval,
                 'results': overall_results
             }, f, indent=2)
-        
+
         print(f"Progress saved to {progress_file}")
-    
+
     print(f"\n{'='*60}")
     print("Experiment completed!")
     print(f"{'='*60}")
-    
+
     # Summary
     total_locales = len(overall_results)
     print(f"Total locales processed: {len(overall_results)}")
@@ -589,36 +708,20 @@ def main():
         print("Successful runs per mode:")
         for mode, cnt in sorted(mode_success_counts.items()):
             print(f"  - {mode}: {cnt}")
-    
-    # Save final results
-    final_results_file = os.path.join(REPO_ROOT, f"{args.results_dir}_final_results.json")
+
+    # Save final results with config as dict
+    final_results_file = os.path.join(REPO_ROOT, f"{config.output.results_dir}_final_results.json")
     with open(final_results_file, 'w') as f:
         json.dump({
             'timestamp': datetime.now().isoformat(),
-            'config': {
-                'modes': args.modes,
-                'start_from': args.start_from,
-                'max_locales': args.max_locales,
-                'num_languages': args.num_languages,
-                'similarity_type': args.similarity_type,
-                'models_root': args.models_root,
-                'cleanup_after_eval': args.cleanup_after_eval,
-                'dataset_name': args.dataset_name,
-                'dataset_split': args.dataset_split,
-                'text_column': args.text_column,
-                'num_fisher_examples': args.num_fisher_examples,
-                'fisher_data_mode': args.fisher_data_mode,
-                'preweight': args.preweight,
-                'batch_size': args.batch_size,
-                'max_seq_length': args.max_seq_length,
-            },
+            'config': config.to_dict(),
             'summary': {
                 'total_locales': len(overall_results),
                 'mode_success_counts': mode_success_counts
             },
             'detailed_results': overall_results
         }, f, indent=2)
-    
+
     print(f"Final results saved to {final_results_file}")
 
 if __name__ == "__main__":

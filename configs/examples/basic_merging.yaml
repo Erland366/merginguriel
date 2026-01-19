@@ -1,0 +1,46 @@
+# Basic Merging Experiment Configuration
+#
+# This config runs a single locale merging experiment with common methods.
+# Usage: python merginguriel/run_merging_pipeline_refactored.py --config configs/examples/basic_merging.yaml
+
+# Target language configuration
+target:
+  locale: "sq-AL"     # Albanian locale
+  inclusion: "ExcTar" # Exclude target from source models (standard mode)
+
+# Merging method to use
+mode: "similarity"    # Options: baseline, similarity, average, fisher, ties, task_arithmetic, slerp, regmean
+
+# Similarity configuration
+similarity:
+  type: "URIEL"       # URIEL (linguistic features) or REAL (empirical evaluation)
+  source: "dense"     # dense (on-the-fly) or sparse (precomputed)
+  top_k: 20           # Top-K languages for normalization
+  sinkhorn_iters: 20  # Sinkhorn normalization iterations
+
+# Model configuration
+model:
+  base_model: "xlm-roberta-base"  # Base model architecture
+  models_root: "haryos_model"     # Directory with fine-tuned models
+  num_languages: 5                # Number of source languages to merge
+
+# Dataset configuration (for Fisher methods)
+dataset:
+  name: "AmazonScience/massive"
+  split: "train"
+  text_column: "utt"
+  label_column: "label"
+
+# Fisher configuration (used when mode contains "fisher")
+fisher:
+  data_mode: "target"    # target, sources, or both
+  preweight: "equal"     # equal or uriel
+  num_examples: 1000
+  batch_size: 16
+  max_seq_length: 128
+
+# Output configuration
+output:
+  results_dir: "results"
+  merged_models_dir: "merged_models"
+  cleanup_after_eval: false

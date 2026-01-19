@@ -1,0 +1,53 @@
+# Ensemble Inference Experiment Configuration
+#
+# This config runs ensemble inference with multiple voting methods.
+# Usage: python merginguriel/run_large_scale_ensemble_experiments.py --config configs/examples/ensemble_experiment.yaml
+
+# Target languages (null = all available)
+target_languages: null
+
+# Or specify specific locales:
+# target_languages:
+#   - "sq-AL"
+#   - "th-TH"
+#   - "af-ZA"
+#   - "jv-ID"
+
+# Voting methods to evaluate
+voting_methods:
+  - majority           # Simple majority voting
+  - weighted_majority  # URIEL-weighted majority
+  - soft               # Soft voting (probability averaging)
+  - uriel_logits       # URIEL-weighted logit averaging
+
+# Target configuration
+target:
+  inclusion: "ExcTar"  # Exclude target from ensemble
+
+# Similarity configuration
+similarity:
+  type: "URIEL"
+  source: "dense"
+  top_k: 20
+  sinkhorn_iters: 20
+
+# Model configuration
+model:
+  base_model: "xlm-roberta-base"
+  models_root: "haryos_model"
+  num_languages: 5
+
+# Output configuration
+output:
+  results_dir: "results"
+  merged_models_dir: "merged_models"
+  cleanup_after_eval: false
+
+# Ensemble-specific settings
+num_examples: null            # null = use all test examples
+ensemble_output_dir: "urie_ensemble_results"
+
+# Experiment control
+resume: true
+start_from: 0
+max_locales: null

@@ -50,6 +50,21 @@ from merginguriel.similarity_utils import load_and_process_similarity
 # Import centralized naming system
 from merginguriel.naming_config import naming_manager
 
+# Import config system
+from merginguriel.config import (
+    IterativeExperimentConfig,
+    SimilarityConfig,
+    TargetConfig,
+    ModelConfig,
+    DatasetConfig,
+    OutputConfig,
+    TrainingConfig,
+    MergeConfig as MergeConfigBase,
+    ConfigLoader,
+    TrackProvidedArgsAction,
+    ITERATIVE_EXPERIMENT_ARG_MAP,
+)
+
 # Loguru logger imported from merginguriel package
 
 
@@ -651,19 +666,79 @@ def run_experiment_for_locale(
     return results
 
 
+def create_config_from_args(args) -> IterativeExperimentConfig:
+    """Create an IterativeExperimentConfig from parsed CLI arguments."""
+    # Determine target inclusion
+    inclusion = args.target_inclusion or "ExcTar"
+    if inclusion in ("include", "IncTar"):
+        inclusion = "IncTar"
+    elif inclusion in ("exclude", "ExcTar"):
+        inclusion = "ExcTar"
+
+    return IterativeExperimentConfig(
+        target_languages=args.target_languages,
+        mode=args.mode,
+        similarity=SimilarityConfig(
+            type=args.similarity_type,
+            top_k=args.top_k,
+            sinkhorn_iters=args.sinkhorn_iters,
+        ),
+        target=TargetConfig(
+            locale="",  # Will be set per-locale
+            inclusion=inclusion,
+        ),
+        model=ModelConfig(
+            models_root=args.models_root,
+            num_languages=args.max_models,
+        ),
+        output=OutputConfig(
+            results_dir=args.results_dir,
+        ),
+        training=TrainingConfig(
+            epochs=args.epochs,
+            learning_rate=args.learning_rate,
+            batch_size=args.batch_size,
+            max_seq_length=args.max_seq_length,
+            bf16=args.bf16,
+        ),
+        merge=MergeConfigBase(
+            frequency=args.merge_frequency,
+        ),
+        sequential_training=args.sequential_training,
+        enable_wandb=args.enable_wandb,
+        wandb_mode="online" if args.enable_wandb else "disabled",
+        resume=args.resume,
+        start_from=args.start_from,
+        max_locales=args.max_locales,
+        max_models=args.max_models,
+        timeout_hours=args.timeout_hours,
+        cleanup_intermediate=args.cleanup_intermediate,
+    )
+
+
 def main():
     parser = argparse.ArgumentParser(description="Run large-scale iterative training experiments")
+
+    # Config file argument (new, preferred)
+    parser.add_argument("--config", type=Path, default=None,
+                       help="Path to YAML config file. When provided, CLI args override config values with deprecation warnings.")
+
     parser.add_argument("--target-languages", nargs="+", default=None,
+                       action=TrackProvidedArgsAction,
                        help="Specific target languages to run (default: all available locales)")
     parser.add_argument("--mode", type=str, default="similarity",
                        choices=["similarity", "average", "fisher", "fisher_simple", "fisher_dataset",
                                "ties", "task_arithmetic", "slerp", "regmean"],
+                       action=TrackProvidedArgsAction,
                        help="Iterative training mode to use")
     parser.add_argument("--start-from", type=int, default=0,
+                       action=TrackProvidedArgsAction,
                        help="Start from specific locale index (for resuming)")
     parser.add_argument("--max-locales", type=int, default=None,
+                       action=TrackProvidedArgsAction,
                        help="Maximum number of locales to process")
     parser.add_argument("--max-models", type=int, default=5,
+                       action=TrackProvidedArgsAction,
                        help="Maximum number of source models to include in training")
     parser.add_argument("--list-locales", action="store_true",
                        help="List all available locales and exit")
@@ -672,52 +747,103 @@ def main():
 
     # Pass-through options for run_iterative_training.py
     parser.add_argument("--epochs", type=int, default=15,
+                       action=TrackProvidedArgsAction,
                        help="Number of training epochs")
     parser.add_argument("--learning-rate", type=float, default=5e-5,
+                       action=TrackProvidedArgsAction,
                        help="Learning rate")
     parser.add_argument("--batch-size", type=int, default=128,
+                       action=TrackProvidedArgsAction,
                        help="Training batch size")
     parser.add_argument("--max-seq-length", type=int, default=128,
+                       action=TrackProvidedArgsAction,
                        help="Maximum sequence length")
     parser.add_argument("--merge-frequency", type=int, default=3,
+                       action=TrackProvidedArgsAction,
                        help="Number of epochs between merges")
     parser.add_argument("--bf16", action="store_true", default=True,
                        help="Use bf16 precision for training (default: enabled)")
     parser.add_argument("--enable-wandb", action="store_true",
                        help="Enable Weights & Biases logging")
     parser.add_argument("--output-dir", type=str, default="iterative_large_scale_results",
+                       action=TrackProvidedArgsAction,
                        help="Base output directory for all results")
     parser.add_argument("--top-k", type=int, default=20,
+                       action=TrackProvidedArgsAction,
                        help="Number of top similar languages to consider")
     parser.add_argument("--sinkhorn-iters", type=int, default=20,
+                       action=TrackProvidedArgsAction,
                        help="Number of Sinkhorn normalization iterations")
     parser.add_argument("--timeout-hours", type=float, default=12.0,
+                       action=TrackProvidedArgsAction,
                        help="Maximum hours to wait per locale")
     parser.add_argument("--sequential-training", action="store_true", default=True,
                        help="Train models sequentially to prevent OOM")
 
     # Additional options for consistency with merging/ensemble experiments
     parser.add_argument("--similarity-type", type=str, choices=["URIEL","REAL"], default="URIEL",
+                       action=TrackProvidedArgsAction,
                        help="Type of similarity matrix to use: URIEL (linguistic features) or REAL (empirical evaluation results)")
     parser.add_argument("--target-inclusion", type=str,
                        choices=["IncTar", "ExcTar", "include", "exclude", "both"],
                        default=None,
+                       action=TrackProvidedArgsAction,
                        help="Target inclusion mode for iterative training. Default runs both variants.")
     parser.add_argument("--include-target", action="store_true", dest="legacy_include_target",
                        help="Deprecated alias for --target-inclusion IncTar.")
     parser.add_argument("--exclude-target", action="store_true", dest="legacy_exclude_target",
                        help="Deprecated alias for --target-inclusion ExcTar.")
     parser.add_argument("--models-root", type=str, default="haryos_model",
+                       action=TrackProvidedArgsAction,
                        help="Root directory containing models (default: haryos_model)")
     parser.add_argument("--results-dir", type=str, default="results",
+                       action=TrackProvidedArgsAction,
                        help="Directory for experiment results (default: results)")
     parser.add_argument("--resume", action=argparse.BooleanOptionalAction, default=True,
                        help="Reuse existing results when present (default: enabled). Use --no-resume to force rerun.")
 
     args = parser.parse_args()
 
+    # Load config from file or create from CLI args
+    if args.config is not None:
+        logger.info(f"Loading config from: {args.config}")
+        config = IterativeExperimentConfig.from_yaml(args.config)
+
+        # Extended arg map for iterative experiment specific args
+        extended_arg_map = {
+            **ITERATIVE_EXPERIMENT_ARG_MAP,
+            "target_languages": "target_languages",
+            "mode": "mode",
+            "start_from": "start_from",
+            "max_locales": "max_locales",
+            "max_models": "max_models",
+            "output_dir": "output.results_dir",
+        }
+
+        # Merge CLI args with deprecation warnings
+        config = ConfigLoader.merge_cli_args(config, args, emit_warnings=True, arg_to_config_map=extended_arg_map)
+    else:
+        # Legacy path: create config from CLI args (no warnings)
+        config = create_config_from_args(args)
+
+    # Handle legacy target inclusion flags (only relevant when not using config file)
+    if args.config is None:
+        if args.target_inclusion is None:
+            if args.legacy_include_target and args.legacy_exclude_target:
+                parser.error("Cannot specify both --include-target and --exclude-target.")
+            if args.legacy_include_target:
+                config.target.inclusion = "IncTar"
+            elif args.legacy_exclude_target:
+                config.target.inclusion = "ExcTar"
+            else:
+                config.target.inclusion = "both"
+        else:
+            if args.legacy_include_target or args.legacy_exclude_target:
+                parser.error("Do not mix --target-inclusion with legacy include/exclude flags.")
+            config.target.inclusion = args.target_inclusion
+
     # Get all available locales (those with models)
-    available_locales = get_available_locales(args.models_root)
+    available_locales = get_available_locales(config.model.models_root)
 
     if args.list_locales:
         print("Available locales (with models):")
@@ -727,42 +853,30 @@ def main():
         return
 
     # Filter locales
-    if args.target_languages:
-        locales = [loc for loc in available_locales if loc in args.target_languages]
+    if config.target_languages:
+        locales = [loc for loc in available_locales if loc in config.target_languages]
     else:
         locales = available_locales
 
     # Apply start index and max limit
-    if args.start_from > 0:
-        locales = locales[args.start_from:]
-    if args.max_locales:
-        locales = locales[:args.max_locales]
+    if config.start_from > 0:
+        locales = locales[config.start_from:]
+    if config.max_locales:
+        locales = locales[:config.max_locales]
 
     logger.info(f"Starting large-scale iterative training experiment for {len(locales)} locales")
-    logger.info(f"Mode: {args.mode}")
-    logger.info(f"Similarity Type: {args.similarity_type}")
-    logger.info(f"Model Root: {args.models_root}")
-    logger.info(f"Start from index: {args.start_from}")
-    logger.info(f"Max models per locale: {args.max_models}")
-    logger.info(f"Results directory: {args.results_dir}")
-    logger.info(f"Resume using existing outputs: {args.resume}")
+    logger.info(f"Mode: {config.mode}")
+    logger.info(f"Similarity Type: {config.similarity.type}")
+    logger.info(f"Model Root: {config.model.models_root}")
+    logger.info(f"Start from index: {config.start_from}")
+    logger.info(f"Max models per locale: {config.max_models}")
+    logger.info(f"Results directory: {config.output.results_dir}")
+    logger.info(f"Resume using existing outputs: {config.resume}")
 
     # Track overall results
     overall_results = {}
 
-    if args.target_inclusion is None:
-        if args.legacy_include_target and args.legacy_exclude_target:
-            parser.error("Cannot specify both --include-target and --exclude-target.")
-        if args.legacy_include_target:
-            args.target_inclusion = "IncTar"
-        elif args.legacy_exclude_target:
-            args.target_inclusion = "ExcTar"
-        else:
-            args.target_inclusion = "both"
-    else:
-        if args.legacy_include_target or args.legacy_exclude_target:
-            parser.error("Do not mix --target-inclusion with legacy include/exclude flags.")
-
+    # Resolve target inclusion modes
     inclusion_map = {
         "IncTar": [True],
         "include": [True],
@@ -770,23 +884,22 @@ def main():
         "exclude": [False],
         "both": [False, True]
     }
-    include_target_modes = inclusion_map[args.target_inclusion]
-    logger.info(f"Target inclusion modes: {args.target_inclusion}")
+    include_target_modes = inclusion_map.get(config.target.inclusion, [False])
+    logger.info(f"Target inclusion modes: {config.target.inclusion}")
 
     # Build pass-through args for iterative training
     training_extra_args = [
-        "--epochs", str(args.epochs),
-        "--learning-rate", str(args.learning_rate),
-        "--batch-size", str(args.batch_size),
-        "--max-seq-length", str(args.max_seq_length),
-        "--merge-frequency", str(args.merge_frequency),
-        "--top-k", str(args.top_k),
-        "--sinkhorn-iters", str(args.sinkhorn_iters)
+        "--epochs", str(config.training.epochs),
+        "--learning-rate", str(config.training.learning_rate),
+        "--batch-size", str(config.training.batch_size),
+        "--max-seq-length", str(config.training.max_seq_length),
+        "--merge-frequency", str(config.merge.frequency),
+        "--top-k", str(config.similarity.top_k),
+        "--sinkhorn-iters", str(config.similarity.sinkhorn_iters)
     ]
 
     # Add optional flags
-    # fp16 removed - bf16 is now the standard precision
-    if args.enable_wandb:
+    if config.enable_wandb:
         training_extra_args.append("--enable-wandb")
 
     for i, locale in enumerate(locales):
@@ -795,17 +908,17 @@ def main():
         start_time = time.time()
         results = run_experiment_for_locale(
             locale,
-            args.mode,
+            config.mode,
             training_extra_args,
-            args.output_dir,
-            args.max_models,
+            config.output.results_dir,
+            config.max_models,
             include_target_modes,
-            args.similarity_type,
-            args.models_root,
-            args.top_k,
-            args.sinkhorn_iters,
-            args.results_dir,
-            args.resume,
+            config.similarity.type,
+            config.model.models_root,
+            config.similarity.top_k,
+            config.similarity.sinkhorn_iters,
+            config.output.results_dir,
+            config.resume,
         )
         elapsed_time = time.time() - start_time
 
@@ -820,16 +933,10 @@ def main():
                 'total_locales': len(available_locales),
                 'processed_locales': i + 1,
                 'current_locale': locale,
-                'similarity_type': args.similarity_type,
-                'models_root': args.models_root,
+                'similarity_type': config.similarity.type,
+                'models_root': config.model.models_root,
                 'results': overall_results,
-                'config': {
-                    'mode': args.mode,
-                    'max_models': args.max_models,
-                    'epochs': args.epochs,
-                    'merge_frequency': args.merge_frequency,
-                    'target_inclusion': args.target_inclusion
-                }
+                'config': config.to_dict()
             }, f, indent=2)
 
         logger.info(f"Progress saved to {progress_file}")
@@ -871,27 +978,12 @@ def main():
         logger.info(f"Accuracy range: {min(accuracies):.4f} - {max(accuracies):.4f}")
         logger.info(f"Mean accuracy: {sum(accuracies)/len(accuracies):.4f}")
 
-    # Save final results
+    # Save final results with config as dict
     final_results_file = os.path.join(REPO_ROOT, "iterative_large_scale_final_results.json")
     with open(final_results_file, 'w') as f:
         json.dump({
             'timestamp': datetime.now().isoformat(),
-            'config': {
-                'mode': args.mode,
-                'start_from': args.start_from,
-                'max_locales': args.max_locales,
-                'max_models': args.max_models,
-                'epochs': args.epochs,
-                'merge_frequency': args.merge_frequency,
-                'batch_size': args.batch_size,
-                'learning_rate': args.learning_rate,
-                'top_k': args.top_k,
-                'sinkhorn_iters': args.sinkhorn_iters,
-                'output_dir': args.output_dir,
-                'similarity_type': args.similarity_type,
-                'models_root': args.models_root,
-                'target_inclusion': args.target_inclusion
-            },
+            'config': config.to_dict(),
             'summary': {
                 'total_locales': len(overall_results),
                 'successful_locales': successful_locales,

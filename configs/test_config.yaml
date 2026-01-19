@@ -1,0 +1,37 @@
+# Test config - should produce same results as CLI args:
+# --mode similarity --target-lang sq-AL --num-languages 3 --similarity-source dense
+
+mode: "similarity"
+
+target:
+  locale: "sq-AL"
+  inclusion: "ExcTar"
+
+similarity:
+  type: "URIEL"
+  source: "dense"
+  top_k: 20
+  sinkhorn_iters: 20
+
+model:
+  base_model: "xlm-roberta-base"
+  models_root: "haryos_model"
+  num_languages: 3
+
+dataset:
+  name: "AmazonScience/massive"
+  split: "train"
+  text_column: "utt"
+  label_column: "label"
+
+fisher:
+  data_mode: "target"
+  preweight: "uriel"
+  num_examples: 1000
+  batch_size: 16
+  max_seq_length: 128
+
+output:
+  results_dir: "results"
+  merged_models_dir: "merged_models"
+  cleanup_after_eval: false

@@ -121,7 +121,7 @@ class IterativeOrchestratorConfig:
     enable_distributed: bool = False
 
     # Resource management
-    max-gpu-memory: Optional[int] = None  # MB, None for unlimited
+    max_gpu_memory: Optional[int] = None  # MB, None for unlimited
     num_workers: int = 1
     pin_memory: bool = True
 

@@ -9,6 +9,7 @@ import os
 import sys
 from datetime import datetime
 import subprocess
+import warnings
 import numpy as np
 import argparse
 import pandas as pd
@@ -955,27 +956,139 @@ def create_config_from_args(args) -> MergeConfig:
     )
 
 
+def create_config_from_yaml(yaml_path: Path, args) -> MergeConfig:
+    """Create MergeConfig from YAML file with CLI overrides.
+
+    Args:
+        yaml_path: Path to YAML config file
+        args: Parsed CLI arguments for overrides
+
+    Returns:
+        MergeConfig instance
+    """
+    from merginguriel.config import (
+        ConfigLoader,
+        PipelineConfig,
+        ConfigDeprecationWarning,
+    )
+
+    # Load config from YAML
+    pipeline_config = PipelineConfig.from_yaml(yaml_path)
+
+    # Track which CLI args were explicitly provided
+    provided_args = getattr(args, "_provided_args", set())
+
+    # CLI arg to config path mapping
+    arg_to_config = {
+        "mode": "mode",
+        "target_lang": "target.locale",
+        "similarity_type": "similarity.type",
+        "similarity_source": "similarity.source",
+        "top_k": "similarity.top_k",
+        "sinkhorn_iters": "similarity.sinkhorn_iters",
+        "include_target": "target.inclusion",
+        "base_model": "model.base_model",
+        "num_languages": "model.num_languages",
+        "dataset_name": "dataset.name",
+        "dataset_split": "dataset.split",
+        "text_column": "dataset.text_column",
+        "label_column": "dataset.label_column",
+        "fisher_data_mode": "fisher.data_mode",
+        "preweight": "fisher.preweight",
+        "num_fisher_examples": "fisher.num_examples",
+        "batch_size": "fisher.batch_size",
+        "max_seq_length": "fisher.max_seq_length",
+    }
+
+    # Override with CLI args if provided (with deprecation warnings)
+    args_dict = vars(args)
+    for arg_name, config_path in arg_to_config.items():
+        if arg_name in provided_args:
+            arg_value = args_dict.get(arg_name)
+            if arg_value is not None:
+                # Emit deprecation warning
+                warnings.warn(
+                    f"CLI argument '--{arg_name.replace('_', '-')}' is deprecated when using --config. "
+                    f"Use config file with '{config_path}' instead. "
+                    f"CLI value will override config file for backward compatibility.",
+                    ConfigDeprecationWarning,
+                    stacklevel=2
+                )
+                # Set the value in config
+                ConfigLoader._set_nested_attr(pipeline_config, config_path, arg_value)
+
+    # Convert PipelineConfig to legacy MergeConfig format
+    # Handle include_target specially - it's a bool in CLI but "IncTar"/"ExcTar" in config
+    include_target = pipeline_config.target.inclusion == "IncTar"
+
+    return MergeConfig(
+        mode=pipeline_config.mode,
+        target_lang=pipeline_config.target.locale,
+        subfolder_pattern=getattr(args, "subfolder_pattern", ""),
+        num_languages=pipeline_config.model.num_languages,
+        dataset_name=pipeline_config.dataset.name,
+        dataset_split=pipeline_config.dataset.split,
+        text_column=pipeline_config.dataset.text_column,
+        label_column=pipeline_config.dataset.label_column,
+        num_fisher_examples=pipeline_config.fisher.num_examples,
+        base_model=pipeline_config.model.base_model,
+        similarity_source=pipeline_config.similarity.source,
+        similarity_type=pipeline_config.similarity.type,
+        include_target=include_target,
+        top_k=pipeline_config.similarity.top_k,
+        sinkhorn_iters=pipeline_config.similarity.sinkhorn_iters,
+        fisher_data_mode=pipeline_config.fisher.data_mode,
+        preweight=pipeline_config.fisher.preweight,
+        batch_size=pipeline_config.fisher.batch_size,
+        max_seq_length=pipeline_config.fisher.max_seq_length,
+        base_model_dir=getattr(args, "base_model_dir", ""),
+    )
+
+
+class TrackProvidedArgsAction(argparse.Action):
+    """Custom argparse action that tracks which arguments were explicitly provided."""
+
+    def __call__(self, parser, namespace, values, option_string=None):
+        setattr(namespace, self.dest, values)
+        # Track that this argument was provided
+        if not hasattr(namespace, "_provided_args"):
+            namespace._provided_args = set()
+        namespace._provided_args.add(self.dest)
+
+
 def main():
     """Main function."""
     parser = argparse.ArgumentParser(description="A composable pipeline to merge models using various strategies.")
+
+    # Config file argument (new)
+    parser.add_argument(
+        "--config",
+        type=Path,
+        default=None,
+        help="Path to YAML config file. If provided, CLI args override config values with deprecation warnings."
+    )
+
     parser.add_argument(
         "--mode",
         type=str,
-        required=True,
+        default=None,  # Changed to allow config override
         choices=['uriel', 'manual', 'similarity', 'average', 'fisher', 'iterative',
                 'ties', 'task_arithmetic', 'slerp', 'regmean'],
+        action=TrackProvidedArgsAction,
         help="The merging mode to use."
     )
     parser.add_argument(
         "--target-lang",
         type=str,
         default="sq-AL",
+        action=TrackProvidedArgsAction,
         help="Target language/locale for similarity-based merging (e.g., sq-AL, th-TH, af-ZA)"
     )
     parser.add_argument(
         "--base-model",
         type=str,
         default="xlm-roberta-base",
+        action=TrackProvidedArgsAction,
         help="Base model name for model path construction (e.g., xlm-roberta-base, xlm-roberta-large)"
     )
     parser.add_argument(
@@ -1000,36 +1113,42 @@ def main():
         "--num-languages",
         type=int,
         default=5,
+        action=TrackProvidedArgsAction,
         help="Number of languages to include in merging"
     )
     parser.add_argument(
         "--dataset-name",
         type=str,
         default=None,
+        action=TrackProvidedArgsAction,
         help="HuggingFace dataset name for Fisher merging"
     )
     parser.add_argument(
         "--dataset-split",
         type=str,
         default="train",
+        action=TrackProvidedArgsAction,
         help="Dataset split to use"
     )
     parser.add_argument(
         "--text-column",
         type=str,
         default="utt",
+        action=TrackProvidedArgsAction,
         help="Column name containing text data (MASSIVE uses 'utt')"
     )
     parser.add_argument(
         "--label-column",
         type=str,
         default="label",
+        action=TrackProvidedArgsAction,
         help="Column name containing labels"
     )
     parser.add_argument(
         "--num-fisher-examples",
         type=int,
         default=1000,
+        action=TrackProvidedArgsAction,
         help="Number of examples to use for Fisher computation"
     )
     parser.add_argument(
@@ -1037,6 +1156,7 @@ def main():
         type=str,
         choices=["sparse", "dense"],
         default="sparse",
+        action=TrackProvidedArgsAction,
         help="Use precomputed sparse CSV or compute dense similarities on-the-fly with top-k + Sinkhorn"
     )
     parser.add_argument(
@@ -1044,6 +1164,7 @@ def main():
         type=str,
         choices=["URIEL", "REAL"],
         default="URIEL",
+        action=TrackProvidedArgsAction,
         help="Type of similarity matrix to use: URIEL (linguistic features) or REAL (empirical evaluation results)"
     )
     parser.add_argument(
@@ -1055,12 +1176,14 @@ def main():
         "--top-k",
         type=int,
         default=20,
+        action=TrackProvidedArgsAction,
         help="Top-K neighbors to preserve per language when computing similarities on-the-fly"
     )
     parser.add_argument(
         "--sinkhorn-iters",
         type=int,
         default=20,
+        action=TrackProvidedArgsAction,
         help="Sinkhorn normalization iterations for similarity computation"
     )
     parser.add_argument(
@@ -1068,6 +1191,7 @@ def main():
         type=str,
         choices=["target", "sources", "both"],
         default="target",
+        action=TrackProvidedArgsAction,
         help="Which data distribution to compute Fisher on: target locale only, the selected source locales, or both"
     )
     parser.add_argument(
@@ -1075,23 +1199,38 @@ def main():
         type=str,
         choices=["equal", "uriel"],
         default="uriel",
+        action=TrackProvidedArgsAction,
         help="Pre-weight models before Fisher merging: equal or URIEL cosine weights"
     )
     parser.add_argument(
         "--batch-size",
         type=int,
         default=16,
+        action=TrackProvidedArgsAction,
         help="Batch size for dataset-enabled Fisher computation"
     )
     parser.add_argument(
         "--max-seq-length",
         type=int,
         default=128,
+        action=TrackProvidedArgsAction,
         help="Max sequence length for tokenization in Fisher computation"
     )
 
     args = parser.parse_args()
-    config = create_config_from_args(args)
+
+    # Determine config source: YAML file or CLI arguments
+    if args.config is not None:
+        # Load from YAML config file (new path)
+        if not args.config.exists():
+            parser.error(f"Config file not found: {args.config}")
+        print(f"Loading configuration from: {args.config}")
+        config = create_config_from_yaml(args.config, args)
+    else:
+        # Legacy path: create from CLI arguments only
+        if args.mode is None:
+            parser.error("--mode is required when not using --config")
+        config = create_config_from_args(args)
 
     pipeline = MergingPipeline(config, args.merged_models_dir)
     pipeline.run()

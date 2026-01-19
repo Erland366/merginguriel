@@ -1,0 +1,57 @@
+# Large-scale merging experiment configuration
+# Run all merging methods across multiple locales
+
+# Target specification
+locales: null  # null = all available locales
+target:
+  inclusion: "ExcTar"  # ExcTar, IncTar, or both
+
+# Methods to run
+modes:
+  - baseline
+  - similarity
+  - average
+  - fisher
+  - ties
+  - task_arithmetic
+  - slerp
+  - regmean
+
+# Similarity configuration
+similarity:
+  type: "URIEL"        # URIEL or REAL
+  source: "dense"      # sparse or dense
+  top_k: 20
+  sinkhorn_iters: 20
+
+# Model configuration
+model:
+  base_model: "xlm-roberta-base"
+  models_root: "haryos_model"
+  num_languages: 5
+
+# Dataset configuration
+dataset:
+  name: "AmazonScience/massive"
+  split: "train"
+  text_column: "utt"
+
+# Fisher merging configuration
+fisher:
+  data_mode: "target"  # target, sources, or both
+  preweight: "equal"   # equal or uriel
+  num_examples: 1000
+  batch_size: 16
+  max_seq_length: 128
+
+# Output paths
+output:
+  results_dir: "results"
+  merged_models_dir: "merged_models"
+  cleanup_after_eval: false
+
+# Experiment control
+preset: "none"       # none, fairness, or target
+resume: true
+start_from: 0
+max_locales: null    # null = process all

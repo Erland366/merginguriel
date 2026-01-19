@@ -1,1035 +1,360 @@
-import os
+"""
+Advanced Results Analyzer for MergingUriel experiments.
+
+This module provides the main AdvancedResultsAnalyzer class that orchestrates
+results analysis and plot generation using modular components from the
+plotting package.
+"""
+
 import re
-import pandas as pd
+import json
+import argparse
+import warnings
 import numpy as np
+import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
 from pathlib import Path
-import glob
-import json
-import warnings
 from datetime import datetime
-from typing import Dict, List, Tuple, Optional, Any
-import argparse
-from merginguriel.naming_config import naming_manager
+from typing import Dict, List, Optional, Any
 
-warnings.filterwarnings('ignore')
+from merginguriel.plotting.data_loader import ResultsDataLoader
+from merginguriel.plotting.generators import PlotGenerator
+from merginguriel.plotting.utils import (
+    safe_float,
+    maybe_float,
+    extract_baselines,
+    format_method_key_for_filename,
+    format_method_key_for_display,
+    get_method_num_language_set,
+    get_method_model_family,
+    get_method_similarity_type,
+    infer_model_family_from_method_key,
+    get_method_columns,
+)
 
-# Set plotting style to match user preferences from enhanced_analysis.py
-plt.style.use('default')
+warnings.filterwarnings("ignore")
+
+# Set plotting style
+plt.style.use("default")
 sns.set_palette("husl")
-plt.rcParams['figure.facecolor'] = 'white'
-plt.rcParams['figure.dpi'] = 300
+plt.rcParams["figure.facecolor"] = "white"
+plt.rcParams["figure.dpi"] = 300
+
 
 class AdvancedResultsAnalyzer:
-    def _safe_float(self, value):
-        if pd.isna(value) or value == '' or value is None:
-            return 0.0
-        return float(value)
+    """Main analyzer class that orchestrates results analysis using composition."""
 
-    def _maybe_float(self, value: Any) -> Optional[float]:
-        """Return float(value) or None when not castable/empty."""
-        try:
-            if value in ('', None):
-                return None
-            if pd.isna(value):
-                return None
-            return float(value)
-        except Exception:
-            return None
-
-    def _detect_nxn_model_family(self) -> Optional[str]:
-        """Infer which model family an NxN matrix represents by comparing diagonals to known baselines."""
-        nxn = next(iter(self.nxn_matrices.values()), None)
-        if nxn is None or getattr(self, "main_results_df", None) is None:
-            return None
-
-        locales = set(nxn.index).intersection(set(self.main_results_df['locale'].tolist()))
-        base_diffs: List[float] = []
-        large_diffs: List[float] = []
-
-        for loc in locales:
-            diag = self._maybe_float(nxn.loc[loc, loc])
-            if diag is None:
-                continue
-
-            row = self.main_results_df[self.main_results_df['locale'] == loc]
-            if row.empty:
-                continue
-            rec = row.iloc[0]
-            base_val = self._maybe_float(rec.get('baseline_xlm-roberta-base'))
-            large_val = self._maybe_float(rec.get('baseline_xlm-roberta-large'))
-
-            if base_val is not None:
-                base_diffs.append(abs(diag - base_val))
-            if large_val is not None:
-                large_diffs.append(abs(diag - large_val))
-
-        if not base_diffs and not large_diffs:
-            return None
-
-        base_mean = sum(base_diffs) / len(base_diffs) if base_diffs else float('inf')
-        large_mean = sum(large_diffs) / len(large_diffs) if large_diffs else float('inf')
-
-        # Pick the closer family; use a buffer to avoid ties causing oscillations
-        if base_mean < large_mean * 0.8:
-            return 'xlm-roberta-base'
-        if large_mean < base_mean * 0.8:
-            return 'xlm-roberta-large'
-        return 'xlm-roberta-base' if base_mean <= large_mean else 'xlm-roberta-large'
-
-    def _extract_baselines(self, row: pd.Series) -> Tuple[float, Dict[str, float]]:
-        """Return the best available baseline and all per-family baselines for a row."""
-        baseline_map: Dict[str, float] = {}
-
-        for col in row.index:
-            if isinstance(col, str) and col.startswith('baseline_'):
-                raw_val = row[col]
-                if raw_val != '' and raw_val is not None and not pd.isna(raw_val):
-                    try:
-                        baseline_map[col.replace('baseline_', '')] = float(raw_val)
-                    except Exception:
-                        continue
-
-        baseline_candidates = list(baseline_map.values())
-        raw_baseline = row.get('baseline') if isinstance(row, (dict, pd.Series)) else None
-        if raw_baseline not in (None, '') and not pd.isna(raw_baseline):
-            try:
-                baseline_candidates.append(float(raw_baseline))
-            except Exception:
-                pass
-
-        best_baseline = max(baseline_candidates) if baseline_candidates else 0.0
-        return best_baseline, baseline_map
-
-    def __init__(self, results_dir: str = ".", plots_dir: str = "plots", num_languages_filter: Optional[List[int]] = None,
-                 similarity_types: Optional[List[str]] = None):
+    def __init__(
+        self,
+        results_dir: str = ".",
+        plots_dir: str = "plots",
+        num_languages_filter: Optional[List[int]] = None,
+        similarity_types: Optional[List[str]] = None,
+    ):
         self.results_dir = Path(results_dir)
         self.plots_dir = Path(plots_dir)
-        self.merged_models_path = self.results_dir / "merged_models"
-        self.ensemble_results_path = self.results_dir / "ensemble_results"
-        self.experiment_results_dir = self.results_dir  # Directory containing experiment results
         self.num_languages_filter = num_languages_filter
-        self.similarity_types = similarity_types  # Filter by similarity type: ['URIEL'], ['REAL'], or None for all
+        self.similarity_types = similarity_types
 
-        # Data storage
-        self.results_dfs = {}
-        self.nxn_matrices: Dict[str, pd.DataFrame] = {}
-        self.experiment_results = {}
+        # Initialize data loader
+        self.data_loader = ResultsDataLoader(
+            results_dir=results_dir,
+            num_languages_filter=num_languages_filter,
+            similarity_types=similarity_types,
+        )
 
-        # Load all available data
-        self.load_all_data()
-        self.nxn_model_family = None  # superseded by per-family matrices
+        # Initialize plot generator
+        self.plot_generator = PlotGenerator(self.plots_dir)
 
-    def load_all_data(self):
-        """Load all available CSV files and N-x-N evaluation data"""
-        print("Loading data files...")
+        # Load all data
+        self.data_loader.load_all_data()
 
-        # Load latest comparison results from the configured directory
-        csv_files = glob.glob(str(self.results_dir / "results_comparison_*.csv"))
-        if not csv_files:
-            raise FileNotFoundError(
-                f"No comparison CSV files found in {self.results_dir}. "
-                "Expected files named results_comparison_*.csv generated by aggregate_results."
-            )
+        # Create convenience aliases for data loader properties
+        self.main_results_df = self.data_loader.main_results_df
+        self.nxn_matrices = self.data_loader.nxn_matrices
+        self.experiment_results = self.data_loader.experiment_results
 
-        # Load the most recent CSV file
-        latest_csv = max(csv_files, key=os.path.getctime)
-        print(f"Loading main results from: {latest_csv}")
+    # Delegate utility methods for backward compatibility
+    def _safe_float(self, value: Any) -> float:
+        return safe_float(value)
 
-        self.main_results_df = pd.read_csv(latest_csv, na_values=['', 'NA', 'N/A', 'null', 'None'])
-        # Don't drop all NaN rows, just clean up empty locale rows
-        self.main_results_df = self.main_results_df.dropna(subset=['locale'])
+    def _maybe_float(self, value: Any) -> Optional[float]:
+        return maybe_float(value)
 
-        # Try to load per-family N-x-N evaluation data from architecture-named subdirectories only
-        repo_root = Path(__file__).resolve().parents[1]
-        arch_dirs = sorted((repo_root / "nxn_results").glob("*"), key=os.path.getmtime, reverse=True) if (repo_root / "nxn_results").exists() else []
+    def _extract_baselines(self, row: pd.Series):
+        return extract_baselines(row)
 
-        def normalize_arch(name: str) -> str:
-            return name.replace("_", "-")
+    def format_method_key_for_filename(
+        self, method_key: str, model_family: str = None, similarity_type: str = None
+    ) -> str:
+        return format_method_key_for_filename(method_key, model_family, similarity_type)
 
-        for arch_dir in arch_dirs:
-            if not arch_dir.is_dir():
-                continue
-            # Skip legacy timestamped run folders like nxn_eval_*
-            if arch_dir.name.startswith("nxn_eval_"):
-                continue
-            fam = normalize_arch(arch_dir.name)
-            pattern = sorted(arch_dir.glob("evaluation_matrix*.csv"), key=os.path.getmtime, reverse=True)
-            for nxn_path in pattern:
-                try:
-                    df = pd.read_csv(nxn_path, index_col=0).dropna()
-                    self.nxn_matrices.setdefault(fam, df)
-                    print(f"Loaded N-x-N evaluation for {fam} from: {nxn_path}")
-                    break
-                except Exception as exc:
-                    print(f"Warning: failed to load {nxn_path}: {exc}")
-
-        if not self.nxn_matrices:
-            print("Warning: No N-x-N evaluation matrix found in repo nxn_results/")
-
-        # Load experiment results from directories
-        self.load_experiment_directories()
-
-        print(f"Loaded main results for {len(self.main_results_df)} entries")
-        if self.nxn_matrices:
-            for fam, mat in self.nxn_matrices.items():
-                print(f"Loaded N-x-N matrix for {fam} with {len(mat)} languages")
-
-    def load_experiment_directories(self):
-        """Load results from individual experiment directories"""
-        print("Loading experiment directories...")
-
-        # First check if there's a results.json file directly in the directory
-        direct_results_file = self.experiment_results_dir / "results.json"
-        if direct_results_file.exists():
-            result = self.load_experiment_result(self.experiment_results_dir)
-            if result:
-                # Apply similarity type filter if specified
-                if self.similarity_types is not None:
-                    if result['similarity_type'] not in self.similarity_types:
-                        pass
-                    else:
-                        self.experiment_results["direct"] = result
-                else:
-                    self.experiment_results["direct"] = result
-
-        # Then look for experiment directories in the results/ subdirectory
-        # Patterns to match the actual directory naming conventions
-        exp_patterns = [
-            "*_*lang_*",  # average_19lang_af-ZA, similarity_5lang_sq-AL, etc.
-            "ensemble_*",  # ensemble_majority_sq-AL, ensemble_uriel_logits_sq-AL, etc.
-            "baseline_*",  # baseline_af-ZA, baseline_sq-AL, etc.
-            "*_merge_*",  # Legacy pattern: similarity_merge_sq-AL, average_merge_sq-AL, etc.
-        ]
-
-        for pattern in exp_patterns:
-            for exp_dir in self.experiment_results_dir.glob(pattern):
-                if exp_dir.is_dir():
-                    result = self.load_experiment_result(exp_dir)
-                    if result:
-                        # Apply similarity type filter if specified
-                        if self.similarity_types is not None:
-                            if result['similarity_type'] not in self.similarity_types:
-                                continue
-                        self.experiment_results[exp_dir.name] = result
-
-        print(f"Loaded {len(self.experiment_results)} experiment results")
-
-    def load_experiment_result(self, exp_dir: Path) -> Optional[Dict]:
-        """Load result from a single experiment directory"""
-        results_file = exp_dir / "results.json"
-        if not results_file.exists():
-            return None
-
-        with open(results_file, 'r') as f:
-            data = json.load(f)
-
-        parsed = naming_manager.parse_results_dir_name(exp_dir.name)
-        similarity_type = parsed['similarity_type']
-        model_family = parsed['model_family']
-        num_languages = parsed['num_languages']
-        locale = parsed['locale']
-        method = parsed['method']
-        experiment_type = parsed['experiment_type']
-
-        # Extract key information from results data
-        eval_info = data.get('evaluation_info', {})
-        performance = data.get('performance', {})
-        model_info = data.get('model_info', {})
-
-        # Handle both old and new JSON structures
-        # New structure: accuracy in evaluation_info
-        # Old structure: accuracy in performance
-        accuracy = performance.get('accuracy', 0)
-        if accuracy == 0:  # Fallback to evaluation_info if performance doesn't have accuracy
-            accuracy = eval_info.get('accuracy', 0)
-
-        return {
-            'directory': exp_dir.name,
-            'type': self.detect_experiment_type(exp_dir.name),
-            'similarity_type': similarity_type,
-            'model_family': model_family,
-            'num_languages': num_languages,
-            'target_locale': locale or eval_info.get('locale') or data.get('target_locale'),
-            'method': method,
-            'experiment_type': experiment_type,
-            'accuracy': accuracy,
-            'baseline_accuracy': performance.get('baseline_accuracy', 0) or eval_info.get('baseline_accuracy', 0),
-            'experiment_info': eval_info,
-            'model_info': model_info,
-            'merge_details': self.load_merge_details(exp_dir) if 'merge' in exp_dir.name else None,
-            'model_family_name': eval_info.get('model_family_name') or model_family,
-            'num_models': model_info.get('num_models') or num_languages
-        }
-
-    def detect_experiment_type(self, dir_name: str) -> str:
-        """Detect experiment type from directory name using centralized naming system"""
-        parsed = naming_manager.parse_results_dir_name(dir_name)
-        experiment_type = parsed['experiment_type']
-
-        # Convert experiment_type to expected format
-        if experiment_type == 'baseline':
-            return 'baseline'
-        elif experiment_type == 'ensemble':
-            return 'ensemble'
-        elif experiment_type in ['merging', 'iterative']:
-            # Return merge_method format for consistency
-            return f"merge_{parsed['method']}"
-        else:
-            return 'unknown'
-
-    def extract_similarity_type(self, dir_name: str) -> str:
-        """Extract similarity type (URIEL/REAL) from directory name using centralized naming system"""
-        parsed = naming_manager.parse_results_dir_name(dir_name)
-        similarity_type = parsed['similarity_type']
-        return similarity_type if similarity_type else 'unknown'
-
-    def load_merge_details(self, exp_dir: Path) -> Optional[Dict]:
-        """Load merge details from merge_details.txt file"""
-        merge_details_file = exp_dir / "merge_details.txt"
-        if not merge_details_file.exists():
-            return None
-
-        with open(merge_details_file, 'r') as f:
-            content = f.read()
-
-        locales = []
-        weights = {}
-
-        # Pattern to match locale lines
-        locale_pattern = re.compile(r"^\s*- Locale:\s*([a-zA-Z]{2}-[a-zA-Z]{2})", re.MULTILINE)
-        locales = locale_pattern.findall(content)
-
-        # Pattern to match locale-weight pairs
-        weight_pattern = re.compile(r"^\s*- Locale:\s*([a-zA-Z]{2}-[a-zA-Z]{2}).*?Weight:\s*([0-9.]+)",
-                                    re.MULTILINE | re.DOTALL)
-        weight_matches = weight_pattern.findall(content)
-        weights = {locale: float(weight) for locale, weight in weight_matches}
-
-        return {
-            'source_locales': locales,
-            'weights': weights,
-            'content': content
-        }
-
-    def format_method_key_for_filename(self, method_key: str, model_family: str = None, similarity_type: str = None) -> str:
-        """Convert method keys to clean filenames."""
-        # Just return the method key as-is since it already contains all necessary information
-        return method_key
-
-    def format_method_key_for_display(self, method_key: str, model_family: str = None, similarity_type: str = None) -> str:
-        """Friendly display name for method keys with model family and merged count."""
-        match = re.search(r'_(\d+)lang(?:_(?:IncTar|ExcTar))?$', method_key)
-        if match:
-            base = method_key[:match.start()]
-            # Special handling for ties and task_arithmetic to keep them consistent
-            if base.startswith('ties'):
-                base = base.replace('_', '')
-            elif base.startswith('task_arithmetic'):
-                base = base.replace('_', '')
-            else:
-                base = base.replace('_', ' ').title()
-            extra_info = []
-            if model_family and model_family != 'unknown':
-                extra_info.append(model_family)
-            if similarity_type and similarity_type != 'unknown':
-                extra_info.append(similarity_type)
-            extra_info.append(f"Merged {match.group(1)}")
-            return f"{base} ({', '.join(extra_info)})"
-
-        # If no lang suffix, include model family and similarity type
-        display = method_key.replace('_', ' ').title()
-        # Special handling for ties and task_arithmetic to keep them consistent
-        if display.startswith('Ties'):
-            display = display.replace(' ', '')
-        elif display.startswith('Task Arithmetic'):
-            display = display.replace(' ', '')
-        extra_info = []
-        if model_family and model_family != 'unknown':
-            extra_info.append(model_family)
-        if similarity_type and similarity_type != 'unknown':
-            extra_info.append(similarity_type)
-        if extra_info:
-            return f"{display} ({', '.join(extra_info)})"
-        return display
+    def format_method_key_for_display(
+        self, method_key: str, model_family: str = None, similarity_type: str = None
+    ) -> str:
+        return format_method_key_for_display(method_key, model_family, similarity_type)
 
     def get_method_model_family(self, method: str) -> str:
-        """Get the model family name for a method using centralized naming system."""
-        # 1) Prefer to infer directly from the method key itself (more reliable than arbitrary experiment order)
-        inferred = self.infer_model_family_from_method_key(method)
-        if inferred:
-            return inferred
-
-        # 2) Look for a matching experiment entry for this method
-        method_base = re.sub(r'_\d+lang(?:_(?:IncTar|ExcTar))?$', '', method)
-        method_base = re.sub(r'_.*?$', '', method_base)
-
-        matched_family = None
-        # Look for this method in our experiment results
-        for exp_name, exp_data in self.experiment_results.items():
-            if exp_data['type'] == 'baseline':
-                continue
-
-            # Extract method name from experiment type
-            exp_type = exp_data['type']
-            if exp_type.startswith('merge_'):
-                exp_method = exp_type.replace('merge_', '')
-
-                if exp_method == method_base:
-                    # Prioritize explicit model_family_name, else fallback to parsed model_family
-                    if exp_data.get('model_family_name') and exp_data['model_family_name'] != 'unknown':
-                        return exp_data['model_family_name']
-                    if exp_data.get('model_family') and exp_data['model_family'] != 'unknown':
-                        matched_family = exp_data['model_family']
-
-        if matched_family:
-            return matched_family
-
-        # Fallback: try to extract from method name
-        if '_roberta-base' in method:
-            return 'roberta-base'
-        elif '_roberta-large' in method:
-            return 'roberta-large'
-        elif '_bert-base' in method:
-            return 'bert-base'
-        elif '_bert-large' in method:
-            return 'bert-large'
-        elif '_modernbert' in method:
-            return 'modernbert'
-
-        # Default fallback
-        return 'unknown'
-
-    def infer_model_family_from_method_key(self, method_key: str) -> Optional[str]:
-        """Attempt to infer the model family portion from a method key string."""
-        parts = method_key.split('_')
-        for part in parts:
-            if '-' in part:
-                return part
-        return None
+        return get_method_model_family(method, self.experiment_results)
 
     def get_method_similarity_type(self, method: str) -> str:
-        """Get the similarity type for a method using centralized naming system."""
-        # Look for this method in our experiment results
-        for exp_name, exp_data in self.experiment_results.items():
-            if exp_data['type'] == 'baseline':
-                continue
+        return get_method_similarity_type(method, self.experiment_results)
 
-            # Extract method name from experiment type
-            exp_type = exp_data['type']
-            if exp_type.startswith('merge_'):
-                exp_method = exp_type.replace('merge_', '')
-
-                # Check if this matches our method (ignoring similarity type and lang suffix)
-                method_base = re.sub(r'_\d+lang$', '', method)
-                method_base = re.sub(r'_.*?$', '', method_base)  # Remove model family
-                if exp_method == method_base:
-                    return exp_data.get('similarity_type', 'unknown')
-
-        # Fallback: try to extract from method name if it contains similarity type
-        if '_URIEL_' in method:
-            return 'URIEL'
-        elif '_REAL_' in method:
-            return 'REAL'
-
-        # For legacy methods without similarity type, assume URIEL
-        return 'URIEL'
+    def infer_model_family_from_method_key(self, method_key: str) -> Optional[str]:
+        return infer_model_family_from_method_key(method_key)
 
     def get_method_num_language_set(self, summary_df: pd.DataFrame, method: str) -> set:
-        """Return the set of num_languages associated with a given method column."""
-        counts = set()
+        return get_method_num_language_set(summary_df, method)
 
-        match = re.search(r'_(\d+)lang(?:_(?:IncTar|ExcTar))?$', method)
-        if match:
-            try:
-                counts.add(int(match.group(1)))
-            except ValueError:
-                pass
+    # Delegate data loading methods
+    def _get_nxn_for_family(self, model_family: Optional[str]) -> Optional[pd.DataFrame]:
+        return self.data_loader.get_nxn_for_family(model_family)
 
-        for _, row in summary_df.iterrows():
-            raw_map = row.get('num_languages_map')
-            mapping = {}
-            if isinstance(raw_map, str) and raw_map:
-                try:
-                    mapping = json.loads(raw_map)
-                except Exception:
-                    mapping = {}
-            elif isinstance(raw_map, dict):
-                mapping = raw_map
+    def get_zero_shot_scores(
+        self, target_locale: str, source_locales: List[str], model_family: Optional[str]
+    ) -> Dict[str, float]:
+        return self.data_loader.get_zero_shot_scores(target_locale, source_locales, model_family)
 
-            value = mapping.get(method)
-            if isinstance(value, (int, float)):
-                counts.add(int(value))
+    def get_best_source_performance(
+        self, target_locale: str, source_locales: List[str], model_family: Optional[str] = None
+    ) -> Optional[float]:
+        return self.data_loader.get_best_source_performance(
+            target_locale, source_locales, model_family
+        )
 
-        return counts
+    def get_best_overall_zero_shot(
+        self, target_locale: str, model_family: Optional[str]
+    ) -> Optional[float]:
+        return self.data_loader.get_best_overall_zero_shot(target_locale, model_family)
 
     def find_merge_locales(self, target_locale: str, merge_type: str = "similarity") -> List[str]:
-        """Find which locales were used for merging a target language"""
-        # Try to find the merge directory with the new naming convention
-        merge_dir = None
-        merge_details_file = None
+        return self.data_loader.find_merge_locales(target_locale, merge_type)
 
-        # Look for directories that match the pattern: {merge_type}_URIEL_merge_{target_locale}_{N}merged or {merge_type}_REAL_merge_{target_locale}_{N}merged
-        for similarity_type in ['URIEL', 'REAL']:
-            for exp_dir in self.merged_models_path.glob(f"{merge_type}_{similarity_type}_merge_{target_locale}_*merged"):
-                if exp_dir.is_dir():
-                    merge_dir = exp_dir
-                    merge_details_file = merge_dir / "merge_details.txt"
-                    break
-            if merge_dir:
-                break
+    def extract_num_languages_from_details(
+        self, target_locale: str, merge_type: str
+    ) -> Optional[int]:
+        return self.data_loader.extract_num_languages_from_details(target_locale, merge_type)
 
-        # Fallback to old naming convention if new one not found
-        if merge_dir is None:
-            # Look for legacy {merge_type}_merge_{target_locale}_{N}merged
-            for exp_dir in self.merged_models_path.glob(f"{merge_type}_merge_{target_locale}_*merged"):
-                if exp_dir.is_dir():
-                    merge_dir = exp_dir
-                    merge_details_file = merge_dir / "merge_details.txt"
-                    break
+    def extract_source_locales_from_details(
+        self, target_locale: str, model_family: Optional[str] = None, num_languages: Optional[int] = None
+    ) -> List[str]:
+        return self.data_loader.extract_source_locales_from_details(
+            target_locale, model_family, num_languages
+        )
 
-        # Final fallback to very old naming convention
-        if merge_dir is None:
-            merge_dir = self.merged_models_path / f"{merge_type}_merge_{target_locale}"
-            merge_details_file = merge_dir / "merge_details.txt"
-
-        if not merge_details_file.exists():
-            return []
-
-        with open(merge_details_file, 'r') as f:
-            content = f.read()
-
-        locale_pattern = re.compile(r"^\s*- Locale:\s*([a-zA-Z]{2}-[a-zA-Z]{2})", re.MULTILINE)
-        return locale_pattern.findall(content)
-
-    def _get_nxn_for_family(self, model_family: Optional[str]) -> Optional[pd.DataFrame]:
-        """Return the NxN matrix for the given family, if available."""
-        if not model_family or not self.nxn_matrices:
-            return None
-        for fam_key, mat in self.nxn_matrices.items():
-            if model_family == fam_key:
-                return mat
-            if model_family.startswith(fam_key) or fam_key.startswith(model_family):
-                return mat
-        return None
-
-    def get_zero_shot_scores(self, target_locale: str, source_locales: List[str], model_family: Optional[str]) -> Dict[str, float]:
-        """Get zero-shot scores for target locale from source locales using family-matched NxN."""
-        nxn = self._get_nxn_for_family(model_family)
-        if nxn is None:
-            return {}
-
-        scores = {}
-        for locale in source_locales:
-            if locale in nxn.index and target_locale in nxn.columns:
-                score = nxn.loc[locale, target_locale]
-                if not pd.isna(score):
-                    scores[locale] = float(score)
-
-        return scores
-
-    def get_best_source_performance(self, target_locale: str, source_locales: List[str], model_family: Optional[str]) -> Optional[float]:
-        """Get the best performance among the actual source languages used for a target locale."""
-        zero_shot_scores = self.get_zero_shot_scores(target_locale, source_locales, model_family)
-        if zero_shot_scores:
-            return max(zero_shot_scores.values())
-        return None
-
-    def get_best_overall_zero_shot(self, target_locale: str, model_family: Optional[str]) -> Optional[float]:
-        """Get best zero-shot accuracy for target across all locales (excluding target)."""
-        nxn = self._get_nxn_for_family(model_family)
-        if nxn is None or target_locale not in nxn.columns:
-            return None
-        col = nxn[target_locale]
-        col = col.drop(target_locale, errors='ignore')
-        col = col[col.notna()]
-        if col.empty:
-            return None
-        return float(col.max())
-
-    def extract_num_languages_from_details(self, target_locale: str, merge_type: str) -> Optional[int]:
-        """Extract number of languages from merge_details.txt files"""
-        # Try to find merge_details.txt for this specific merge type and target locale
-        # Support new naming convention with similarity type
-        merge_patterns = []
-        for similarity_type in ['URIEL', 'REAL']:
-            merge_patterns.extend([
-                f"merged_models/{merge_type}_{similarity_type}_merge_{target_locale}_*merged/merge_details.txt",
-            ])
-        merge_patterns.extend([
-            f"merged_models/{merge_type}_merge_{target_locale}_*merged/merge_details.txt",
-            f"merged_models/{merge_type}_merge_{target_locale}/merge_details.txt",
-        ])
-
-        merge_details_file = None
-        for pattern in merge_patterns:
-            matches = glob.glob(pattern)
-            if matches:
-                merge_details_file = matches[0]
-                break
-
-        if not merge_details_file:
-            return None
-
-        with open(merge_details_file, 'r') as f:
-            content = f.read()
-
-        # Count the number of models using the pattern
-        model_pattern = re.compile(r"^\s*\d+\.\s*Model:", re.MULTILINE)
-        matches = model_pattern.findall(content)
-        return len(matches) if matches else None
-
-    def extract_source_locales_from_details(self, target_locale: str, model_family: Optional[str] = None,
-                                            num_languages: Optional[int] = None) -> List[str]:
-        """Extract source locales from merge_details.txt; fallback to NxN top-K for matching family when missing."""
-        # Try to find merge_details.txt from any merge type for this target locale
-        # Support both new naming convention (with similarity type and merge count) and old naming
-        merge_patterns = []
-
-        # New naming with similarity type
-        for similarity_type in ['URIEL', 'REAL']:
-            merge_patterns.extend([
-                f"merged_models/*_{similarity_type}_merge_{target_locale}_*merged/merge_details.txt",
-                f"merged_models/similarity_{similarity_type}_merge_{target_locale}_*merged/merge_details.txt",
-                f"merged_models/average_{similarity_type}_merge_{target_locale}_*merged/merge_details.txt",
-            ])
-
-        # Legacy naming patterns
-        merge_patterns.extend([
-            f"merged_models/*merge_{target_locale}_*merged/merge_details.txt",
-            f"merged_models/similarity_merge_{target_locale}_*merged/merge_details.txt",
-            f"merged_models/average_merge_{target_locale}_*merged/merge_details.txt",
-            f"merged_models/similarity_merge_{target_locale}/merge_details.txt",
-            f"merged_models/average_merge_{target_locale}/merge_details.txt",
-            f"merged_models/*merge_{target_locale}/merge_details.txt"
-        ])
-
-        for pattern in merge_patterns:
-            merge_details_files = list(self.results_dir.glob(pattern))
-            if merge_details_files:
-                # Use the first one found
-                merge_details_file = merge_details_files[0]
-                with open(merge_details_file, 'r') as f:
-                    content = f.read()
-
-                # Extract locales using regex pattern for the new format
-                locale_pattern = re.compile(r"^\s*- Locale:\s*([a-zA-Z]{2}-[a-zA-Z]{2})", re.MULTILINE)
-                locales = locale_pattern.findall(content)
-                if locales:
-                    return locales
-
-        # Fallback: try to find from any directory containing the target locale
-        for exp_dir in self.results_dir.glob(f"merged_models/*{target_locale}"):
-            if exp_dir.is_dir():
-                merge_details_file = exp_dir / "merge_details.txt"
-                if merge_details_file.exists():
-                    with open(merge_details_file, 'r') as f:
-                        content = f.read()
-
-                    locale_pattern = re.compile(r"^\s*- Locale:\s*([a-zA-Z]{2}-[a-zA-Z]{2})", re.MULTILINE)
-                    locales = locale_pattern.findall(content)
-                    if locales:
-                        return locales
-
-          # Fallback: try to extract source locales from experiment results
-        # For IT/ET experiments, we can derive source locales from the experiment data
-        source_locales = set()
-
-        # Look through our experiment results to find ones for this target locale
-        for exp_key, exp_result in self.experiment_results.items():
-            if exp_result.get('target_locale') == target_locale:
-                # Extract source locales from the experiment result
-                exp_source_locales = exp_result.get('source_locales', [])
-                if exp_source_locales:
-                    source_locales.update(exp_source_locales)
-
-        if source_locales:
-            return list(source_locales)
-
-        # If no source locales found in experiments, try to infer from the NxN matrix for this family
-        nxn = self._get_nxn_for_family(model_family)
-        if nxn is not None and target_locale in nxn.columns:
-            target_column = nxn[target_locale].drop(target_locale, errors='ignore')
-            top_k = num_languages if num_languages is not None else 5
-            inferred = target_column.nlargest(top_k).index.tolist()
-            print(f"Warning: Using inferred sources from NxN for {target_locale}: {inferred}")
-            return inferred
-
-        print(f"Warning: No NxN matrix available to infer source locales for {target_locale}")
-        return []
+    def get_num_languages_from_merged_models(self, locale: str, method: str) -> Optional[int]:
+        return self.data_loader.get_num_languages_from_merged_models(locale, method)
 
     def analyze_advanced_merging_methods(self) -> List[Dict]:
-        """Analyze results for advanced merging methods"""
+        """Analyze results for advanced merging methods."""
         print("Analyzing advanced merging methods...")
 
-        # Identify all method columns (accuracy columns without improvement suffixes)
         method_columns = [
-            col for col in self.main_results_df.columns
-            if col not in ['locale', 'baseline', 'best_source_accuracy', 'best_overall_accuracy']
-            and not col.endswith('_improvement')
-            and '_vs_' not in col
-            and not col.startswith('baseline_')
+            col
+            for col in self.main_results_df.columns
+            if col not in ["locale", "baseline", "best_source_accuracy", "best_overall_accuracy"]
+            and not col.endswith("_improvement")
+            and "_vs_" not in col
+            and not col.startswith("baseline_")
         ]
         results = []
 
-        for locale in self.main_results_df['locale'].unique():
-            locale_data = {'target_locale': locale}
+        for locale in self.main_results_df["locale"].unique():
+            locale_data = {"target_locale": locale}
 
-            # Get baseline data
-            locale_row = self.main_results_df[self.main_results_df['locale'] == locale]
+            locale_row = self.main_results_df[self.main_results_df["locale"] == locale]
             if len(locale_row) == 0:
                 continue
 
             main_data = locale_row.iloc[0]
 
             baseline_value, baseline_map = self._extract_baselines(main_data)
-            locale_data['baseline'] = baseline_value
+            locale_data["baseline"] = baseline_value
             for family, score in baseline_map.items():
-                locale_data[f'baseline_{family}'] = score
+                locale_data[f"baseline_{family}"] = score
 
-            # Capture every method/variant column dynamically
             num_lang_map = {}
             for method_key in method_columns:
                 if method_key in main_data and pd.notna(main_data[method_key]):
-                    # Ensure method values are numeric
                     method_val = main_data[method_key]
-                    if method_val != '' and method_val is not None:
+                    if method_val != "" and method_val is not None:
                         locale_data[method_key] = float(method_val)
-                    match = re.search(r'_(\d+)lang$', method_key)
+                    match = re.search(r"_(\d+)lang$", method_key)
                     if match:
                         num_lang_map[method_key] = int(match.group(1))
 
             if num_lang_map:
-                locale_data['num_languages_map'] = num_lang_map
+                locale_data["num_languages_map"] = num_lang_map
 
-            # Infer family: prefer baseline keys, else method keys that mention xlm-roberta-*
             locale_family = None
-            if 'baseline_xlm-roberta-large' in baseline_map:
-                locale_family = 'xlm-roberta-large'
-            elif 'baseline_xlm-roberta-base' in baseline_map:
-                locale_family = 'xlm-roberta-base'
+            if "baseline_xlm-roberta-large" in baseline_map:
+                locale_family = "xlm-roberta-large"
+            elif "baseline_xlm-roberta-base" in baseline_map:
+                locale_family = "xlm-roberta-base"
             else:
                 for method_key in method_columns:
-                    if 'xlm-roberta-large' in method_key:
-                        locale_family = 'xlm-roberta-large'
+                    if "xlm-roberta-large" in method_key:
+                        locale_family = "xlm-roberta-large"
                         break
-                    if 'xlm-roberta-base' in method_key:
-                        locale_family = 'xlm-roberta-base'
+                    if "xlm-roberta-base" in method_key:
+                        locale_family = "xlm-roberta-base"
                         break
-            locale_data['zero_shot_family'] = locale_family
+            locale_data["zero_shot_family"] = locale_family
 
-            # Extract num_languages for filtering - check similarity as representative
-            num_languages = self.extract_num_languages_from_details(locale, 'similarity')
+            num_languages = self.extract_num_languages_from_details(locale, "similarity")
             if num_languages is None:
-                # Fallback: try other methods
-                for method in ['average', 'fisher', 'ties']:
+                for method in ["average", "fisher", "ties"]:
                     num_languages = self.extract_num_languages_from_details(locale, method)
                     if num_languages is not None:
                         break
 
-            # Extract source locales from merge details (or infer)
-            source_locales = self.extract_source_locales_from_details(locale, locale_family, num_languages)
+            source_locales = self.extract_source_locales_from_details(
+                locale, locale_family, num_languages
+            )
             zero_shot_scores = self.get_zero_shot_scores(locale, source_locales, locale_family)
 
-            # Apply num_languages filter if specified (fallback to similarity count)
             if self.num_languages_filter is not None:
                 candidate_counts = set(num_lang_map.values()) if num_lang_map else set()
                 if num_languages is not None:
                     candidate_counts.add(num_languages)
                 if not candidate_counts:
-                    print(f"Skipping {locale} - has {num_languages} languages, not in filter {self.num_languages_filter}")
+                    print(
+                        f"Skipping {locale} - has {num_languages} languages, not in filter {self.num_languages_filter}"
+                    )
                     continue
                 if not any(count in self.num_languages_filter for count in candidate_counts):
-                    print(f"Skipping {locale} - has {candidate_counts} languages, not in filter {self.num_languages_filter}")
+                    print(
+                        f"Skipping {locale} - has {candidate_counts} languages, not in filter {self.num_languages_filter}"
+                    )
                     continue
 
             if zero_shot_scores:
-                locale_data['avg_zero_shot'] = np.mean(list(zero_shot_scores.values()))
+                locale_data["avg_zero_shot"] = np.mean(list(zero_shot_scores.values()))
             else:
-                locale_data['avg_zero_shot'] = None
+                locale_data["avg_zero_shot"] = None
 
-            locale_data['best_zero_shot'] = self.get_best_overall_zero_shot(locale, locale_family)
-            locale_data['best_source'] = self.get_best_source_performance(locale, source_locales, locale_family)
-            locale_data['source_locales'] = source_locales or []
-
-            # Add num_languages info
-            locale_data['num_languages'] = num_languages
+            locale_data["best_zero_shot"] = self.get_best_overall_zero_shot(locale, locale_family)
+            locale_data["best_source"] = self.get_best_source_performance(
+                locale, source_locales, locale_family
+            )
+            locale_data["source_locales"] = source_locales or []
+            locale_data["num_languages"] = num_languages
             results.append(locale_data)
 
         return results
 
     def analyze_ensemble_methods(self) -> List[Dict]:
-        """Analyze ensemble inference methods from the main aggregated results"""
+        """Analyze ensemble inference methods from the main aggregated results."""
         print("Analyzing ensemble methods...")
 
-        ensemble_methods = ['ensemble_majority', 'ensemble_weighted_majority', 'ensemble_soft', 'ensemble_uriel_logits']
+        ensemble_methods = [
+            "ensemble_majority",
+            "ensemble_weighted_majority",
+            "ensemble_soft",
+            "ensemble_uriel_logits",
+        ]
         results = []
 
-        # Extract ensemble data from main results dataframe
         for _, row in self.main_results_df.iterrows():
-            locale = row['locale']
+            locale = row["locale"]
 
-            # Get baseline accuracy for comparison (prefer any per-family baselines)
             baseline_accuracy, _ = self._extract_baselines(row)
 
-            # Extract source locales from merge details (same as merging methods)
             source_locales = self.extract_source_locales_from_details(locale)
             locale_family = None
-            if 'baseline_xlm-roberta-large' in row.index and not pd.isna(row.get('baseline_xlm-roberta-large')):
-                locale_family = 'xlm-roberta-large'
-            elif 'baseline_xlm-roberta-base' in row.index and not pd.isna(row.get('baseline_xlm-roberta-base')):
-                locale_family = 'xlm-roberta-base'
+            if "baseline_xlm-roberta-large" in row.index and not pd.isna(
+                row.get("baseline_xlm-roberta-large")
+            ):
+                locale_family = "xlm-roberta-large"
+            elif "baseline_xlm-roberta-base" in row.index and not pd.isna(
+                row.get("baseline_xlm-roberta-base")
+            ):
+                locale_family = "xlm-roberta-base"
             zero_shot_scores = self.get_zero_shot_scores(locale, source_locales, locale_family)
 
-            # Process each ensemble method that exists in the dataframe
             for method in ensemble_methods:
                 if method in row and pd.notna(row[method]):
-                    # Extract method name from ensemble_X
-                    method_name = method.replace('ensemble_', '')
+                    method_name = method.replace("ensemble_", "")
 
                     locale_data = {
-                        'target_locale': locale,
-                        'ensemble_method': method_name,
-                        'ensemble_accuracy': row[method],
-                        'baseline_accuracy': baseline_accuracy,
-                        'source_locales': source_locales,
-                        'zero_shot_family': locale_family
+                        "target_locale": locale,
+                        "ensemble_method": method_name,
+                        "ensemble_accuracy": row[method],
+                        "baseline_accuracy": baseline_accuracy,
+                        "source_locales": source_locales,
+                        "zero_shot_family": locale_family,
                     }
 
-                    # Calculate zero-shot baseline for comparison using same source locales
                     if zero_shot_scores:
-                        locale_data['avg_zero_shot'] = np.mean(list(zero_shot_scores.values()))
-                        locale_data['best_zero_shot'] = max(zero_shot_scores.values())
-                        locale_data['best_source'] = self.get_best_source_performance(locale, source_locales)
+                        locale_data["avg_zero_shot"] = np.mean(list(zero_shot_scores.values()))
+                        locale_data["best_zero_shot"] = max(zero_shot_scores.values())
+                        locale_data["best_source"] = self.get_best_source_performance(
+                            locale, source_locales
+                        )
                     else:
-                        locale_data['avg_zero_shot'] = None
-                        locale_data['best_zero_shot'] = None
-                        locale_data['best_source'] = None
+                        locale_data["avg_zero_shot"] = None
+                        locale_data["best_zero_shot"] = None
+                        locale_data["best_source"] = None
 
                     results.append(locale_data)
 
         return results
 
-    def create_advanced_performance_plot(self, merging_results: List[Dict]):
-        """Create comprehensive performance comparison for advanced methods"""
-        print("Creating advanced performance comparison...")
-
-        # Filter results that have advanced methods
-        advanced_methods = ['ties', 'task_arithmetic', 'slerp', 'regmean', 'dare', 'fisher']
-        method_data = {method: [] for method in advanced_methods}
-        method_data['similarity'] = []
-        method_data['average'] = []
-        method_data['baseline'] = []
-        method_data['avg_zero_shot'] = []
-        method_data['best_zero_shot'] = []
-        locales = []
-
-        for result in merging_results:
-            locales.append(result['target_locale'])
-            method_data['baseline'].append(self._maybe_float(result.get('baseline')) or 0)
-            method_data['similarity'].append(self._maybe_float(result.get('similarity')) or 0)
-            method_data['average'].append(self._maybe_float(result.get('average')) or 0)
-            method_data['avg_zero_shot'].append(self._maybe_float(result.get('avg_zero_shot')) or 0)
-            method_data['best_zero_shot'].append(self._maybe_float(result.get('best_zero_shot')) or 0)
-
-            for method in advanced_methods:
-                method_data[method].append(self._maybe_float(result.get(method)) or 0)
-
-        # Create subplots for better readability
-        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(20, 16))
-
-        # Plot 1: All methods comparison
-        x = np.arange(len(locales))
-        width = 0.08
-        bar_positions = np.arange(-3, 4) * width
-        methods = ['baseline', 'avg_zero_shot', 'similarity', 'average'] + advanced_methods[:3]
-        colors = ['gray', 'lightgray', 'blue', 'red', 'green', 'orange', 'purple']
-
-        for i, (method, color) in enumerate(zip(methods, colors)):
-            if method in method_data and method_data[method]:
-                ax1.bar(x + bar_positions[i], method_data[method], width,
-                       label=method.replace('_', ' ').title(), alpha=0.8, color=color)
-
-        ax1.set_xlabel('Target Languages')
-        ax1.set_ylabel('Performance Score')
-        ax1.set_title('Advanced Merging Methods Performance Comparison (Part 1)')
-        ax1.set_xticks(x)
-        ax1.set_xticklabels(locales, rotation=45, ha='right')
-        ax1.legend()
-        ax1.grid(True, alpha=0.3)
-
-        # Plot 2: Remaining advanced methods
-        methods_2 = advanced_methods[3:]
-        colors_2 = ['brown', 'cyan', 'magenta']
-        bar_positions_2 = np.arange(-1, len(methods_2)) * width
-
-        for i, (method, color) in enumerate(zip(methods_2, colors_2)):
-            if method in method_data and method_data[method]:
-                ax2.bar(x + bar_positions_2[i], method_data[method], width,
-                       label=method.replace('_', ' ').title(), alpha=0.8, color=color)
-
-        # Also include baseline for reference
-        ax2.bar(x + bar_positions_2[-1], method_data['baseline'], width,
-               label='Baseline', alpha=0.8, color='gray')
-
-        ax2.set_xlabel('Target Languages')
-        ax2.set_ylabel('Performance Score')
-        ax2.set_title('Advanced Merging Methods Performance Comparison (Part 2)')
-        ax2.set_xticks(x)
-        ax2.set_xticklabels(locales, rotation=45, ha='right')
-        ax2.legend()
-        ax2.grid(True, alpha=0.3)
-
-        plt.tight_layout()
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        plt.savefig(f'{self.plots_dir}/advanced_merging_comparison_{timestamp}.png', dpi=300, bbox_inches='tight')
-        plt.close()
-
-    def create_ensemble_comparison_plot(self, ensemble_results: List[Dict]):
-        """Create ensemble methods comparison"""
-        print("Creating ensemble comparison...")
-
-        if not ensemble_results:
-            print("No ensemble results found")
-            return
-
-        # Group by locale
-        locale_data = {}
-        for result in ensemble_results:
-            locale = result['target_locale']
-            if locale not in locale_data:
-                locale_data[locale] = {}
-            locale_data[locale][result['ensemble_method']] = result['ensemble_accuracy']
-            locale_data[locale]['baseline'] = result.get('baseline_accuracy', 0)
-            locale_data[locale]['avg_zero_shot'] = result.get('avg_zero_shot', 0)
-            locale_data[locale]['best_zero_shot'] = result.get('best_zero_shot', 0)
-
-        locales = list(locale_data.keys())
-        methods = ['majority', 'weighted_majority', 'soft', 'uriel_logits']
-
-        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(16, 12))
-
-        # Plot 1: Ensemble methods vs baseline
-        x = np.arange(len(locales))
-        width = 0.15
-
-        bars = []
-        labels = []
-
-        # Baseline
-        baseline_scores = []
-        for locale in locales:
-            base_val = locale_data[locale].get('baseline', 0)
-            if base_val is None or pd.isna(base_val):
-                base_val = 0
-            baseline_scores.append(base_val)
-        bars.append(ax1.bar(x - 1.5*width, baseline_scores, width, label='Baseline', alpha=0.7, color='gray'))
-
-        # Ensemble methods
-        for i, method in enumerate(methods):
-            scores = []
-            for locale in locales:
-                val = locale_data[locale].get(method, 0)
-                if val is None or pd.isna(val):
-                    val = 0
-                scores.append(val)
-            bars.append(ax1.bar(x + (i - 0.5)*width, scores, width,
-                               label=method.replace('_', ' ').title(), alpha=0.8))
-
-        ax1.set_xlabel('Target Languages')
-        ax1.set_ylabel('Performance Score')
-        ax1.set_title('Ensemble Methods Performance Comparison')
-        ax1.set_xticks(x)
-        ax1.set_xticklabels(locales, rotation=45, ha='right')
-        ax1.legend()
-        ax1.grid(True, alpha=0.3)
-
-        # Plot 2: Ensemble advantage over zero-shot
-        for i, method in enumerate(methods):
-            advantages = []
-            for locale in locales:
-                ensemble_score = locale_data[locale].get(method, 0)
-                if ensemble_score is None or pd.isna(ensemble_score):
-                    ensemble_score = 0
-                avg_zero_shot = locale_data[locale].get('avg_zero_shot', 0)
-                if avg_zero_shot is None or pd.isna(avg_zero_shot):
-                    avg_zero_shot = 0
-                advantages.append(ensemble_score - avg_zero_shot)
-
-            bars = ax2.bar(x + (i - 1.5)*width, advantages, width,
-                          label=f'{method} vs Zero-shot', alpha=0.8)
-
-            # Color bars: green for positive, red for negative
-            for bar in bars:
-                if bar.get_height() >= 0:
-                    bar.set_color('green')
-                else:
-                    bar.set_color('lightcoral')
-
-        ax2.axhline(y=0, color='black', linestyle='-', alpha=0.5)
-        ax2.set_xlabel('Target Languages')
-        ax2.set_ylabel('Advantage over Average Zero-shot')
-        ax2.set_title('Ensemble Methods Advantage Over Zero-shot Performance')
-        ax2.set_xticks(x)
-        ax2.set_xticklabels(locales, rotation=45, ha='right')
-        ax2.legend()
-        ax2.grid(True, alpha=0.3)
-
-        plt.tight_layout()
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        plt.savefig(f'{self.plots_dir}/ensemble_comparison_{timestamp}.png', dpi=300, bbox_inches='tight')
-        plt.close()
-
-    def create_comprehensive_summary(self, merging_results: List[Dict], ensemble_results: List[Dict], nvn_df=None, available_locales=None):
-        """Create comprehensive summary CSV with all methods vs avg_zero_shot, best_zero_shot, and best_source"""
+    def create_comprehensive_summary(
+        self,
+        merging_results: List[Dict],
+        ensemble_results: List[Dict],
+        nvn_df=None,
+        available_locales=None,
+    ) -> pd.DataFrame:
+        """Create comprehensive summary CSV with all methods vs baselines."""
         print("Creating comprehensive summary...")
 
-        # Create a mapping from locale to all results
         locale_data = {}
 
-        # Process merging results
         metadata_keys = {
-            'target_locale',
-            'baseline',
-            'baseline_map',
-            'avg_zero_shot',
-            'best_zero_shot',
-            'best_source',
-            'source_locales',
-            'zero_shot_family',
-            'num_languages',
-            'num_languages_map'
+            "target_locale",
+            "baseline",
+            "baseline_map",
+            "avg_zero_shot",
+            "best_zero_shot",
+            "best_source",
+            "source_locales",
+            "zero_shot_family",
+            "num_languages",
+            "num_languages_map",
         }
 
         for result in merging_results:
-            locale = result['target_locale']
-            entry = locale_data.setdefault(locale, {
-                'locale': locale,
-                'baseline': self._maybe_float(result.get('baseline')),
-                'avg_zero_shot': self._maybe_float(result.get('avg_zero_shot')),
-                'best_zero_shot': self._maybe_float(result.get('best_zero_shot')),
-                'best_source': self._maybe_float(result.get('best_source')),
-                'source_locales': result.get('source_locales', []),
-                'zero_shot_family': result.get('zero_shot_family')
-            })
+            locale = result["target_locale"]
+            entry = locale_data.setdefault(
+                locale,
+                {
+                    "locale": locale,
+                    "baseline": self._maybe_float(result.get("baseline")),
+                    "avg_zero_shot": self._maybe_float(result.get("avg_zero_shot")),
+                    "best_zero_shot": self._maybe_float(result.get("best_zero_shot")),
+                    "best_source": self._maybe_float(result.get("best_source")),
+                    "source_locales": result.get("source_locales", []),
+                    "zero_shot_family": result.get("zero_shot_family"),
+                },
+            )
 
-            # Merge metadata fields if newly discovered
-            for key in ['baseline', 'avg_zero_shot', 'best_zero_shot', 'best_source']:
+            for key in ["baseline", "avg_zero_shot", "best_zero_shot", "best_source"]:
                 if key in result and (entry.get(key) in (None, 0)):
                     entry[key] = self._maybe_float(result.get(key))
-            if 'source_locales' in result and not entry.get('source_locales'):
-                entry['source_locales'] = result['source_locales']
-            if 'zero_shot_family' in result and not entry.get('zero_shot_family'):
-                entry['zero_shot_family'] = result.get('zero_shot_family')
-            if 'num_languages_map' in result:
-                entry.setdefault('num_languages_map', {}).update(result['num_languages_map'])
+            if "source_locales" in result and not entry.get("source_locales"):
+                entry["source_locales"] = result["source_locales"]
+            if "zero_shot_family" in result and not entry.get("zero_shot_family"):
+                entry["zero_shot_family"] = result.get("zero_shot_family")
+            if "num_languages_map" in result:
+                entry.setdefault("num_languages_map", {}).update(result["num_languages_map"])
 
-            # Add all method/variant scores dynamically
             for method_key, value in result.items():
                 if method_key in metadata_keys:
                     continue
-                is_baseline_col = method_key.startswith('baseline_')
+                is_baseline_col = method_key.startswith("baseline_")
                 method_val = self._maybe_float(value)
                 if method_val is None:
                     continue
@@ -1037,80 +362,88 @@ class AdvancedResultsAnalyzer:
                 if is_baseline_col:
                     continue
                 method_family = self.get_method_model_family(method_key)
-                zero_family = entry.get('zero_shot_family')
+                zero_family = entry.get("zero_shot_family")
                 family_mismatch = zero_family and method_family and zero_family != method_family
 
-                avg_zero = self._maybe_float(entry.get('avg_zero_shot'))
-                best_zero = self._maybe_float(entry.get('best_zero_shot'))
-                best_source = self._maybe_float(entry.get('best_source'))
+                avg_zero = self._maybe_float(entry.get("avg_zero_shot"))
+                best_zero = self._maybe_float(entry.get("best_zero_shot"))
+                best_source = self._maybe_float(entry.get("best_source"))
 
                 if family_mismatch:
                     avg_zero = best_zero = best_source = None
 
                 if avg_zero is not None:
-                    entry[f'{method_key}_vs_avg_zero'] = method_val - avg_zero
+                    entry[f"{method_key}_vs_avg_zero"] = method_val - avg_zero
                 if best_zero is not None:
-                    entry[f'{method_key}_vs_best_zero'] = method_val - best_zero
+                    entry[f"{method_key}_vs_best_zero"] = method_val - best_zero
                 if best_source is not None:
-                    entry[f'{method_key}_vs_best_source'] = method_val - best_source
+                    entry[f"{method_key}_vs_best_source"] = method_val - best_source
 
-        # Process ensemble results and merge into the same locale rows
         for result in ensemble_results:
-            locale = result['target_locale']
-            method = result['ensemble_method']  # 'majority', 'weighted_majority', 'soft', 'uriel_logits'
-            accuracy = self._maybe_float(result.get('ensemble_accuracy', 0))
+            locale = result["target_locale"]
+            method = result["ensemble_method"]
+            accuracy = self._maybe_float(result.get("ensemble_accuracy", 0))
             if accuracy is None:
                 continue
 
             if locale not in locale_data:
                 locale_data[locale] = {
-                    'locale': locale,
-                    'baseline': self._maybe_float(result.get('baseline_accuracy')),
-                    'avg_zero_shot': self._maybe_float(result.get('avg_zero_shot')),
-                    'best_zero_shot': self._maybe_float(result.get('best_zero_shot')),
-                    'best_source': self._maybe_float(result.get('best_source')),
-                    'source_locales': result.get('source_locales', []),
-                    'zero_shot_family': result.get('zero_shot_family')
+                    "locale": locale,
+                    "baseline": self._maybe_float(result.get("baseline_accuracy")),
+                    "avg_zero_shot": self._maybe_float(result.get("avg_zero_shot")),
+                    "best_zero_shot": self._maybe_float(result.get("best_zero_shot")),
+                    "best_source": self._maybe_float(result.get("best_source")),
+                    "source_locales": result.get("source_locales", []),
+                    "zero_shot_family": result.get("zero_shot_family"),
                 }
 
-            # Add ensemble method
             locale_data[locale][method] = accuracy
-            zero_family = locale_data[locale].get('zero_shot_family')
-            avg_zero = self._maybe_float(locale_data[locale].get('avg_zero_shot'))
-            best_zero = self._maybe_float(locale_data[locale].get('best_zero_shot'))
-            best_source = self._maybe_float(locale_data[locale].get('best_source'))
+            zero_family = locale_data[locale].get("zero_shot_family")
+            avg_zero = self._maybe_float(locale_data[locale].get("avg_zero_shot"))
+            best_zero = self._maybe_float(locale_data[locale].get("best_zero_shot"))
+            best_source = self._maybe_float(locale_data[locale].get("best_source"))
 
             if zero_family is None:
                 avg_zero = best_zero = best_source = None
 
-            # Calculate improvements vs all three baselines when compatible
             if avg_zero is not None:
-                locale_data[locale][f'{method}_vs_avg_zero'] = accuracy - avg_zero
+                locale_data[locale][f"{method}_vs_avg_zero"] = accuracy - avg_zero
             if best_zero is not None:
-                locale_data[locale][f'{method}_vs_best_zero'] = accuracy - best_zero
+                locale_data[locale][f"{method}_vs_best_zero"] = accuracy - best_zero
             if best_source is not None:
-                locale_data[locale][f'{method}_vs_best_source'] = accuracy - best_source
+                locale_data[locale][f"{method}_vs_best_source"] = accuracy - best_source
 
         summary_records = []
         for locale, data in locale_data.items():
             record = dict(data)
-            if 'num_languages_map' in record and isinstance(record['num_languages_map'], dict):
-                record['num_languages_map'] = json.dumps(record['num_languages_map'])
+            if "num_languages_map" in record and isinstance(record["num_languages_map"], dict):
+                record["num_languages_map"] = json.dumps(record["num_languages_map"])
             summary_records.append(record)
 
         summary_df = pd.DataFrame(summary_records)
 
-        # Ensure improvement columns exist for all methods (family-aware, recomputed per method)
-        static_cols = {'locale', 'baseline', 'avg_zero_shot', 'best_zero_shot', 'best_source',
-                       'source_locales', 'num_languages_map', 'zero_shot_family'}
-        method_cols = [c for c in summary_df.columns if c not in static_cols and not c.startswith('baseline') and '_vs_' not in c]
+        static_cols = {
+            "locale",
+            "baseline",
+            "avg_zero_shot",
+            "best_zero_shot",
+            "best_source",
+            "source_locales",
+            "num_languages_map",
+            "zero_shot_family",
+        }
+        method_cols = [
+            c
+            for c in summary_df.columns
+            if c not in static_cols and not c.startswith("baseline") and "_vs_" not in c
+        ]
         for method in method_cols:
             method_family = self.get_method_model_family(method)
-            vs_avg_col = f'{method}_vs_avg_zero'
-            vs_best_col = f'{method}_vs_best_zero'
-            vs_source_col = f'{method}_vs_best_source'
+            vs_avg_col = f"{method}_vs_avg_zero"
+            vs_best_col = f"{method}_vs_best_zero"
+            vs_source_col = f"{method}_vs_best_source"
 
-            values = pd.to_numeric(summary_df[method], errors='coerce')
+            values = pd.to_numeric(summary_df[method], errors="coerce")
             vs_avg_list = []
             vs_best_list = []
             vs_source_list = []
@@ -1123,9 +456,8 @@ class AdvancedResultsAnalyzer:
                     vs_source_list.append(np.nan)
                     continue
 
-                target_locale = row['locale']
-                source_locales = row.get('source_locales') or []
-                # source_locales stored as string? handle list/str
+                target_locale = row["locale"]
+                source_locales = row.get("source_locales") or []
                 if isinstance(source_locales, str):
                     try:
                         source_locales = json.loads(source_locales)
@@ -1135,7 +467,9 @@ class AdvancedResultsAnalyzer:
                 zs_scores = self.get_zero_shot_scores(target_locale, source_locales, method_family)
                 avg_zero = np.mean(list(zs_scores.values())) if zs_scores else np.nan
                 best_zero = self.get_best_overall_zero_shot(target_locale, method_family)
-                best_source = self.get_best_source_performance(target_locale, source_locales, method_family)
+                best_source = self.get_best_source_performance(
+                    target_locale, source_locales, method_family
+                )
 
                 vs_avg_list.append(val - avg_zero if pd.notna(avg_zero) else np.nan)
                 vs_best_list.append(val - best_zero if best_zero is not None else np.nan)
@@ -1146,643 +480,172 @@ class AdvancedResultsAnalyzer:
             summary_df[vs_source_col] = vs_source_list
 
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        summary_df.to_csv(f'advanced_analysis_summary_{timestamp}.csv', index=False)
+        summary_df.to_csv(f"advanced_analysis_summary_{timestamp}.csv", index=False)
 
         print(f"Comprehensive summary saved to: advanced_analysis_summary_{timestamp}.csv")
 
-        # Print summary statistics
         self.print_summary_statistics(summary_df)
 
         return summary_df
 
-    def generate_pure_scores_plots(self, summary_df: pd.DataFrame, output_dir: Path, timestamp: str):
-        """Generate individual plots showing pure performance scores for each method"""
-        print("Generating pure scores plots...")
-
-        # Identify all method columns (pure performance, not comparisons)
-        method_cols = [
-            col for col in summary_df.columns
-            if col not in ['locale', 'baseline', 'avg_zero_shot', 'best_zero_shot', 'best_source', 'source_locales', 'num_languages_map']
-            and '_vs_' not in col
-        ]
-
-        if not method_cols:
-            print("No method columns found for pure scores plots")
-            return
-
-        locales = summary_df['locale'].tolist()
-
-        for method in method_cols:
-            num_lang_counts = self.get_method_num_language_set(summary_df, method)
-
-            # Get model family and similarity type for this method
-            model_family = self.get_method_model_family(method)
-            similarity_type = self.get_method_similarity_type(method)
-
-            # Create individual plot for each method
-            fig, ax = plt.subplots(figsize=(20, 8))
-            display_name = self.format_method_key_for_display(method, model_family, similarity_type)
-            file_method = self.format_method_key_for_filename(method, model_family, similarity_type)
-
-            # Get method data
-            method_data = summary_df[method].fillna(0).tolist()
-
-            # Also include baseline and all three zero-shot baselines for reference
-            baseline_data = summary_df.get('baseline', pd.Series([0]*len(locales))).fillna(0).tolist()
-            avg_zero_data = summary_df.get('avg_zero_shot', pd.Series([0]*len(locales))).fillna(0).tolist()
-            best_zero_data = summary_df.get('best_zero_shot', pd.Series([0]*len(locales))).fillna(0).tolist()
-            best_source_data = summary_df.get('best_source', pd.Series([0]*len(locales))).fillna(0).tolist()
-
-            x = np.arange(len(locales))
-            width = 0.16
-
-            # Plot all baselines and method
-            bars1 = ax.bar(x - 2*width, baseline_data, width, label='Baseline', alpha=0.7, color='gray')
-            bars2 = ax.bar(x - width, avg_zero_data, width, label='Avg Zero-shot', alpha=0.7, color='lightblue')
-            bars3 = ax.bar(x, best_zero_data, width, label='Best Zero-shot', alpha=0.7, color='lightgreen')
-            bars4 = ax.bar(x + width, best_source_data, width, label='Best Source', alpha=0.7, color='lightcoral')
-            bars5 = ax.bar(x + 2*width, method_data, width, label=display_name, alpha=0.8, color='royalblue')
-
-            # Add value labels on method bars
-            for i, bar in enumerate(bars5):
-                height = bar.get_height()
-                if height > 0.01:  # Only show labels for non-zero values
-                    ax.text(bar.get_x() + bar.get_width()/2., height,
-                           f'{height:.3f}', ha='center', va='bottom', fontsize=8, fontweight='bold')
-
-            ax.set_xlabel('Target Languages')
-            ax.set_ylabel('Performance Score')
-            ax.set_title(f'Pure Performance: {display_name} vs All Baselines')
-            ax.set_xticks(x)
-            ax.set_xticklabels(locales, rotation=45, ha='right')
-            ax.legend()
-            ax.grid(True, alpha=0.3)
-
-            plt.tight_layout()
-            output_file = output_dir / f"pure_scores_{file_method}_{timestamp}.png"
-            plt.savefig(output_file, dpi=300, bbox_inches='tight')
-            plt.close()
-            print(f"  ✅ Pure scores plot for {file_method} saved to: {output_file}")
-
-    def generate_vs_avg_zero_plots(self, summary_df: pd.DataFrame, output_dir: Path, timestamp: str):
-        """Generate individual plots showing improvement vs average zero-shot baseline for each method"""
-        print("Generating vs average zero-shot plots...")
-
-        # Identify all vs_avg_zero columns
-        vs_avg_cols = [col for col in summary_df.columns if col.endswith('_vs_avg_zero')]
-
-        if not vs_avg_cols:
-            print("No vs_avg_zero columns found for comparison plots")
-            return
-
-        locales = summary_df['locale'].tolist()
-
-        for col in vs_avg_cols:
-            method_name = col.replace('_vs_avg_zero', '')
-            num_lang_counts = self.get_method_num_language_set(summary_df, method_name)
-
-            # Get model family and similarity type for this method
-            model_family = self.get_method_model_family(method_name)
-            similarity_type = self.get_method_similarity_type(method_name)
-
-            improvement_data = summary_df[col].fillna(0).tolist()
-            display_name = self.format_method_key_for_display(method_name, model_family, similarity_type)
-            file_method = self.format_method_key_for_filename(method_name, model_family, similarity_type)
-
-            # Create individual plot for each method
-            fig, ax = plt.subplots(figsize=(16, 8))
-
-            x = np.arange(len(locales))
-            width = 0.6
-
-            bars = ax.bar(x, improvement_data, width, alpha=0.8)
-
-            # Color bars: green for positive (improvement), red for negative (degradation)
-            for i, bar in enumerate(bars):
-                height = bar.get_height()
-                if abs(height) > 0.001:  # Only show significant differences
-                    if height >= 0:
-                        bar.set_color('green')
-                        ax.text(bar.get_x() + bar.get_width()/2., height,
-                               f'+{height:.3f}', ha='center', va='bottom', fontsize=8, fontweight='bold', color='darkgreen')
-                    else:
-                        bar.set_color('lightcoral')
-                        ax.text(bar.get_x() + bar.get_width()/2., height,
-                               f'{height:.3f}', ha='center', va='top', fontsize=8, fontweight='bold', color='darkred')
-
-            # Add reference line at y=0
-            ax.axhline(y=0, color='black', linestyle='-', alpha=0.7, linewidth=2)
-
-            # Add statistics
-            improvements = [h for h in improvement_data if abs(h) > 0.001]
-            if improvements:
-                mean_improvement = np.mean(improvements)
-                positive_count = sum(1 for h in improvements if h > 0)
-                total_count = len(improvements)
-                win_rate = (positive_count / total_count) * 100
-
-                # Add text box with statistics
-                stats_text = f'Mean: {mean_improvement:+.4f}\nWin Rate: {win_rate:.1f}%\nCount: {total_count}'
-                ax.text(0.02, 0.98, stats_text, transform=ax.transAxes, fontsize=10,
-                       verticalalignment='top', bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8))
-
-            ax.set_xlabel('Target Languages')
-            ax.set_ylabel('Improvement over Average Zero-shot')
-            ax.set_title(f'{display_name} vs Average Zero-shot Baseline')
-            ax.set_xticks(x)
-            ax.set_xticklabels(locales, rotation=45, ha='right')
-            ax.grid(True, alpha=0.3)
-
-            plt.tight_layout()
-            output_file = output_dir / f"vs_avg_zero_{file_method}_{timestamp}.png"
-            plt.savefig(output_file, dpi=300, bbox_inches='tight')
-            plt.close()
-            print(f"  ✅ vs avg zero-shot plot for {file_method} saved to: {output_file}")
-
-    def generate_vs_best_zero_plots(self, summary_df: pd.DataFrame, output_dir: Path, timestamp: str):
-        """Generate individual plots showing improvement vs best zero-shot baseline for each method"""
-        print("Generating vs best zero-shot plots...")
-
-        # Identify all vs_best_zero columns
-        vs_best_cols = [col for col in summary_df.columns if col.endswith('_vs_best_zero')]
-
-        if not vs_best_cols:
-            print("No vs_best_zero columns found for comparison plots")
-            return
-
-        locales = summary_df['locale'].tolist()
-
-        for col in vs_best_cols:
-            method_name = col.replace('_vs_best_zero', '')
-            num_lang_counts = self.get_method_num_language_set(summary_df, method_name)
-
-            # Get model family and similarity type for this method
-            model_family = self.get_method_model_family(method_name)
-            similarity_type = self.get_method_similarity_type(method_name)
-
-            improvement_data = summary_df[col].fillna(0).tolist()
-            display_name = self.format_method_key_for_display(method_name, model_family, similarity_type)
-            file_method = self.format_method_key_for_filename(method_name, model_family, similarity_type)
-
-            # Create individual plot for each method
-            fig, ax = plt.subplots(figsize=(16, 8))
-
-            x = np.arange(len(locales))
-            width = 0.6
-
-            bars = ax.bar(x, improvement_data, width, alpha=0.8)
-
-            # Color bars: blue for positive (improvement), orange for negative (degradation)
-            for i, bar in enumerate(bars):
-                height = bar.get_height()
-                if abs(height) > 0.001:  # Only show significant differences
-                    if height >= 0:
-                        bar.set_color('royalblue')
-                        ax.text(bar.get_x() + bar.get_width()/2., height,
-                               f'+{height:.3f}', ha='center', va='bottom', fontsize=8, fontweight='bold', color='darkblue')
-                    else:
-                        bar.set_color('orange')
-                        ax.text(bar.get_x() + bar.get_width()/2., height,
-                               f'{height:.3f}', ha='center', va='top', fontsize=8, fontweight='bold', color='darkorange')
-
-            # Add reference line at y=0
-            ax.axhline(y=0, color='black', linestyle='-', alpha=0.7, linewidth=2)
-
-            # Add statistics
-            improvements = [h for h in improvement_data if abs(h) > 0.001]
-            if improvements:
-                mean_improvement = np.mean(improvements)
-                positive_count = sum(1 for h in improvements if h > 0)
-                total_count = len(improvements)
-                win_rate = (positive_count / total_count) * 100
-
-                # Add text box with statistics
-                stats_text = f'Mean: {mean_improvement:+.4f}\nWin Rate: {win_rate:.1f}%\nCount: {total_count}'
-                ax.text(0.02, 0.98, stats_text, transform=ax.transAxes, fontsize=10,
-                       verticalalignment='top', bbox=dict(boxstyle='round', facecolor='lightblue', alpha=0.8))
-
-            ax.set_xlabel('Target Languages')
-            ax.set_ylabel('Improvement over Best Zero-shot')
-            ax.set_title(f'{display_name} vs Best Zero-shot Baseline')
-            ax.set_xticks(x)
-            ax.set_xticklabels(locales, rotation=45, ha='right')
-            ax.grid(True, alpha=0.3)
-
-            plt.tight_layout()
-            output_file = output_dir / f"vs_best_zero_{file_method}_{timestamp}.png"
-            plt.savefig(output_file, dpi=300, bbox_inches='tight')
-            plt.close()
-            print(f"  ✅ vs best zero-shot plot for {file_method} saved to: {output_file}")
-
-    def generate_vs_best_source_plots(self, summary_df: pd.DataFrame, output_dir: Path, timestamp: str):
-        """Generate individual plots showing improvement vs best source baseline for each method"""
-        print("Generating vs best source plots...")
-
-        # Identify all vs_best_source columns
-        vs_best_source_cols = [col for col in summary_df.columns if col.endswith('_vs_best_source')]
-
-        if not vs_best_source_cols:
-            print("No vs_best_source columns found for comparison plots")
-            return
-
-        locales = summary_df['locale'].tolist()
-
-        for col in vs_best_source_cols:
-            method_name = col.replace('_vs_best_source', '')
-            num_lang_counts = self.get_method_num_language_set(summary_df, method_name)
-
-            # Get model family and similarity type for this method
-            model_family = self.get_method_model_family(method_name)
-            similarity_type = self.get_method_similarity_type(method_name)
-
-            improvement_data = summary_df[col].fillna(0).tolist()
-            display_name = self.format_method_key_for_display(method_name, model_family, similarity_type)
-            file_method = self.format_method_key_for_filename(method_name, model_family, similarity_type)
-
-            # Create individual plot for each method
-            fig, ax = plt.subplots(figsize=(16, 8))
-
-            x = np.arange(len(locales))
-            width = 0.6
-
-            bars = ax.bar(x, improvement_data, width, alpha=0.8)
-
-            # Color bars: green for positive (improvement), red for negative (degradation)
-            for i, bar in enumerate(bars):
-                height = bar.get_height()
-                if abs(height) > 0.001:  # Only show significant differences
-                    if height >= 0:
-                        bar.set_color('forestgreen')
-                        ax.text(bar.get_x() + bar.get_width()/2., height,
-                               f'+{height:.3f}', ha='center', va='bottom', fontsize=8, fontweight='bold', color='darkgreen')
-                    else:
-                        bar.set_color('indianred')
-                        ax.text(bar.get_x() + bar.get_width()/2., height,
-                               f'{height:.3f}', ha='center', va='top', fontsize=8, fontweight='bold', color='darkred')
-
-            # Add reference line at y=0
-            ax.axhline(y=0, color='black', linestyle='-', alpha=0.7, linewidth=2)
-
-            # Add statistics
-            improvements = [h for h in improvement_data if abs(h) > 0.001]
-            if improvements:
-                mean_improvement = np.mean(improvements)
-                positive_count = sum(1 for h in improvements if h > 0)
-                total_count = len(improvements)
-                win_rate = (positive_count / total_count) * 100
-
-                # Add text box with statistics
-                stats_text = f'Mean: {mean_improvement:+.4f}\nWin Rate: {win_rate:.1f}%\nCount: {total_count}'
-                ax.text(0.02, 0.98, stats_text, transform=ax.transAxes, fontsize=10,
-                       verticalalignment='top', bbox=dict(boxstyle='round', facecolor='lightgreen', alpha=0.8))
-
-            ax.set_xlabel('Target Languages')
-            ax.set_ylabel('Improvement over Best Source')
-            ax.set_title(f'{display_name} vs Best Source Baseline (Fair Comparison)')
-            ax.set_xticks(x)
-            ax.set_xticklabels(locales, rotation=45, ha='right')
-            ax.grid(True, alpha=0.3)
-
-            plt.tight_layout()
-            output_file = output_dir / f"vs_best_source_{file_method}_{timestamp}.png"
-            plt.savefig(output_file, dpi=300, bbox_inches='tight')
-            plt.close()
-            print(f"  ✅ vs best source plot for {file_method} saved to: {output_file}")
-
-    def generate_baseline_comparison_plots(self, summary_df: pd.DataFrame, output_dir: Path, timestamp: str):
-        """Generate plots comparing baseline performance directly against each method."""
-        print("Generating baseline comparison plots...")
-
-        if 'locale' not in summary_df.columns or summary_df.empty:
-            print("No locale data found for baseline comparison plots")
-            return
-
-        locales = summary_df['locale'].tolist()
-        baseline_cols = [
-            col for col in summary_df.columns
-            if col.startswith('baseline_') and '_vs_' not in col
-        ]
-
-        if not baseline_cols:
-            print("No baseline columns found for comparison plots")
-            return
-
-        method_cols = [
-            col for col in summary_df.columns
-            if col not in ['locale', 'baseline', 'avg_zero_shot', 'best_zero_shot', 'best_source', 'source_locales', 'num_languages_map']
-            and not col.startswith('baseline')
-            and '_vs_' not in col
-        ]
-
-        if not method_cols:
-            print("No method columns found for baseline comparison plots")
-            return
-
-        for method in method_cols:
-            model_family = self.get_method_model_family(method)
-            inferred_family = self.infer_model_family_from_method_key(method)
-            if inferred_family:
-                model_family = inferred_family
-
-            baseline_col = f'baseline_{model_family}' if model_family and model_family != 'unknown' else None
-
-            if baseline_col not in summary_df.columns:
-                baseline_col = 'baseline' if 'baseline' in summary_df.columns else None
-
-            if not baseline_col:
-                continue
-
-            # Coerce to numeric to avoid string subtraction issues
-            baseline_values = pd.to_numeric(summary_df[baseline_col], errors='coerce').fillna(0).tolist()
-            method_values = pd.to_numeric(summary_df[method], errors='coerce').fillna(0).tolist()
-            display_name = self.format_method_key_for_display(method, model_family, self.get_method_similarity_type(method))
-            file_method = self.format_method_key_for_filename(method, model_family, self.get_method_similarity_type(method))
-
-            differences = []
-            for m, b in zip(method_values, baseline_values):
-                differences.append(m - b)
-
-            fig, ax = plt.subplots(figsize=(20, 8))
-            x = np.arange(len(locales))
-            width = 0.35
-
-            if baseline_col == 'baseline' or not model_family or model_family == 'unknown':
-                baseline_label = 'Baseline'
-            else:
-                baseline_label = f'Baseline ({model_family})'
-
-            ax.bar(x - width / 2, baseline_values, width, label=baseline_label, alpha=0.7, color='gray')
-            method_bars = ax.bar(x + width / 2, method_values, width, label=display_name, alpha=0.85, color='royalblue')
-
-            for idx, (bar, diff) in enumerate(zip(method_bars, differences)):
-                height = bar.get_height()
-                ax.text(
-                    bar.get_x() + bar.get_width() / 2.0,
-                    height,
-                    f'{diff:+.3f}',
-                    ha='center',
-                    va='bottom' if diff >= 0 else 'top',
-                    fontsize=8,
-                    fontweight='bold',
-                    color='darkgreen' if diff >= 0 else 'darkred'
-                )
-
-            diff_values = [d for d in differences if abs(d) > 1e-6]
-            if diff_values:
-                mean_diff = np.mean(diff_values)
-                positive = sum(1 for d in diff_values if d > 0)
-                stats_text = f'Mean Δ: {mean_diff:+.4f}\nImproved: {positive}/{len(diff_values)}'
-                ax.text(0.02, 0.95, stats_text, transform=ax.transAxes, fontsize=10,
-                        verticalalignment='top', bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.7))
-
-            ax.set_xlabel('Target Languages')
-            ax.set_ylabel('Accuracy')
-            ax.set_title(f'Baseline vs {display_name}')
-            ax.set_xticks(x)
-            ax.set_xticklabels(locales, rotation=45, ha='right')
-            ax.legend()
-            ax.grid(True, alpha=0.3)
-
-            plt.tight_layout()
-            output_file = output_dir / f"baseline_vs_{file_method}_{timestamp}.png"
-            plt.savefig(output_file, dpi=300, bbox_inches='tight')
-            plt.close()
-            print(f"  ✅ Baseline comparison plot for {file_method} saved to: {output_file}")
-
-    def print_summary_statistics(self, summary_df: pd.DataFrame):
-        """Print comprehensive summary statistics"""
-        print("\n" + "="*80)
+    def print_summary_statistics(self, summary_df: pd.DataFrame) -> None:
+        """Print comprehensive summary statistics."""
+        print("\n" + "=" * 80)
         print("COMPREHENSIVE ANALYSIS SUMMARY")
-        print("="*80)
+        print("=" * 80)
 
-        # Basic stats
         print(f"\nTotal locales analyzed: {len(summary_df)}")
 
-        if 'baseline' in summary_df.columns:
+        if "baseline" in summary_df.columns:
             print(f"\nAverage baseline: {summary_df['baseline'].mean():.4f}")
 
         static_fields = {
-            'locale',
-            'baseline',
-            'avg_zero_shot',
-            'best_zero_shot',
-            'best_source',
-            'source_locales',
-            'num_languages_map',
-            'zero_shot_family',
+            "locale",
+            "baseline",
+            "avg_zero_shot",
+            "best_zero_shot",
+            "best_source",
+            "source_locales",
+            "num_languages_map",
+            "zero_shot_family",
         }
 
-        # Dynamic method analysis (merges + ensembles)
         method_cols = [
-            col for col in summary_df.columns
-            if col not in static_fields and '_vs_' not in col
+            col for col in summary_df.columns if col not in static_fields and "_vs_" not in col
         ]
         if method_cols:
-            print(f"\n--- METHOD PERFORMANCE ---")
+            print("\n--- METHOD PERFORMANCE ---")
             for method in sorted(method_cols):
                 avg_score = summary_df[method].mean()
                 print(f"Average {method}: {avg_score:.4f}")
 
-        # Improvements vs average zero-shot
-        improvement_cols = [col for col in summary_df.columns if col.endswith('_vs_avg_zero')]
+        improvement_cols = [col for col in summary_df.columns if col.endswith("_vs_avg_zero")]
         if improvement_cols:
-            print(f"\n--- IMPROVEMENT VS AVG ZERO-SHOT ---")
+            print("\n--- IMPROVEMENT VS AVG ZERO-SHOT ---")
             for col in sorted(improvement_cols):
                 avg_improvement = summary_df[col].mean()
                 positive_count = (summary_df[col] > 0).sum()
-                print(f"{col}: avg {avg_improvement:+.4f}, positive in {positive_count}/{len(summary_df)} locales")
+                print(
+                    f"{col}: avg {avg_improvement:+.4f}, positive in {positive_count}/{len(summary_df)} locales"
+                )
 
-        # Improvements vs best zero-shot
-        best_zero_cols = [col for col in summary_df.columns if col.endswith('_vs_best_zero')]
+        best_zero_cols = [col for col in summary_df.columns if col.endswith("_vs_best_zero")]
         if best_zero_cols:
-            print(f"\n--- IMPROVEMENT VS BEST ZERO-SHOT ---")
+            print("\n--- IMPROVEMENT VS BEST ZERO-SHOT ---")
             for col in sorted(best_zero_cols):
                 avg_improvement = summary_df[col].mean()
                 positive_count = (summary_df[col] > 0).sum()
-                print(f"{col}: avg {avg_improvement:+.4f}, positive in {positive_count}/{len(summary_df)} locales")
+                print(
+                    f"{col}: avg {avg_improvement:+.4f}, positive in {positive_count}/{len(summary_df)} locales"
+                )
 
-        # Improvements vs best source
-        best_source_cols = [col for col in summary_df.columns if col.endswith('_vs_best_source')]
+        best_source_cols = [col for col in summary_df.columns if col.endswith("_vs_best_source")]
         if best_source_cols:
-            print(f"\n--- IMPROVEMENT VS BEST SOURCE ---")
+            print("\n--- IMPROVEMENT VS BEST SOURCE ---")
             for col in sorted(best_source_cols):
                 avg_improvement = summary_df[col].mean()
                 positive_count = (summary_df[col] > 0).sum()
-                print(f"{col}: avg {avg_improvement:+.4f}, positive in {positive_count}/{len(summary_df)} locales")
+                print(
+                    f"{col}: avg {avg_improvement:+.4f}, positive in {positive_count}/{len(summary_df)} locales"
+                )
 
-        # Zero-shot comparison
-        if 'avg_zero_shot' in summary_df.columns:
-            print(f"\n--- ZERO-SHOT COMPARISON ---")
+        if "avg_zero_shot" in summary_df.columns:
+            print("\n--- ZERO-SHOT COMPARISON ---")
             print(f"Average zero-shot performance: {summary_df['avg_zero_shot'].mean():.4f}")
             print(f"Best zero-shot performance: {summary_df['best_zero_shot'].max():.4f}")
             print(f"Best source performance: {summary_df['best_source'].max():.4f}")
 
-    def generate_advanced_analysis(self):
-        """Main method to generate complete advanced analysis"""
+    def generate_advanced_analysis(self) -> pd.DataFrame:
+        """Main method to generate complete advanced analysis."""
         print("Starting Advanced Results Analysis...")
-        print("="*80)
+        print("=" * 80)
 
-        # Create plots directory
         self.plots_dir.mkdir(exist_ok=True)
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        plots_dir = self.plots_dir  # For backward compatibility with existing code
-        print(f"Plots will be saved to: {plots_dir}")
+        print(f"Plots will be saved to: {self.plots_dir}")
 
-        # Analyze advanced merging methods
         merging_results = self.analyze_advanced_merging_methods()
-
-        # Analyze ensemble methods
         ensemble_results = self.analyze_ensemble_methods()
-
-        # Create comprehensive summary with all methods vs both baselines
         summary_df = self.create_comprehensive_summary(merging_results, ensemble_results, None)
 
         if summary_df is not None:
-            # Generate individual plots for each method and comparison type
-            self.generate_pure_scores_plots(summary_df, self.plots_dir, timestamp)
-            self.generate_vs_avg_zero_plots(summary_df, self.plots_dir, timestamp)
-            self.generate_vs_best_zero_plots(summary_df, self.plots_dir, timestamp)
-            self.generate_vs_best_source_plots(summary_df, self.plots_dir, timestamp)
-            self.generate_baseline_comparison_plots(summary_df, self.plots_dir, timestamp)
+            # Generate plots using the plot generator
+            self.plot_generator.generate_pure_scores_plots(
+                summary_df,
+                timestamp,
+                self.get_method_model_family,
+                self.get_method_similarity_type,
+                lambda method: self.get_method_num_language_set(summary_df, method),
+            )
+            self.plot_generator.generate_vs_avg_zero_plots(
+                summary_df,
+                timestamp,
+                self.get_method_model_family,
+                self.get_method_similarity_type,
+            )
+            self.plot_generator.generate_vs_best_zero_plots(
+                summary_df,
+                timestamp,
+                self.get_method_model_family,
+                self.get_method_similarity_type,
+            )
+            self.plot_generator.generate_vs_best_source_plots(
+                summary_df,
+                timestamp,
+                self.get_method_model_family,
+                self.get_method_similarity_type,
+            )
+            self.plot_generator.generate_baseline_comparison_plots(
+                summary_df,
+                timestamp,
+                self.get_method_model_family,
+                self.get_method_similarity_type,
+                self.infer_model_family_from_method_key,
+            )
 
-            # Generate comprehensive num_languages separated plots for ALL methods
             if self.num_languages_filter is not None or len(merging_results) > 0:
-                self.generate_num_languages_separated_plots(merging_results, plots_dir, timestamp)
-                self.generate_num_languages_method_plots(summary_df, plots_dir, timestamp)
+                self.plot_generator.generate_num_languages_separated_plots(
+                    merging_results, timestamp
+                )
+                self._generate_num_languages_method_plots(summary_df, timestamp)
 
-        print(f"\nAdvanced analysis complete!")
-        print(f"Generated files:")
+        print("\nAdvanced analysis complete!")
+        print("Generated files:")
         print(f"- advanced_analysis_summary_{timestamp}.csv")
-        print(f"- Individual pure score plots for each method")
-        print(f"- Individual vs avg zero-shot comparison plots for each method")
-        print(f"- Individual vs best zero-shot comparison plots for each method")
-        print(f"- Individual vs best source comparison plots for each method (FAIR COMPARISON)")
-        print(f"- Baseline comparison plots for each method")
+        print("- Individual pure score plots for each method")
+        print("- Individual vs avg zero-shot comparison plots for each method")
+        print("- Individual vs best zero-shot comparison plots for each method")
+        print("- Individual vs best source comparison plots for each method (FAIR COMPARISON)")
+        print("- Baseline comparison plots for each method")
         print(f"All plots saved in {self.plots_dir} directory with {timestamp} suffix")
 
         return summary_df
 
-    def generate_num_languages_separated_plots(self, merging_results: List[Dict], plots_dir: Path, timestamp: str):
-        """Generate separate plots grouped by num_languages"""
-        print("Generating num_languages separated plots...")
-
-        # Group results by num_languages
-        grouped_results: Dict[int, Dict[str, Dict[str, float]]] = {}
-        for result in merging_results:
-            locale = result['target_locale']
-            baseline_score = result.get('baseline', 0)
-            num_lang_map = result.get('num_languages_map', {})
-
-            if not num_lang_map:
-                legacy_count = result.get('num_languages')
-                if legacy_count:
-                    locale_entry = grouped_results.setdefault(legacy_count, {}).setdefault(locale, {})
-                    locale_entry['baseline'] = baseline_score
-                continue
-
-            for method_key, num_lang in num_lang_map.items():
-                locale_entry = grouped_results.setdefault(num_lang, {}).setdefault(locale, {})
-                locale_entry[method_key] = result.get(method_key, 0)
-                locale_entry['baseline'] = baseline_score
-
-        if len(grouped_results) <= 1:
-            print("Only one num_languages group found, skipping separate plots")
-            return
-
-        # Generate plots for each num_languages group
-        for num_lang, locale_map in grouped_results.items():
-            print(f"Generating plots for {num_lang} languages ({len(locale_map)} locales)...")
-
-            locales = sorted(locale_map.keys())
-            method_keys = sorted({
-                key for locale_dict in locale_map.values()
-                for key in locale_dict.keys()
-                if key != 'baseline'
-            })
-
-            if not method_keys:
-                print(f"  ⚠️ No method variants found for {num_lang} languages, skipping")
-                continue
-
-            group_data = {'locale': locales}
-            for method_key in method_keys:
-                group_data[method_key] = [locale_map[loc].get(method_key, 0) for loc in locales]
-            group_data['baseline'] = [locale_map[loc].get('baseline', 0) for loc in locales]
-
-            group_df = pd.DataFrame(group_data).set_index('locale')
-
-            # Generate pure scores plot for this group
-            self._generate_group_pure_scores_plot(group_df, num_lang, plots_dir, timestamp)
-
-            # Generate comparison plot if baseline available
-            if 'baseline' in group_df.columns:
-                self._generate_group_improvement_plot(group_df, num_lang, plots_dir, timestamp)
-
-        print(f"Generated plots for {len(grouped_results)} num_languages groups")
-
-    def get_num_languages_from_merged_models(self, locale: str, method: str) -> Optional[int]:
-        """Extract num_languages from actual merged_models folder names"""
-        import re
-
-        # Look for merged model directories for this locale and method
-        merged_models_path = self.results_dir / "merged_models"
-
-        # Check if merged_models directory exists
-        if not merged_models_path.exists():
-            return None
-
-        # Pattern: {method}_{similarity_type}_merge_{locale}_{num}merged or {method}_merge_{locale}_{num}merged
-        base_method = method
-        match = re.match(r'(.+?)_(\d+)lang$', method)
-        if match:
-            base_method = match.group(1)
-
-        # Try new naming convention first
-        for similarity_type in ['URIEL', 'REAL']:
-            pattern = f"{base_method}_{similarity_type}_merge_{locale}_(\\d+)merged"
-            for entry in merged_models_path.iterdir():
-                if entry.is_dir():
-                    match = re.search(pattern, entry.name)
-                    if match:
-                        return int(match.group(1))
-
-        # Fallback to legacy naming convention
-        pattern = f"{base_method}_merge_{locale}_(\\d+)merged"
-        for entry in merged_models_path.iterdir():
-            if entry.is_dir():
-                match = re.search(pattern, entry.name)
-                if match:
-                    return int(match.group(1))
-
-        return None
-
-    def generate_num_languages_method_plots(self, summary_df: pd.DataFrame, plots_dir: Path, timestamp: str):
-        """Generate separate plots for each method separated by num_languages using actual merged_models folders"""
+    def _generate_num_languages_method_plots(
+        self, summary_df: pd.DataFrame, timestamp: str
+    ) -> None:
+        """Generate separate plots for each method separated by num_languages."""
         print("Generating num_languages separated plots for ALL methods...")
 
-        # Get all methods from summary_df (excluding baseline and improvement columns)
-        methods = [col for col in summary_df.columns if col not in [
-            'locale', 'baseline', 'avg_zero_shot', 'best_zero_shot', 'best_source', 'source_locales', 'num_languages_map'
-        ] and not col.endswith('_vs_')]
+        methods = get_method_columns(summary_df)
 
-        # Collect all (locale, method, num_languages) combinations
         locale_method_num_lang = {}
 
         for _, row in summary_df.iterrows():
-            locale = row['locale']
-            raw_map = row.get('num_languages_map')
+            locale = row["locale"]
+            raw_map = row.get("num_languages_map")
             num_lang_map = {}
             if isinstance(raw_map, str) and raw_map:
                 num_lang_map = json.loads(raw_map)
 
             for method in methods:
-                val = pd.to_numeric(row.get(method), errors='coerce')
-                if pd.notna(val) and val > 0:  # Only if method has results
+                val = pd.to_numeric(row.get(method), errors="coerce")
+                if pd.notna(val) and val > 0:
                     num_lang = None
                     if method in num_lang_map:
                         num_lang = num_lang_map[method]
                     else:
-                        match = re.match(r'(.+?)_(\d+)lang$', method)
+                        match = re.match(r"(.+?)_(\d+)lang$", method)
                         if match:
                             num_lang = int(match.group(2))
                         if num_lang is None:
@@ -1792,41 +655,32 @@ class AdvancedResultsAnalyzer:
                         locale_method_num_lang[(locale, method)] = num_lang
 
         if not locale_method_num_lang:
-            print("❌ No num_languages information found in merged_models folder")
+            print("No num_languages information found in merged_models folder")
             return
 
-        # Group by num_languages
         grouped_dfs = {}
         for (locale, method), num_lang in locale_method_num_lang.items():
             if num_lang not in grouped_dfs:
                 grouped_dfs[num_lang] = []
-            # Get the row from summary_df for this locale
-            locale_row = summary_df[summary_df['locale'] == locale].iloc[0]
+            locale_row = summary_df[summary_df["locale"] == locale].iloc[0]
             grouped_dfs[num_lang].append((locale, method, locale_row))
 
         print(f"Found num_languages groups: {sorted(grouped_dfs.keys())}")
 
-        # For each num_languages group, generate plots for all methods
         for num_lang, entries in grouped_dfs.items():
             print(f"Generating plots for {num_lang} languages ({len(entries)} entries)...")
 
-            # Create a mini-summary for this group
-            locales_in_group = set()
             method_data = {method: [] for method in methods}
-            baseline_data = []
 
             for locale, method, row in entries:
-                locales_in_group.add(locale)
                 method_data[method].append((locale, row[method]))
 
-            # Generate plots for each method that has data in this group
             for method in methods:
                 if not method_data[method]:
                     continue
 
                 print(f"  Creating {method} plots for {num_lang} languages...")
 
-                # Prepare data for this method and num_languages group
                 locales = []
                 scores = []
                 baseline_scores = []
@@ -1835,530 +689,130 @@ class AdvancedResultsAnalyzer:
                 best_source_scores = []
 
                 for locale, score in method_data[method]:
-                    # Get the full row for this locale
-                    locale_row = summary_df[summary_df['locale'] == locale].iloc[0]
+                    locale_row = summary_df[summary_df["locale"] == locale].iloc[0]
                     locales.append(locale)
                     scores.append(score)
-                    baseline_scores.append(locale_row.get('baseline', 0))
-                    avg_zero_scores.append(locale_row.get('avg_zero_shot', 0))
-                    best_zero_scores.append(locale_row.get('best_zero_shot', 0))
-                    best_source_scores.append(locale_row.get('best_source', 0))
+                    baseline_scores.append(locale_row.get("baseline", 0))
+                    avg_zero_scores.append(locale_row.get("avg_zero_shot", 0))
+                    best_zero_scores.append(locale_row.get("best_zero_shot", 0))
+                    best_source_scores.append(locale_row.get("best_source", 0))
 
-                # Create pure scores plot
-                self._create_pure_scores_plot_for_group(locales, scores, baseline_scores,
-                                                       avg_zero_scores, best_zero_scores,
-                                                       best_source_scores, method, num_lang,
-                                                       plots_dir, timestamp)
+                self.plot_generator.create_pure_scores_plot_for_group(
+                    locales,
+                    scores,
+                    baseline_scores,
+                    avg_zero_scores,
+                    best_zero_scores,
+                    best_source_scores,
+                    method,
+                    num_lang,
+                    timestamp,
+                )
 
-                # Create comparison plots if baseline data exists
-                self._create_comparison_plots_for_group(locales, scores, baseline_scores,
-                                                       avg_zero_scores, best_zero_scores,
-                                                       best_source_scores, method, num_lang,
-                                                       plots_dir, timestamp)
+                avg_zero_improvements = [s - a for s, a in zip(scores, avg_zero_scores)]
+                self.plot_generator.create_improvement_plot(
+                    locales,
+                    avg_zero_improvements,
+                    method,
+                    num_lang,
+                    "Average Zero-shot",
+                    "vs_avg_zero",
+                    timestamp,
+                    "green",
+                    "lightcoral",
+                )
+
+                best_zero_improvements = [s - b for s, b in zip(scores, best_zero_scores)]
+                self.plot_generator.create_improvement_plot(
+                    locales,
+                    best_zero_improvements,
+                    method,
+                    num_lang,
+                    "Best Zero-shot",
+                    "vs_best_zero",
+                    timestamp,
+                    "royalblue",
+                    "orange",
+                )
+
+                best_source_improvements = [s - b for s, b in zip(scores, best_source_scores)]
+                self.plot_generator.create_improvement_plot(
+                    locales,
+                    best_source_improvements,
+                    method,
+                    num_lang,
+                    "Best Source",
+                    "vs_best_source",
+                    timestamp,
+                    "forestgreen",
+                    "indianred",
+                )
 
         print(f"Generated method-specific plots for {len(grouped_dfs)} num_languages groups")
 
-    def _create_pure_scores_plot_for_group(self, locales, scores, baseline_scores,
-                                         avg_zero_scores, best_zero_scores, best_source_scores,
-                                         method, num_lang, plots_dir, timestamp):
-        """Create pure scores plot for a specific method and num_languages group"""
-        fig, ax = plt.subplots(figsize=(20, 8))
-        display_name = self.format_method_key_for_display(method)
-        file_method = self.format_method_key_for_filename(method)
-
-        x = np.arange(len(locales))
-        width = 0.16
-
-        # Plot all baselines and method
-        bars1 = ax.bar(x - 2*width, baseline_scores, width, label='Baseline', alpha=0.7, color='gray')
-        bars2 = ax.bar(x - width, avg_zero_scores, width, label='Avg Zero-shot', alpha=0.7, color='lightblue')
-        bars3 = ax.bar(x, best_zero_scores, width, label='Best Zero-shot', alpha=0.7, color='lightgreen')
-        bars4 = ax.bar(x + width, best_source_scores, width, label='Best Source', alpha=0.7, color='lightcoral')
-        bars5 = ax.bar(x + 2*width, scores, width, label=display_name, alpha=0.8, color='royalblue')
-
-        # Add value labels on method bars
-        for i, bar in enumerate(bars5):
-            height = bar.get_height()
-            if height > 0.01:
-                ax.text(bar.get_x() + bar.get_width()/2., height,
-                       f'{height:.3f}', ha='center', va='bottom', fontsize=8, fontweight='bold')
-
-        ax.set_xlabel('Target Languages')
-        ax.set_ylabel('Performance Score')
-        ax.set_title(f'Pure Performance: {display_name} vs All Baselines ({num_lang} Languages)')
-        ax.set_xticks(x)
-        ax.set_xticklabels(locales, rotation=45, ha='right')
-        ax.legend()
-        ax.grid(True, alpha=0.3)
-
-        plt.tight_layout()
-        output_file = plots_dir / f"pure_scores_{file_method}_{num_lang}lang_{timestamp}.png"
-        plt.savefig(output_file, dpi=300, bbox_inches='tight')
-        plt.close()
-        print(f"    ✅ Pure scores plot saved: {output_file}")
-
-    def _create_comparison_plots_for_group(self, locales, scores, baseline_scores,
-                                        avg_zero_scores, best_zero_scores, best_source_scores,
-                                        method, num_lang, plots_dir, timestamp):
-        """Create comparison plots (improvements) for a specific method and num_languages group"""
-
-        # Calculate improvements
-        avg_zero_improvements = [score - avg for score, avg in zip(scores, avg_zero_scores)]
-        best_zero_improvements = [score - best for score, best in zip(scores, best_zero_scores)]
-        best_source_improvements = [score - best for score, best in zip(scores, best_source_scores)]
-
-        # Create vs avg zero-shot plot
-        self._create_improvement_plot(locales, avg_zero_improvements, method, num_lang,
-                                    "Average Zero-shot", "vs_avg_zero", plots_dir, timestamp, 'green', 'lightcoral')
-
-        # Create vs best zero-shot plot
-        self._create_improvement_plot(locales, best_zero_improvements, method, num_lang,
-                                    "Best Zero-shot", "vs_best_zero", plots_dir, timestamp, 'royalblue', 'orange')
-
-        # Create vs best source plot
-        self._create_improvement_plot(locales, best_source_improvements, method, num_lang,
-                                    "Best Source", "vs_best_source", plots_dir, timestamp, 'forestgreen', 'indianred')
-
-    def _create_improvement_plot(self, locales, improvements, method, num_lang, baseline_name,
-                                prefix, plots_dir, timestamp, pos_color, neg_color):
-        """Create improvement plot for a specific baseline"""
-        fig, ax = plt.subplots(figsize=(16, 8))
-        display_name = self.format_method_key_for_display(method)
-        file_method = self.format_method_key_for_filename(method)
-
-        x = np.arange(len(locales))
-        width = 0.6
-
-        bars = ax.bar(x, improvements, width, alpha=0.8)
-
-        # Color bars: positive for improvement, negative for degradation
-        for i, bar in enumerate(bars):
-            height = bar.get_height()
-            if abs(height) > 0.001:
-                if height >= 0:
-                    bar.set_color(pos_color)
-                    ax.text(bar.get_x() + bar.get_width()/2., height,
-                           f'+{height:.3f}', ha='center', va='bottom', fontsize=8, fontweight='bold')
-                else:
-                    bar.set_color(neg_color)
-                    ax.text(bar.get_x() + bar.get_width()/2., height,
-                           f'{height:.3f}', ha='center', va='top', fontsize=8, fontweight='bold')
-
-        # Add reference line at y=0
-        ax.axhline(y=0, color='black', linestyle='-', alpha=0.7, linewidth=2)
-
-        # Add statistics
-        valid_improvements = [h for h in improvements if abs(h) > 0.001]
-        if valid_improvements:
-            mean_improvement = np.mean(valid_improvements)
-            positive_count = sum(1 for h in valid_improvements if h > 0)
-            win_rate = (positive_count / len(valid_improvements)) * 100
-
-            stats_text = f'Mean: {mean_improvement:+.4f}\nWin Rate: {win_rate:.1f}%\nCount: {len(valid_improvements)}'
-            ax.text(0.02, 0.98, stats_text, transform=ax.transAxes, fontsize=10,
-                   verticalalignment='top', bbox=dict(boxstyle='round', facecolor='lightblue', alpha=0.8))
-
-        ax.set_xlabel('Target Languages')
-        ax.set_ylabel(f'Improvement over {baseline_name}')
-        ax.set_title(f'{display_name} vs {baseline_name} ({num_lang} Languages)')
-        ax.set_xticks(x)
-        ax.set_xticklabels(locales, rotation=45, ha='right')
-        ax.grid(True, alpha=0.3)
-
-        plt.tight_layout()
-        output_file = plots_dir / f"{prefix}_{file_method}_{num_lang}lang_{timestamp}.png"
-        plt.savefig(output_file, dpi=300, bbox_inches='tight')
-        plt.close()
-        print(f"    ✅ {prefix} plot saved: {output_file}")
-
-    def generate_pure_scores_plots_for_group(self, group_df: pd.DataFrame, plots_dir: Path, timestamp: str, num_lang: int):
-        """Generate pure scores plots for a specific num_languages group"""
-        # Identify all method columns (pure performance, not comparisons)
-        method_cols = [col for col in group_df.columns if col not in ['locale', 'baseline', 'avg_zero_shot', 'best_zero_shot', 'best_source', 'source_locales'] and not '_vs_' in col]
-
-        if 'locale' in group_df.columns:
-            locales = group_df['locale'].tolist()
-        else:
-            locales = group_df.index.tolist()
-
-        for method in method_cols:
-            # Create individual plot for each method
-            fig, ax = plt.subplots(figsize=(20, 8))
-
-            # Get method data
-            method_data = group_df[method].fillna(0).tolist()
-
-            # Also include baseline and all three zero-shot baselines for reference
-            baseline_series = group_df['baseline'] if 'baseline' in group_df.columns else pd.Series([0]*len(locales), index=locales)
-            avg_series = group_df['avg_zero_shot'] if 'avg_zero_shot' in group_df.columns else pd.Series([0]*len(locales), index=locales)
-            best_zero_series = group_df['best_zero_shot'] if 'best_zero_shot' in group_df.columns else pd.Series([0]*len(locales), index=locales)
-            best_source_series = group_df['best_source'] if 'best_source' in group_df.columns else pd.Series([0]*len(locales), index=locales)
-
-            baseline_data = baseline_series.reindex(locales, fill_value=0).tolist()
-            avg_zero_data = avg_series.reindex(locales, fill_value=0).tolist()
-            best_zero_data = best_zero_series.reindex(locales, fill_value=0).tolist()
-            best_source_data = best_source_series.reindex(locales, fill_value=0).tolist()
-
-            x = np.arange(len(locales))
-            width = 0.16
-
-            # Plot all baselines and method
-            bars1 = ax.bar(x - 2*width, baseline_data, width, label='Baseline', alpha=0.7, color='gray')
-            bars2 = ax.bar(x - width, avg_zero_data, width, label='Avg Zero-shot', alpha=0.7, color='lightblue')
-            bars3 = ax.bar(x, best_zero_data, width, label='Best Zero-shot', alpha=0.7, color='lightgreen')
-            bars4 = ax.bar(x + width, best_source_data, width, label='Best Source', alpha=0.7, color='lightcoral')
-            display_name = self.format_method_key_for_display(method)
-            file_method = self.format_method_key_for_filename(method)
-            bars5 = ax.bar(x + 2*width, method_data, width, label=display_name, alpha=0.8, color='royalblue')
-
-            # Add value labels on method bars
-            for i, bar in enumerate(bars5):
-                height = bar.get_height()
-                if height > 0.01:  # Only show labels for non-zero values
-                    ax.text(bar.get_x() + bar.get_width()/2., height,
-                           f'{height:.3f}', ha='center', va='bottom', fontsize=8, fontweight='bold')
-
-            ax.set_xlabel('Target Languages')
-            ax.set_ylabel('Performance Score')
-            ax.set_title(f'Pure Performance: {display_name} vs All Baselines ({num_lang} Languages)')
-            ax.set_xticks(x)
-            ax.set_xticklabels(locales, rotation=45, ha='right')
-            ax.legend()
-            ax.grid(True, alpha=0.3)
-
-            plt.tight_layout()
-            output_file = plots_dir / f"pure_scores_{file_method}_{num_lang}lang_{timestamp}.png"
-            plt.savefig(output_file, dpi=300, bbox_inches='tight')
-            plt.close()
-            print(f"  ✅ Pure scores plot for {file_method} ({num_lang} lang) saved to: {output_file}")
-
-    def generate_vs_avg_zero_plots_for_group(self, group_df: pd.DataFrame, plots_dir: Path, timestamp: str, num_lang: int):
-        """Generate vs avg zero-shot plots for a specific num_languages group"""
-        # Identify all vs_avg_zero columns
-        vs_avg_cols = [col for col in group_df.columns if col.endswith('_vs_avg_zero')]
-
-        if 'locale' in group_df.columns:
-            locales = group_df['locale'].tolist()
-        else:
-            locales = group_df.index.tolist()
-
-        for col in vs_avg_cols:
-            method_name = col.replace('_vs_avg_zero', '')
-            improvement_data = group_df[col].reindex(locales, fill_value=0).tolist()
-            display_name = self.format_method_key_for_display(method_name)
-            file_method = self.format_method_key_for_filename(method_name)
-
-            # Create individual plot for each method
-            fig, ax = plt.subplots(figsize=(16, 8))
-
-            x = np.arange(len(locales))
-            width = 0.6
-
-            bars = ax.bar(x, improvement_data, width, alpha=0.8)
-
-            # Color bars: green for positive (improvement), red for negative (degradation)
-            for i, bar in enumerate(bars):
-                height = bar.get_height()
-                if abs(height) > 0.001:  # Only show significant differences
-                    if height >= 0:
-                        bar.set_color('green')
-                        ax.text(bar.get_x() + bar.get_width()/2., height,
-                               f'+{height:.3f}', ha='center', va='bottom', fontsize=8, fontweight='bold', color='darkgreen')
-                    else:
-                        bar.set_color('lightcoral')
-                        ax.text(bar.get_x() + bar.get_width()/2., height,
-                               f'{height:.3f}', ha='center', va='top', fontsize=8, fontweight='bold', color='darkred')
-
-            # Add reference line at y=0
-            ax.axhline(y=0, color='black', linestyle='-', alpha=0.7, linewidth=2)
-
-            # Add statistics
-            improvements = [h for h in improvement_data if abs(h) > 0.001]
-            if improvements:
-                mean_improvement = np.mean(improvements)
-                positive_count = sum(1 for h in improvements if h > 0)
-                total_count = len(improvements)
-                win_rate = (positive_count / total_count) * 100
-
-                # Add text box with statistics
-                stats_text = f'Mean: {mean_improvement:+.4f}\nWin Rate: {win_rate:.1f}%\nCount: {total_count}'
-                ax.text(0.02, 0.98, stats_text, transform=ax.transAxes, fontsize=10,
-                       verticalalignment='top', bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8))
-
-            ax.set_xlabel('Target Languages')
-            ax.set_ylabel('Improvement over Average Zero-shot')
-            ax.set_title(f'{display_name} vs Average Zero-shot Baseline ({num_lang} Languages)')
-            ax.set_xticks(x)
-            ax.set_xticklabels(locales, rotation=45, ha='right')
-            ax.grid(True, alpha=0.3)
-
-            plt.tight_layout()
-            output_file = plots_dir / f"vs_avg_zero_{file_method}_{num_lang}lang_{timestamp}.png"
-            plt.savefig(output_file, dpi=300, bbox_inches='tight')
-            plt.close()
-            print(f"  ✅ vs avg zero-shot plot for {file_method} ({num_lang} lang) saved to: {output_file}")
-
-    def generate_vs_best_zero_plots_for_group(self, group_df: pd.DataFrame, plots_dir: Path, timestamp: str, num_lang: int):
-        """Generate vs best zero-shot plots for a specific num_languages group"""
-        # Identify all vs_best_zero columns
-        vs_best_cols = [col for col in group_df.columns if col.endswith('_vs_best_zero')]
-
-        if 'locale' in group_df.columns:
-            locales = group_df['locale'].tolist()
-        else:
-            locales = group_df.index.tolist()
-
-        for col in vs_best_cols:
-            method_name = col.replace('_vs_best_zero', '')
-            improvement_data = group_df[col].reindex(locales, fill_value=0).tolist()
-            display_name = self.format_method_key_for_display(method_name)
-            file_method = self.format_method_key_for_filename(method_name)
-
-            # Create individual plot for each method
-            fig, ax = plt.subplots(figsize=(16, 8))
-
-            x = np.arange(len(locales))
-            width = 0.6
-
-            bars = ax.bar(x, improvement_data, width, alpha=0.8)
-
-            # Color bars: blue for positive (improvement), orange for negative (degradation)
-            for i, bar in enumerate(bars):
-                height = bar.get_height()
-                if abs(height) > 0.001:  # Only show significant differences
-                    if height >= 0:
-                        bar.set_color('royalblue')
-                        ax.text(bar.get_x() + bar.get_width()/2., height,
-                               f'+{height:.3f}', ha='center', va='bottom', fontsize=8, fontweight='bold', color='darkblue')
-                    else:
-                        bar.set_color('orange')
-                        ax.text(bar.get_x() + bar.get_width()/2., height,
-                               f'{height:.3f}', ha='center', va='top', fontsize=8, fontweight='bold', color='darkorange')
-
-            # Add reference line at y=0
-            ax.axhline(y=0, color='black', linestyle='-', alpha=0.7, linewidth=2)
-
-            # Add statistics
-            improvements = [h for h in improvement_data if abs(h) > 0.001]
-            if improvements:
-                mean_improvement = np.mean(improvements)
-                positive_count = sum(1 for h in improvements if h > 0)
-                total_count = len(improvements)
-                win_rate = (positive_count / total_count) * 100
-
-                # Add text box with statistics
-                stats_text = f'Mean: {mean_improvement:+.4f}\nWin Rate: {win_rate:.1f}%\nCount: {total_count}'
-                ax.text(0.02, 0.98, stats_text, transform=ax.transAxes, fontsize=10,
-                       verticalalignment='top', bbox=dict(boxstyle='round', facecolor='lightblue', alpha=0.8))
-
-            ax.set_xlabel('Target Languages')
-            ax.set_ylabel('Improvement over Best Zero-shot')
-            ax.set_title(f'{display_name} vs Best Zero-shot Baseline ({num_lang} Languages)')
-            ax.set_xticks(x)
-            ax.set_xticklabels(locales, rotation=45, ha='right')
-            ax.grid(True, alpha=0.3)
-
-            plt.tight_layout()
-            output_file = plots_dir / f"vs_best_zero_{file_method}_{num_lang}lang_{timestamp}.png"
-            plt.savefig(output_file, dpi=300, bbox_inches='tight')
-            plt.close()
-            print(f"  ✅ vs best zero-shot plot for {file_method} ({num_lang} lang) saved to: {output_file}")
-
-    def generate_vs_best_source_plots_for_group(self, group_df: pd.DataFrame, plots_dir: Path, timestamp: str, num_lang: int):
-        """Generate vs best source plots for a specific num_languages group"""
-        # Identify all vs_best_source columns
-        vs_best_source_cols = [col for col in group_df.columns if col.endswith('_vs_best_source')]
-
-        if 'locale' in group_df.columns:
-            locales = group_df['locale'].tolist()
-        else:
-            locales = group_df.index.tolist()
-
-        for col in vs_best_source_cols:
-            method_name = col.replace('_vs_best_source', '')
-            improvement_data = group_df[col].reindex(locales, fill_value=0).tolist()
-            display_name = self.format_method_key_for_display(method_name)
-            file_method = self.format_method_key_for_filename(method_name)
-
-            # Create individual plot for each method
-            fig, ax = plt.subplots(figsize=(16, 8))
-
-            x = np.arange(len(locales))
-            width = 0.6
-
-            bars = ax.bar(x, improvement_data, width, alpha=0.8)
-
-            # Color bars: green for positive (improvement), red for negative (degradation)
-            for i, bar in enumerate(bars):
-                height = bar.get_height()
-                if abs(height) > 0.001:  # Only show significant differences
-                    if height >= 0:
-                        bar.set_color('forestgreen')
-                        ax.text(bar.get_x() + bar.get_width()/2., height,
-                               f'+{height:.3f}', ha='center', va='bottom', fontsize=8, fontweight='bold', color='darkgreen')
-                    else:
-                        bar.set_color('indianred')
-                        ax.text(bar.get_x() + bar.get_width()/2., height,
-                               f'{height:.3f}', ha='center', va='top', fontsize=8, fontweight='bold', color='darkred')
-
-            # Add reference line at y=0
-            ax.axhline(y=0, color='black', linestyle='-', alpha=0.7, linewidth=2)
-
-            # Add statistics
-            improvements = [h for h in improvement_data if abs(h) > 0.001]
-            if improvements:
-                mean_improvement = np.mean(improvements)
-                positive_count = sum(1 for h in improvements if h > 0)
-                total_count = len(improvements)
-                win_rate = (positive_count / total_count) * 100
-
-                # Add text box with statistics
-                stats_text = f'Mean: {mean_improvement:+.4f}\nWin Rate: {win_rate:.1f}%\nCount: {total_count}'
-                ax.text(0.02, 0.98, stats_text, transform=ax.transAxes, fontsize=10,
-                       verticalalignment='top', bbox=dict(boxstyle='round', facecolor='lightgreen', alpha=0.8))
-
-            ax.set_xlabel('Target Languages')
-            ax.set_ylabel('Improvement over Best Source')
-            ax.set_title(f'{display_name} vs Best Source Baseline ({num_lang} Languages)')
-            ax.set_xticks(x)
-            ax.set_xticklabels(locales, rotation=45, ha='right')
-            ax.grid(True, alpha=0.3)
-
-            plt.tight_layout()
-            output_file = plots_dir / f"vs_best_source_{file_method}_{num_lang}lang_{timestamp}.png"
-            plt.savefig(output_file, dpi=300, bbox_inches='tight')
-            plt.close()
-            print(f"  ✅ vs best source plot for {file_method} ({num_lang} lang) saved to: {output_file}")
-
-    def _generate_group_pure_scores_plot(self, df: pd.DataFrame, num_lang: int, plots_dir: Path, timestamp: str):
-        """Generate pure scores plot for a specific num_languages group"""
-        available_methods = [col for col in df.columns if col not in ['locale', 'baseline'] and df[col].notna().any()]
-
-        if not available_methods:
-            return
-
-        fig, ax = plt.subplots(figsize=(14, 8))
-
-        locales = df.index.tolist()
-        x = np.arange(len(locales))
-        width = 0.1
-
-        colors = plt.cm.Set3(np.linspace(0, 1, len(available_methods)))
-
-        for i, method in enumerate(available_methods):
-            scores = [df.loc[locale, method] if method in df.columns and pd.notna(df.loc[locale, method]) else 0
-                     for locale in locales]
-
-            display_name = self.format_method_key_for_display(method)
-            bars = ax.bar(x + i * width, scores, width, label=display_name,
-                         alpha=0.8, color=colors[i])
-
-        ax.set_xlabel('Target Languages')
-        ax.set_ylabel('Accuracy')
-        ax.set_title(f'Method Performance Comparison ({num_lang} Languages Used)')
-        ax.set_xticks(x + width * len(available_methods) / 2)
-        ax.set_xticklabels(locales, rotation=45, ha='right')
-        ax.legend()
-        ax.grid(True, alpha=0.3)
-        ax.set_ylim(0, 1)
-
-        plt.tight_layout()
-        filename = f'num_languages_{num_lang}_pure_scores_{timestamp}.png'
-        plt.savefig(plots_dir / filename, dpi=300, bbox_inches='tight')
-        plt.close()
-        print(f"  Saved: {filename}")
-
-    def _generate_group_improvement_plot(self, df: pd.DataFrame, num_lang: int, plots_dir: Path, timestamp: str):
-        """Generate improvement over baseline plot for a specific num_languages group"""
-        available_methods = [col for col in df.columns if col not in ['locale', 'baseline'] and df[col].notna().any()]
-
-        if not available_methods or 'baseline' not in df.columns:
-            return
-
-        fig, ax = plt.subplots(figsize=(14, 8))
-
-        locales = df.index.tolist()
-        x = np.arange(len(locales))
-        width = 0.1
-
-        colors = plt.cm.Set3(np.linspace(0, 1, len(available_methods)))
-
-        for i, method in enumerate(available_methods):
-            improvements = []
-            for locale in locales:
-                method_score = df.loc[locale, method] if method in df.columns and pd.notna(df.loc[locale, method]) else 0
-                baseline_score = df.loc[locale, 'baseline'] if 'baseline' in df.columns and pd.notna(df.loc[locale, 'baseline']) else 0
-                improvements.append(method_score - baseline_score)
-
-            display_name = self.format_method_key_for_display(method)
-            bars = ax.bar(x + i * width, improvements, width, label=display_name,
-                         alpha=0.8, color=colors[i])
-
-            # Color bars: green for positive, red for negative
-            for bar in bars:
-                if bar.get_height() >= 0:
-                    bar.set_alpha(0.8)
-                else:
-                    bar.set_alpha(0.6)
-
-        ax.axhline(y=0, color='black', linestyle='-', alpha=0.7, linewidth=2)
-        ax.set_xlabel('Target Languages')
-        ax.set_ylabel('Improvement over Baseline')
-        ax.set_title(f'Improvement over Baseline ({num_lang} Languages Used)')
-        ax.set_xticks(x + width * len(available_methods) / 2)
-        ax.set_xticklabels(locales, rotation=45, ha='right')
-        ax.legend()
-        ax.grid(True, alpha=0.3)
-
-        plt.tight_layout()
-        filename = f'num_languages_{num_lang}_improvement_{timestamp}.png'
-        plt.savefig(plots_dir / filename, dpi=300, bbox_inches='tight')
-        plt.close()
-        print(f"  Saved: {filename}")
-
 
 def main():
-    """Main function to run the advanced analysis system with similarity type and num_languages support"""
-    parser = argparse.ArgumentParser(description='Enhanced Results Analysis with Similarity Type and num_languages Support')
-    parser.add_argument('--num-languages', type=str,
-                       help='Filter by number of languages (comma-separated, e.g., "3,5")')
-    parser.add_argument('--similarity-types', type=str,
-                       help='Filter by similarity types (comma-separated, e.g., "URIEL,REAL")')
-    parser.add_argument('--list-num-languages', action='store_true',
-                       help='List available num_languages values in data')
-    parser.add_argument('--list-similarity-types', action='store_true',
-                       help='List available similarity types in data')
-    parser.add_argument('--results-dir', type=str, default="results",
-                       help='Directory containing experiment results (default: results)')
-    parser.add_argument('--plots-dir', type=str, default="plots",
-                       help='Directory for saving plots (default: plots)')
+    """Main function to run the advanced analysis system."""
+    parser = argparse.ArgumentParser(
+        description="Enhanced Results Analysis with Similarity Type and num_languages Support"
+    )
+    parser.add_argument(
+        "--num-languages",
+        type=str,
+        help='Filter by number of languages (comma-separated, e.g., "3,5")',
+    )
+    parser.add_argument(
+        "--similarity-types",
+        type=str,
+        help='Filter by similarity types (comma-separated, e.g., "URIEL,REAL")',
+    )
+    parser.add_argument(
+        "--list-num-languages",
+        action="store_true",
+        help="List available num_languages values in data",
+    )
+    parser.add_argument(
+        "--list-similarity-types",
+        action="store_true",
+        help="List available similarity types in data",
+    )
+    parser.add_argument(
+        "--results-dir",
+        type=str,
+        default="results",
+        help="Directory containing experiment results (default: results)",
+    )
+    parser.add_argument(
+        "--plots-dir",
+        type=str,
+        default="plots",
+        help="Directory for saving plots (default: plots)",
+    )
 
     args = parser.parse_args()
 
-    # Parse num_languages filter
     num_languages_filter = None
     if args.num_languages:
-        num_languages_filter = [int(x.strip()) for x in args.num_languages.split(',')]
+        num_languages_filter = [int(x.strip()) for x in args.num_languages.split(",")]
         print(f"Filtering experiments with num_languages: {num_languages_filter}")
 
-    # Parse similarity types filter
     similarity_types_filter = None
     if args.similarity_types:
-        similarity_types_filter = [x.strip().upper() for x in args.similarity_types.split(',')]
-        valid_types = {'URIEL', 'REAL'}
+        similarity_types_filter = [x.strip().upper() for x in args.similarity_types.split(",")]
+        valid_types = {"URIEL", "REAL"}
         invalid_types = [t for t in similarity_types_filter if t not in valid_types]
         if invalid_types:
             print(f"Error: Invalid similarity types: {invalid_types}. Valid types: {valid_types}")
             return None
         print(f"Filtering experiments with similarity types: {similarity_types_filter}")
 
-    # If listing num_languages, create analyzer and show available values
     if args.list_num_languages:
-        analyzer = AdvancedResultsAnalyzer(results_dir=args.results_dir, plots_dir=args.plots_dir)
-        # Find available num_languages from merge details
+        analyzer = AdvancedResultsAnalyzer(
+            results_dir=args.results_dir, plots_dir=args.plots_dir
+        )
         available_num_langs = set()
-        for locale in analyzer.main_results_df['locale'].unique():
-            for method in ['similarity', 'average', 'fisher']:
+        for locale in analyzer.main_results_df["locale"].unique():
+            for method in ["similarity", "average", "fisher"]:
                 num_lang = analyzer.extract_num_languages_from_details(locale, method)
                 if num_lang is not None:
                     available_num_langs.add(num_lang)
@@ -2370,14 +824,14 @@ def main():
             print("No num_languages information found in merge details")
         return None
 
-    # If listing similarity types, create analyzer and show available values
     if args.list_similarity_types:
-        analyzer = AdvancedResultsAnalyzer(results_dir=args.results_dir, plots_dir=args.plots_dir)
-        # Find available similarity types from experiment results
+        analyzer = AdvancedResultsAnalyzer(
+            results_dir=args.results_dir, plots_dir=args.plots_dir
+        )
         available_similarity_types = set()
         for exp_name, exp_data in analyzer.experiment_results.items():
-            if exp_data.get('similarity_type') and exp_data['similarity_type'] != 'unknown':
-                available_similarity_types.add(exp_data['similarity_type'])
+            if exp_data.get("similarity_type") and exp_data["similarity_type"] != "unknown":
+                available_similarity_types.add(exp_data["similarity_type"])
 
         if available_similarity_types:
             print(f"Available similarity types in data: {sorted(list(available_similarity_types))}")
@@ -2389,10 +843,11 @@ def main():
         results_dir=args.results_dir,
         plots_dir=args.plots_dir,
         num_languages_filter=num_languages_filter,
-        similarity_types=similarity_types_filter
+        similarity_types=similarity_types_filter,
     )
     summary_df = analyzer.generate_advanced_analysis()
     return summary_df
+
 
 if __name__ == "__main__":
     exit(main())

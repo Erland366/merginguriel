@@ -11,6 +11,7 @@ import pytest
 import torch
 
 from merginguriel import evaluate_specific_model as eval_module
+from merginguriel import naming_config as naming_config_module
 
 
 class DummyTokenizer:
@@ -66,7 +67,7 @@ def test_evaluate_specific_model_smoke(monkeypatch, tmp_path):
     monkeypatch.setattr(eval_module.AutoTokenizer, "from_pretrained", classmethod(lambda cls, *a, **k: DummyTokenizer()))
     monkeypatch.setattr(eval_module.AutoModelForSequenceClassification, "from_pretrained", classmethod(lambda cls, *a, **k: DummyModel()))
     monkeypatch.setattr(eval_module, "load_dataset", lambda *a, **k: DummyDataset())
-    monkeypatch.setattr(eval_module.naming_manager, "detect_model_family_from_path", lambda *a, **k: "xlm-roberta-base")
+    monkeypatch.setattr(naming_config_module.naming_manager, "detect_model_family_from_path", lambda *a, **k: "xlm-roberta-base")
     monkeypatch.setattr(eval_module.torch.cuda, "is_available", lambda: False)
 
     results = eval_module.evaluate_specific_model(
