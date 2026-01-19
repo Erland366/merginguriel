@@ -191,38 +191,55 @@ class AblationRunner:
             # Build MergeConfig from experiment config
             exp_config = json.loads(record.config_json) if record.config_json else {}
 
+            merged_models_dir = exp_config.get("merged_models_dir", "merged_models")
+
             merge_config = MergeConfig(
                 mode=record.method,
                 target_lang=record.locale,
                 similarity_type=record.similarity_type,
                 num_languages=record.num_languages,
                 include_target=record.include_target,
-                models_root=exp_config.get("models_root", "haryos_model"),
-                results_dir=self.config.results_base_dir,
-                merged_models_dir=exp_config.get("merged_models_dir", "merged_models"),
-                cleanup_after_eval=exp_config.get("cleanup_after_eval", False),
+                base_model=exp_config.get("model_family", "xlm-roberta-base"),
+                base_model_dir=exp_config.get("models_root", "haryos_model"),
+                batch_size=exp_config.get("batch_size", 16),
+                max_seq_length=exp_config.get("max_seq_length", 128),
             )
 
             # Run the pipeline
-            pipeline = MergingPipeline(merge_config)
-            results = pipeline.run()
+            pipeline = MergingPipeline(merge_config, merged_models_dir=merged_models_dir)
+            pipeline.run()
 
-            # Extract accuracy from results
+            # Find results from the output directory
+            # The merged model directory follows the naming convention
+            from merginguriel.naming_config import naming_manager
+            merged_dir_name = naming_manager.get_merged_model_dir_name(
+                experiment_type="merging",
+                method=record.method,
+                similarity_type=record.similarity_type,
+                locale=record.locale,
+                model_family=exp_config.get("model_family", "xlm-roberta-base"),
+                num_merged=record.num_languages - 1,  # num_merged = num_languages - 1 (excluding target)
+                include_target=record.include_target,
+            )
+            results_dir = Path(merged_models_dir) / merged_dir_name
+
+            # Look for results.json in the merged model directory
+            results_file = results_dir / "results.json"
             accuracy = None
-            results_dir = None
-            if results and "eval_results" in results:
-                eval_results = results["eval_results"]
-                if "performance" in eval_results:
-                    accuracy = eval_results["performance"].get("accuracy")
-                results_dir = results.get("results_dir")
+
+            if results_file.exists():
+                with open(results_file) as f:
+                    results_data = json.load(f)
+                    if "performance" in results_data:
+                        accuracy = results_data["performance"].get("accuracy")
 
             if accuracy is not None:
-                self.db.mark_completed(exp_id, accuracy, results_dir or "")
+                self.db.mark_completed(exp_id, accuracy, str(results_dir))
                 print(f"  Completed: accuracy = {accuracy:.4f}")
                 return True
             else:
-                self.db.mark_failed(exp_id, "No accuracy in results")
-                print("  Failed: No accuracy in results")
+                self.db.mark_failed(exp_id, "No accuracy found in results")
+                print("  Failed: No accuracy found in results")
                 return False
 
         except Exception as e:
