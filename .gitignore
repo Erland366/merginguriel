@@ -222,4 +222,4 @@ results/
 *.json
 plots/
 iterative_large_scale_results/
-results_*.md
+results_*.mdsubmodules/
