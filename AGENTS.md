@@ -125,11 +125,24 @@ MergingUriel investigates **cross-lingual model merging** for NLU tasks:
 - Best source: Highest-performing source model for target
 - Best overall: Best zero-shot across all source models
 
+### IncTar vs ExcTar (Critical Distinction)
+
+| Mode | Meaning | Goal | Baseline |
+|------|---------|------|----------|
+| **ExcTar** | Exclude target model from merge | Goal 1: Beat zero-shot | Best source model on target (NxN off-diagonal) |
+| **IncTar** | Include target model in merge | Goal 2: Enhance target | Target model on itself (NxN diagonal) |
+
+- **ExcTar**: Pure cross-lingual transfer. Can merged sources beat zero-shot?
+- **IncTar**: Can merging the target with similar languages make it *better* than alone?
+
 ### Success Criteria
 
 ```
-merged_accuracy > max(source_accuracies_on_target)  # Beat best zero-shot
-merged_accuracy > pretrained_xlm_roberta_baseline   # Beat raw pretrained
+# ExcTar (Goal 1): Beat zero-shot cross-lingual
+merged_accuracy > max(source_accuracies_on_target)
+
+# IncTar (Goal 2): Enhance target model
+merged_accuracy > target_model_on_target  # NxN diagonal
 ```
 
 ### Key Entry Points

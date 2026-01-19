@@ -205,12 +205,11 @@ class AblationRunner:
                 max_seq_length=exp_config.get("max_seq_length", 128),
             )
 
-            # Run the pipeline
+            # Run the pipeline (merge + STS-B sanity check)
             pipeline = MergingPipeline(merge_config, merged_models_dir=merged_models_dir)
             pipeline.run()
 
-            # Find results from the output directory
-            # The merged model directory follows the naming convention
+            # Find the merged model directory
             from merginguriel.naming_config import naming_manager
             # num_merged is the number of models actually merged (num_languages - 1 since one is the base)
             num_merged = record.num_languages - 1
@@ -223,30 +222,39 @@ class AblationRunner:
                 num_merged=num_merged,
                 include_target=record.include_target,
             )
-            results_dir = Path(merged_models_dir) / merged_dir_name
+            merged_model_path = Path(merged_models_dir) / merged_dir_name
 
-            # Look for benchmark results in the benchmarks/ directory
-            # Files are named: {model_path_with_underscores}_glue_stsb_{timestamp}.json
-            benchmarks_dir = Path("benchmarks")
-            score = None
+            # Now run the actual MASSIVE intent classification evaluation
+            from merginguriel.evaluate_specific_model import evaluate_specific_model
 
-            if benchmarks_dir.exists():
-                # The model path in benchmark filename uses underscores for slashes
-                model_path_pattern = str(results_dir).replace("/", "_")
-                for benchmark_file in benchmarks_dir.glob(f"*{merged_dir_name}*.json"):
-                    with open(benchmark_file) as f:
-                        results_data = json.load(f)
-                        if "score" in results_data:
-                            score = results_data["score"]
-                            break
+            # Create results directory for this experiment
+            results_dir_name = naming_manager.get_results_dir_name(
+                experiment_type="merging",
+                method=record.method,
+                similarity_type=record.similarity_type,
+                locale=record.locale,
+                model_family=exp_config.get("model_family", "xlm-roberta-base"),
+                num_languages=record.num_languages,
+                include_target=record.include_target,
+            )
+            results_dir = Path("results") / results_dir_name
+            results_dir.mkdir(parents=True, exist_ok=True)
 
-            if score is not None:
-                self.db.mark_completed(exp_id, score, str(results_dir))
-                print(f"  Completed: score = {score:.4f}")
+            print(f"  Evaluating on MASSIVE intent classification ({record.locale})...")
+            eval_results = evaluate_specific_model(
+                model_name=str(merged_model_path),
+                locale=record.locale,
+                eval_folder=str(results_dir),
+            )
+
+            if eval_results and "performance" in eval_results:
+                accuracy = eval_results["performance"]["accuracy"]
+                self.db.mark_completed(exp_id, accuracy, str(results_dir))
+                print(f"  Completed: accuracy = {accuracy:.4f}")
                 return True
             else:
-                self.db.mark_failed(exp_id, "No score found in benchmark results")
-                print("  Failed: No score found in benchmark results")
+                self.db.mark_failed(exp_id, "No accuracy found in MASSIVE evaluation results")
+                print("  Failed: No accuracy found in MASSIVE evaluation results")
                 return False
 
         except Exception as e:
