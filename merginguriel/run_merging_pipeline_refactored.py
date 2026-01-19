@@ -828,7 +828,7 @@ class OutputManager:
             similarity_type=config.similarity_type,
             locale=config.target_lang,
             model_family=base_model_name,
-            num_languages=num_models,
+            num_merged=num_models,
             include_target=config.include_target
         )
         output_dir = os.path.join(self.project_root, self.merged_models_dir, merged_model_dir_name)

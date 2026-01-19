@@ -27,6 +27,7 @@ dependencies = [
     "transformers>=4.55.2",
     "urielplus>=1.1",
     "wandb>=0.19.8",
+    "lang2vec",
 ]
 
 [dependency-groups]
@@ -41,6 +42,7 @@ dev = [
 [tool.uv.workspace]
 members = [
     ".",
+    "./submodules/auto_merge_llm",
 ]
 
 [tool.setuptools]
@@ -48,3 +50,5 @@ packages = ["merginguriel"]
 
 [tool.uv.sources]
 merginguriel = { workspace = true }
+lang2vec = { path = "./submodules/lang2vec", editable = true }
+auto_merge_llm = { workspace = true }

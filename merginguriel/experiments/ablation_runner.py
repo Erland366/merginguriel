@@ -212,34 +212,41 @@ class AblationRunner:
             # Find results from the output directory
             # The merged model directory follows the naming convention
             from merginguriel.naming_config import naming_manager
+            # num_merged is the number of models actually merged (num_languages - 1 since one is the base)
+            num_merged = record.num_languages - 1
             merged_dir_name = naming_manager.get_merged_model_dir_name(
                 experiment_type="merging",
                 method=record.method,
                 similarity_type=record.similarity_type,
                 locale=record.locale,
                 model_family=exp_config.get("model_family", "xlm-roberta-base"),
-                num_merged=record.num_languages - 1,  # num_merged = num_languages - 1 (excluding target)
+                num_merged=num_merged,
                 include_target=record.include_target,
             )
             results_dir = Path(merged_models_dir) / merged_dir_name
 
-            # Look for results.json in the merged model directory
-            results_file = results_dir / "results.json"
-            accuracy = None
+            # Look for benchmark results in the benchmarks/ directory
+            # Files are named: {model_path_with_underscores}_glue_stsb_{timestamp}.json
+            benchmarks_dir = Path("benchmarks")
+            score = None
 
-            if results_file.exists():
-                with open(results_file) as f:
-                    results_data = json.load(f)
-                    if "performance" in results_data:
-                        accuracy = results_data["performance"].get("accuracy")
+            if benchmarks_dir.exists():
+                # The model path in benchmark filename uses underscores for slashes
+                model_path_pattern = str(results_dir).replace("/", "_")
+                for benchmark_file in benchmarks_dir.glob(f"*{merged_dir_name}*.json"):
+                    with open(benchmark_file) as f:
+                        results_data = json.load(f)
+                        if "score" in results_data:
+                            score = results_data["score"]
+                            break
 
-            if accuracy is not None:
-                self.db.mark_completed(exp_id, accuracy, str(results_dir))
-                print(f"  Completed: accuracy = {accuracy:.4f}")
+            if score is not None:
+                self.db.mark_completed(exp_id, score, str(results_dir))
+                print(f"  Completed: score = {score:.4f}")
                 return True
             else:
-                self.db.mark_failed(exp_id, "No accuracy found in results")
-                print("  Failed: No accuracy found in results")
+                self.db.mark_failed(exp_id, "No score found in benchmark results")
+                print("  Failed: No score found in benchmark results")
                 return False
 
         except Exception as e:

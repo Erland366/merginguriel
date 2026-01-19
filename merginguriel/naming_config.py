@@ -243,6 +243,13 @@ class NamingManager:
         basename = os.path.basename(model_path.rstrip('/'))
         return self._clean_model_family(basename)
 
+    def extract_model_family(self, model_path_or_name: str) -> str:
+        """Extract model family from a model path or name.
+
+        Alias for detect_model_family_from_path for backward compatibility.
+        """
+        return self.detect_model_family_from_path(model_path_or_name)
+
     def extract_locale_from_path(self, model_path: str) -> Optional[str]:
         """Extract locale from a model path like xlm-roberta-base_massive_k_sq-AL."""
         match = re.search(r'_([a-z]{2}-[A-Z]{2})$', model_path)
