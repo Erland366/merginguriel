@@ -125,4 +125,53 @@ For merged model targeting `th-TH`:
 
 ---
 
+## 2026-01-20 – Retrospective: Similarity-Based Model Merging Ablation
+
+**Type:** Retrospective
+**General description:** Ablation study comparing URIEL vs REAL similarity and IncTar vs ExcTar across 6 locales revealed model merging is only constructive when zero-shot transfer is poor.
+
+### What we tried
+
+1. **Ablation Configuration**
+   - 24 experiments (6 locales × 2 similarity types × 2 target inclusion modes)
+   - Similarity: URIEL (linguistic features) vs REAL (empirical cross-lingual)
+   - Target: IncTar (include target in merge) vs ExcTar (exclude target)
+   - Locales: sq-AL, sw-KE, vi-VN, th-TH, fi-FI, tr-TR
+   - Method: similarity-based weighted merging, 3 source languages
+   - Weighting: Top-k selection + Sinkhorn normalization
+
+2. **Evaluation**
+   - Metric: MASSIVE intent classification accuracy
+   - Baselines: NxN cross-lingual matrix (49×49)
+
+### Key findings
+
+| Finding | Evidence |
+|---------|----------|
+| Only 1/6 targets achieved Goal 1 | sw-KE beat zero-shot by +11.3%; others failed |
+| 0/6 targets achieved Goal 2 | All IncTar failed to beat diagonal |
+| URIEL selects poorly | Picks ranks 25-48 instead of top performers |
+| REAL selects better | Picks ranks 2-20, but still suboptimal |
+| Merging often destructive | vi-VN: sources 0.74→merged 0.55 |
+| sw-KE is constructive | Sources 0.41→merged 0.58 |
+
+**Critical Discovery**: Zero-shot/Self ratio predicts success
+- sw-KE: 56% ratio → constructive (+11%)
+- vi-VN: 86% ratio → destructive (-18%)
+
+### What failed
+
+- URIEL source selection: linguistic similarity ≠ transfer quality
+- Merging good sources: averaging dilutes quality
+- IncTar enhancement: target alone always better
+- Only 3 languages: may be insufficient
+
+### Outcome
+
+- Created skill: `merging-when-constructive`
+- Key insight: Only merge when ZS/Self ratio < 60%
+- Recommendation: Use REAL over URIEL; skip merge for high-transfer targets
+
+---
+
 <!-- New entries go above this line -->
