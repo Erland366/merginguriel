@@ -1,0 +1,23 @@
+# Test if more source languages helps
+# Hypothesis: More sources may help vi-VN by better ensemble effect
+
+ablation:
+  name: "num_languages_sweep"
+  description: "Test 3 vs 5 vs 7 source languages on constructive (sw-KE) and destructive (vi-VN) targets"
+
+  fixed:
+    method: "similarity"
+    similarity_type: "REAL"  # REAL performs better than URIEL
+    include_target: false    # ExcTar for Goal 1
+    model_family: "xlm-roberta-base"
+    models_root: "haryos_model"
+    merged_models_dir: "merged_models"
+    locales:
+      - "sw-KE"  # Constructive (56% ZS/Self)
+      - "vi-VN"  # Destructive (86% ZS/Self)
+
+  sweep:
+    num_languages: [3, 5, 7]
+
+  db_path: "experiments_num_lang.db"
+  resume: true
