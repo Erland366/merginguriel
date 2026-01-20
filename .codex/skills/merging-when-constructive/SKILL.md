@@ -292,8 +292,100 @@ Before committing to merging:
 
 1. ~~Why does sw-KE benefit while cy-GB doesn't?~~ → **ANSWERED**: Merging Effect (synergy vs interference)
 2. What makes sw-KE sources combine well? (complementary vs conflicting features)
-3. Can we predict Merging Effect without running the full merge?
+3. ~~Can we predict Merging Effect without running the full merge?~~ → **PARTIALLY ANSWERED**: See Merging Effect Prediction below (78% accuracy)
 4. Are there linguistic features that predict positive Merging Effect?
+5. How to quantify "regional coherence" as a predictive feature?
+
+---
+
+## Merging Effect Prediction (Jan 20, 2026)
+
+### Research Question
+
+Can we predict synergy vs interference BEFORE running the expensive merge?
+
+### The Predictor
+
+**Formula**:
+```
+synergy_score = diversity_score / (1 + source_acc_std × 10)
+
+where:
+  diversity_score = 1 - mean(source_pairwise_similarity)
+  source_acc_std = std(source_accuracies_on_target)
+```
+
+**Implementation**: `analysis/merging_effect_predictor.py`
+
+### Validation Results (78% accuracy)
+
+| Target | Rank | Synergy Score | Predicted | Merged Acc | Expected | Effect | Actual | Match |
+|--------|------|---------------|-----------|------------|----------|--------|--------|-------|
+| az-AZ | 1 | 0.1514 | SYNERGY | 0.6627 | 0.6371 | +2.57% | SYNERGY | ✓ |
+| tr-TR | 2 | 0.1255 | SYNERGY | 0.7290 | 0.6883 | +4.07% | SYNERGY | ✓ |
+| af-ZA | 4 | 0.1192 | SYNERGY | 0.5740 | 0.6018 | -2.78% | INTERFERENCE | ✗ |
+| am-ET | 47 | 0.0600 | INTERFERENCE | 0.4361 | 0.4658 | -2.97% | INTERFERENCE | ✓ |
+| tl-PH | 48 | 0.0417 | INTERFERENCE | 0.5921 | 0.5272 | +6.49% | SYNERGY | ✗ |
+| id-ID | 49 | 0.0375 | INTERFERENCE | 0.7091 | 0.7386 | -2.95% | INTERFERENCE | ✓ |
+
+**Combined with prior results**: 7/9 correct (78%)
+
+### What Works
+
+| Pattern | Examples | Confidence |
+|---------|----------|------------|
+| High diversity + Low variance → SYNERGY | az-AZ (+2.57%), tr-TR (+4.07%) | High |
+| Low diversity + High variance → INTERFERENCE | am-ET (-2.97%), id-ID (-2.95%) | High |
+
+### What Doesn't Fit
+
+| Failure | Why | Lesson |
+|---------|-----|--------|
+| af-ZA (predicted SYNERGY, actual INTERFERENCE) | High diversity but sources weak (60-64% vs target 85%) | Source quality matters |
+| tl-PH (predicted INTERFERENCE, actual SYNERGY +6.49%) | Low diversity but regional coherence (all SE Asian) | Regional coherence enables synergy |
+
+### Updated Decision Tree
+
+```
+Before merging, compute synergy_score:
+
+├─ synergy_score > 0.12 AND source_quality > 70%
+│   └─ MERGE: High confidence synergy expected
+│
+├─ synergy_score < 0.06 AND sources NOT regionally coherent
+│   └─ DON'T MERGE: High confidence interference expected
+│
+├─ Sources from same linguistic region (e.g., all SE Asian)
+│   └─ TEST EMPIRICALLY: Regional coherence may override low diversity
+│
+└─ All other cases
+    └─ TEST EMPIRICALLY: Predictor uncertain
+```
+
+### Practical Usage
+
+```python
+# Before committing to full merge:
+from analysis.merging_effect_predictor import analyze_target
+
+result = analyze_target(target_locale, nxn_matrix, similarity_matrix)
+if result['synergy_score'] > 0.12 and result['source_quality'] > 0.70:
+    print("High confidence: proceed with merge")
+elif result['synergy_score'] < 0.06:
+    print("High confidence: skip merge, use best source")
+else:
+    print("Uncertain: run pilot merge experiment")
+```
+
+### Failure Modes (Prediction)
+
+| What Failed | Why | Lesson |
+|-------------|-----|--------|
+| af-ZA high-diversity prediction | Sources much weaker than target (60-64% vs 85%) | Check source_quality > 70% |
+| tl-PH low-diversity prediction | Regional coherence (all SE Asian) created synergy | Check for geographic clustering |
+| Weak correlation on 6 samples | Need more validation data | Expand to 15+ targets |
+
+---
 
 ## References
 
