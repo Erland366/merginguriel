@@ -125,4 +125,88 @@ For merged model targeting `th-TH`:
 
 ---
 
+## 2026-01-20 – Retrospective: DARE & Source Selection Ablation
+
+**Type:** Retrospective
+**General description:** Tested DARE preprocessing and REAL vs URIEL similarity on cross-lingual merging; DARE harmful, REAL essential.
+
+### What we tried
+
+1. **URIEL vs REAL similarity for source selection**
+   - sq-AL with URIEL: selected ar-SA, cy-GB, fi-FI
+   - sq-AL with REAL: selected de-DE (43%), it-IT (29%), tr-TR (28%)
+
+2. **DARE preprocessing (drop_rate=0.9)**
+   - Tested with TIES merging on sq-AL, sw-KE, vi-VN
+   - Both with and without DARE
+
+3. **Locale diversity**
+   - sq-AL: neutral case
+   - sw-KE: "constructive" (56% diagonal ratio)
+   - vi-VN: "destructive" (86% diagonal ratio)
+
+### Key findings
+
+| Finding | Evidence |
+|---------|----------|
+| URIEL = catastrophic | sq-AL: 11.63% with URIEL vs 66.54% with REAL |
+| REAL achieves Goal 1 | sq-AL: 66.54% > 66.44% baseline; vi-VN: 74.45% > 74.31% baseline |
+| DARE destroys performance | sq-AL: 66.54% → 24.21%; vi-VN: 74.45% → 32.08% |
+| Sinkhorn suboptimal | sw-KE picked az-AZ (41.5%) instead of sq-AL (46.7%) |
+
+### What failed
+
+1. **DARE for cross-lingual**: -63% relative performance drop on sq-AL
+2. **sw-KE "constructive" case**: Failed despite favorable diagonal ratio
+3. **STS-B as proxy**: Showed minimal DARE impact vs catastrophic on actual task
+
+### Outcome
+
+- Goal 1 (ExcTar) achieved for 2/3 locales (sq-AL, vi-VN)
+- Created skills: `source-selection-cross-lingual`, `dare-cross-lingual-negative`
+- Next: Fix Sinkhorn → top-k selection; test IncTar experiments
+
+---
+
+## 2026-01-20 – Retrospective: AdaMerging for Cross-Lingual Merging
+
+**Type:** Retrospective
+**General description:** Tested AdaMerging (entropy-based coefficient learning) for cross-lingual merging; helps hard cases, hurts easy cases.
+
+### What we tried
+
+1. **AdaMerging integration**
+   - Implemented task-wise AdaMerging in pipeline
+   - Used REAL similarity weights as initial coefficients
+   - Optimized via entropy minimization on target language data
+
+2. **Three locales tested**
+   - sq-AL (easy): TIES baseline 66.54%
+   - sw-KE (hard): TIES baseline 42.74%
+   - vi-VN (medium): TIES baseline 74.45%
+
+### Key findings
+
+| Finding | Evidence |
+|---------|----------|
+| AdaMerging helps hard cases | sw-KE: 48.08% vs 42.74% TIES (+5.34%) |
+| AdaMerging hurts easy cases | sq-AL: 65.90% vs 66.54%, vi-VN: 70.07% vs 74.45% |
+| Coefficients learn selectively | sw-KE shifted [0.33→0.73], sq-AL unchanged |
+| Goal 1 achieved for sw-KE only | 48.08% > 46.70% baseline |
+
+### What failed
+
+1. **sq-AL and vi-VN degraded**: Entropy minimization overcorrected
+2. **Only 5 iterations**: May be insufficient for proper convergence
+3. **CPU execution**: RTX 4090 available but not used (fixed)
+
+### Outcome
+
+- AdaMerging is situational: use only when TIES fails
+- Fixed GPU support in adamerging.py
+- Created report: `training_reports/adamerging-ablation-2026-01-20.md`
+- Next: Test with more iterations on GPU; try AdaMerging++
+
+---
+
 <!-- New entries go above this line -->

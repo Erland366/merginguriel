@@ -60,7 +60,7 @@ class MergeConfig:
     label_column: str = "label"
     num_fisher_examples: int = 100
     base_model: str = "xlm-roberta-base"
-        # Similarity matrix options
+    # Similarity matrix options
     similarity_source: str = "sparse"  # 'sparse' (precomputed) or 'dense' (on-the-fly)
     similarity_type: str = "URIEL"  # 'URIEL' (linguistic features) or 'REAL' (empirical evaluation results)
     include_target: bool = False  # Include target language model in merging (IT mode)
@@ -72,6 +72,16 @@ class MergeConfig:
     batch_size: int = 16
     max_seq_length: int = 128
     base_model_dir: str = ""
+    # DARE options (Drop And REscale preprocessing)
+    dare_enabled: bool = False  # Enable DARE preprocessing
+    dare_drop_rate: float = 0.9  # Probability of dropping delta params (paper recommends 0.9)
+    dare_rescale: bool = True  # Whether to rescale remaining params by 1/(1-p)
+    dare_seed: Optional[int] = None  # Random seed for reproducibility
+    # AdaMerging options (entropy-based coefficient learning)
+    adamerging_mode: str = "task_wise"  # 'task_wise' or 'layer_wise'
+    adamerging_iterations: int = 100  # Number of optimization iterations
+    adamerging_lr: float = 1e-3  # Learning rate for coefficient optimization
+    adamerging_use_ties: bool = False  # Apply TIES preprocessing before AdaMerging
 
 
 class WeightCalculator(ABC):
@@ -348,6 +358,7 @@ class WeightCalculatorFactory:
             'task_arithmetic': SimilarityWeightCalculator,
             'slerp': SimilarityWeightCalculator,
             'regmean': SimilarityWeightCalculator,
+            'adamerging': SimilarityWeightCalculator,
         }
 
         if mode not in calculators:
@@ -488,6 +499,11 @@ class TiesStrategy(MergingStrategy):
         return {
             "param_value_mask_rate": param_value_mask_rate,
             "scaling_coefficient": scaling_coefficient,
+            # DARE preprocessing options
+            "dare_enabled": config.dare_enabled,
+            "dare_drop_rate": config.dare_drop_rate,
+            "dare_rescale": config.dare_rescale,
+            "dare_seed": config.dare_seed,
         }
 
 
@@ -520,6 +536,11 @@ class TaskArithmeticStrategy(MergingStrategy):
         return {
             "scaling_coefficient": scaling_coefficient,
             "param_value_mask_rate": param_value_mask_rate,
+            # DARE preprocessing options
+            "dare_enabled": config.dare_enabled,
+            "dare_drop_rate": config.dare_drop_rate,
+            "dare_rescale": config.dare_rescale,
+            "dare_seed": config.dare_seed,
         }
 
 
@@ -632,6 +653,53 @@ class RegMeanStrategy(MergingStrategy):
         }
 
 
+class AdaMergingStrategy(MergingStrategy):
+    """AdaMerging strategy that learns coefficients via entropy minimization on target data."""
+
+    def get_merger(self, mode: str):
+        return merging_methods_dict["adamerging"]()
+
+    def get_method_params(
+        self,
+        config: MergeConfig,
+        models_and_weights: Dict[str, ModelInfo],
+        base_model_info: ModelInfo,
+    ) -> Dict[str, Any]:
+        """
+        Build AdaMerging method parameters.
+
+        AdaMerging learns optimal coefficients by minimizing entropy of predictions
+        on unlabeled target language data.
+        """
+        # Get initial coefficients from similarity weights
+        src_weights = [info.weight for info in models_and_weights.values()]
+
+        # Normalize to sum to 1
+        total = sum(src_weights)
+        if total > 0:
+            initial_coefficients = [w / total for w in src_weights]
+        else:
+            initial_coefficients = [1.0 / len(src_weights)] * len(src_weights)
+
+        print(f"\n🧠 AdaMerging Strategy: Learning coefficients via entropy minimization")
+        print(f"   Mode: {config.adamerging_mode}")
+        print(f"   Initial coefficients: {[f'{c:.3f}' for c in initial_coefficients]}")
+        print(f"   Iterations: {config.adamerging_iterations}")
+        print(f"   Learning rate: {config.adamerging_lr}")
+        print(f"   Use TIES preprocessing: {config.adamerging_use_ties}")
+
+        return {
+            "adamerging_mode": config.adamerging_mode,
+            "initial_coefficients": initial_coefficients,
+            "learning_rate": config.adamerging_lr,
+            "num_iterations": config.adamerging_iterations,
+            "use_ties": config.adamerging_use_ties,
+            "param_value_mask_rate": 0.8,  # For TIES preprocessing if enabled
+            # DataLoader will be set by the caller since it needs target locale data
+            "target_dataloader": None,  # Must be provided externally
+        }
+
+
 class MergingStrategyFactory:
     @staticmethod
     def create(mode: str) -> MergingStrategy:
@@ -645,6 +713,8 @@ class MergingStrategyFactory:
             return SlerpStrategy()
         if mode == "regmean":
             return RegMeanStrategy()
+        if mode == "adamerging":
+            return AdaMergingStrategy()
         return LinearStrategy()
 
 
@@ -665,6 +735,11 @@ class ModelMerger:
         # Set up method parameters via strategy
         method_params = self.strategy.get_method_params(self.config, models_and_weights, base_model_info)
 
+        # For AdaMerging, create target dataloader for entropy optimization
+        if self.config.mode == "adamerging":
+            target_dataloader = self._create_adamerging_dataloader()
+            method_params["target_dataloader"] = target_dataloader
+
         # Check if this is incremental SLERP
         if self.config.mode == "slerp" and method_params.get("incremental_slerp", False):
             return self._perform_incremental_slerp(models_and_weights, base_model_info, merger, method_params)
@@ -672,23 +747,102 @@ class ModelMerger:
             # Standard merging for all other methods
             return self._perform_standard_merge(models_and_weights, base_model_info, merger, method_params)
 
+    def _create_adamerging_dataloader(self):
+        """Create DataLoader for AdaMerging entropy optimization using target language data."""
+        from datasets import load_dataset
+        from transformers import AutoTokenizer
+        import torch
+        from torch.utils.data import DataLoader
+
+        print(f"\n📦 Creating DataLoader for AdaMerging (target: {self.config.target_lang})")
+
+        # Load MASSIVE dataset for target locale
+        dataset = load_dataset(
+            "AmazonScience/massive",
+            self.config.target_lang,
+            split="test",
+            trust_remote_code=True
+        )
+
+        # Load tokenizer
+        tokenizer = AutoTokenizer.from_pretrained(self.config.base_model)
+
+        # Tokenize dataset
+        def tokenize_function(examples):
+            return tokenizer(
+                examples["utt"],
+                padding="max_length",
+                truncation=True,
+                max_length=self.config.max_seq_length,
+                return_tensors="pt"
+            )
+
+        # Process in batches
+        tokenized = dataset.map(
+            tokenize_function,
+            batched=True,
+            remove_columns=dataset.column_names
+        )
+        tokenized.set_format("torch")
+
+        # Create DataLoader (small batch for memory efficiency during optimization)
+        dataloader = DataLoader(
+            tokenized,
+            batch_size=self.config.batch_size,
+            shuffle=True
+        )
+
+        print(f"   Dataset size: {len(dataset)} examples")
+        print(f"   Batch size: {self.config.batch_size}")
+        print(f"   Batches: {len(dataloader)}")
+
+        return dataloader
+
     def _perform_standard_merge(self, models_and_weights: Dict[str, ModelInfo], base_model_info: ModelInfo,
                                merger, method_params: Dict[str, Any]) -> Tuple[Any, Any]:
         """Perform standard model merging (non-incremental)."""
-        # Prepare model paths and weights
-        models_to_merge_paths = list(models_and_weights.keys())
-        weight_values = [info.weight for info in models_and_weights.values()]
+        # For task-vector methods (ties, task_arithmetic, adamerging), the first source model
+        # serves as the architecture reference. Task vectors are computed as:
+        # - task_vector(model_i) = model_i - first_source_model
+        # This works for cross-lingual merging where all models have the same classifier structure.
+        TASK_VECTOR_METHODS = {'ties', 'task_arithmetic', 'adamerging'}
 
-        print(f"Base model: {base_model_info.model_name}")
-        print(f"Models to merge: {models_to_merge_paths}")
-        print(f"Weights: {weight_values}")
+        if self.config.mode in TASK_VECTOR_METHODS:
+            # base_model_info is the first source model - use it as architecture reference
+            # models_and_weights contains the remaining source models
+            all_source_models = [base_model_info.model_name] + list(models_and_weights.keys())
+            all_weights = [base_model_info.weight] + [info.weight for info in models_and_weights.values()]
 
-        # Perform the merge
-        result = merger.merge(
-            base_model=base_model_info.model_name,
-            models_to_merge=models_to_merge_paths,
-            method_params=method_params,
-        )
+            print(f"Task-vector method: Using {base_model_info.model_name} as architecture reference")
+            print(f"All source models: {all_source_models}")
+            print(f"Weights: {[f'{w:.4f}' for w in all_weights]}")
+
+            # Update method_params with all model weights for AdaMerging
+            if self.config.mode == "adamerging":
+                total = sum(all_weights)
+                method_params["initial_coefficients"] = [w / total for w in all_weights] if total > 0 else None
+
+            # For TIES/task_arithmetic: first model is base, rest are merged via task vectors
+            # For AdaMerging: same structure - learn optimal coefficients
+            result = merger.merge(
+                base_model=base_model_info.model_name,
+                models_to_merge=list(models_and_weights.keys()),
+                method_params=method_params,
+            )
+        else:
+            # Standard behavior for non-task-vector methods
+            models_to_merge_paths = list(models_and_weights.keys())
+            weight_values = [info.weight for info in models_and_weights.values()]
+
+            print(f"Base model: {base_model_info.model_name}")
+            print(f"Models to merge: {models_to_merge_paths}")
+            print(f"Weights: {weight_values}")
+
+            result = merger.merge(
+                base_model=base_model_info.model_name,
+                models_to_merge=models_to_merge_paths,
+                method_params=method_params,
+            )
 
         print("Merge successful!")
         return result['merged_model'], result['base_tokenizer']
@@ -953,6 +1107,16 @@ def create_config_from_args(args) -> MergeConfig:
         batch_size=args.batch_size,
         max_seq_length=args.max_seq_length,
         base_model_dir=args.base_model_dir,
+        # DARE options
+        dare_enabled=args.dare_drop_rate > 0.0,
+        dare_drop_rate=args.dare_drop_rate,
+        dare_rescale=not args.dare_no_rescale,
+        dare_seed=args.dare_seed,
+        # AdaMerging options
+        adamerging_mode=args.adamerging_mode,
+        adamerging_iterations=args.adamerging_iterations,
+        adamerging_lr=args.adamerging_lr,
+        adamerging_use_ties=args.adamerging_use_ties,
     )
 
 
@@ -1073,7 +1237,7 @@ def main():
         type=str,
         default=None,  # Changed to allow config override
         choices=['uriel', 'manual', 'similarity', 'average', 'fisher', 'iterative',
-                'ties', 'task_arithmetic', 'slerp', 'regmean'],
+                'ties', 'task_arithmetic', 'slerp', 'regmean', 'adamerging'],
         action=TrackProvidedArgsAction,
         help="The merging mode to use."
     )
@@ -1215,6 +1379,56 @@ def main():
         default=128,
         action=TrackProvidedArgsAction,
         help="Max sequence length for tokenization in Fisher computation"
+    )
+    # DARE (Drop And REscale) preprocessing options
+    parser.add_argument(
+        "--dare-drop-rate",
+        type=float,
+        default=0.0,
+        action=TrackProvidedArgsAction,
+        help="DARE drop rate (0.0-1.0). Set >0 to enable DARE preprocessing. Paper recommends 0.9"
+    )
+    parser.add_argument(
+        "--dare-no-rescale",
+        action="store_true",
+        default=False,
+        help="Disable DARE rescaling (not recommended, but available for ablation)"
+    )
+    parser.add_argument(
+        "--dare-seed",
+        type=int,
+        default=None,
+        action=TrackProvidedArgsAction,
+        help="Random seed for DARE preprocessing (for reproducibility)"
+    )
+    # AdaMerging options (entropy-based coefficient learning)
+    parser.add_argument(
+        "--adamerging-mode",
+        type=str,
+        default="task_wise",
+        choices=["task_wise", "layer_wise"],
+        action=TrackProvidedArgsAction,
+        help="AdaMerging mode: task_wise (one coeff per model) or layer_wise (one coeff per layer per model)"
+    )
+    parser.add_argument(
+        "--adamerging-iterations",
+        type=int,
+        default=100,
+        action=TrackProvidedArgsAction,
+        help="Number of optimization iterations for AdaMerging"
+    )
+    parser.add_argument(
+        "--adamerging-lr",
+        type=float,
+        default=1e-3,
+        action=TrackProvidedArgsAction,
+        help="Learning rate for AdaMerging coefficient optimization"
+    )
+    parser.add_argument(
+        "--adamerging-use-ties",
+        action="store_true",
+        default=False,
+        help="Apply TIES preprocessing before AdaMerging (AdaMerging++ variant)"
     )
 
     args = parser.parse_args()

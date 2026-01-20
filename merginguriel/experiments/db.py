@@ -174,6 +174,8 @@ class ExperimentDB:
         similarity_type: Optional[str] = None,
         status: Optional[str] = None,
         ablation_name: Optional[str] = None,
+        include_target: Optional[bool] = None,
+        config_json_contains: Optional[str] = None,
         limit: Optional[int] = None,
     ) -> List[ExperimentRecord]:
         """Find experiments matching the given criteria."""
@@ -195,6 +197,12 @@ class ExperimentDB:
         if ablation_name:
             conditions.append("ablation_name = ?")
             params.append(ablation_name)
+        if include_target is not None:
+            conditions.append("include_target = ?")
+            params.append(1 if include_target else 0)
+        if config_json_contains:
+            conditions.append("config_json LIKE ?")
+            params.append(f"%{config_json_contains}%")
 
         sql = "SELECT * FROM experiments"
         if conditions:

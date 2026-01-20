@@ -144,12 +144,19 @@ class AblationRunner:
         records = self.plan()
         ids = []
         for record in records:
-            # Check if already exists
+            # Check if already exists - include all key config fields
+            # Also check config_json for DARE settings
+            config_dict = json.loads(record.config_json) if record.config_json else {}
+            dare_rate = config_dict.get("dare_drop_rate", 0.0)
+            dare_search = f'"dare_drop_rate": {dare_rate}' if dare_rate > 0 else None
+
             existing = self.db.find(
                 ablation_name=self.config.name,
                 locale=record.locale,
                 method=record.method,
                 similarity_type=record.similarity_type,
+                include_target=record.include_target,
+                config_json_contains=dare_search,
             )
             if existing and self.config.resume:
                 # Skip if already completed
@@ -201,6 +208,10 @@ class AblationRunner:
 
             merged_models_dir = exp_config.get("merged_models_dir", "merged_models")
 
+            # Extract DARE parameters from config
+            dare_drop_rate = exp_config.get("dare_drop_rate", 0.0)
+            dare_enabled = dare_drop_rate > 0.0
+
             merge_config = MergeConfig(
                 mode=record.method,
                 target_lang=record.locale,
@@ -211,6 +222,11 @@ class AblationRunner:
                 base_model_dir=exp_config.get("models_root", "haryos_model"),
                 batch_size=exp_config.get("batch_size", 16),
                 max_seq_length=exp_config.get("max_seq_length", 128),
+                # DARE options
+                dare_enabled=dare_enabled,
+                dare_drop_rate=dare_drop_rate,
+                dare_rescale=exp_config.get("dare_rescale", True),
+                dare_seed=exp_config.get("dare_seed", None),
             )
 
             # Run the pipeline (merge + STS-B sanity check)
