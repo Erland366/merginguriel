@@ -700,9 +700,15 @@ class MergingStrategyFactory:
 class ModelMerger:
     """Handles the actual model merging process."""
 
-    def __init__(self, config: MergeConfig):
+    def __init__(self, config: MergeConfig, exclude_param_names_regex: List[str] = None):
         self.config = config
         self.strategy = MergingStrategyFactory.create(config.mode)
+        # Layer exclusion patterns for selective layer merging
+        self._exclude_patterns: List[str] = exclude_param_names_regex or []
+
+    def set_exclude_patterns(self, patterns: List[str]) -> None:
+        """Set regex patterns for parameters to exclude from merging."""
+        self._exclude_patterns = patterns
 
     def merge_models(self, models_and_weights: Dict[str, ModelInfo], base_model_info: ModelInfo) -> Tuple[Any, Any]:
         """Perform the model merging."""
@@ -731,12 +737,15 @@ class ModelMerger:
         print(f"Base model: {base_model_info.model_name}")
         print(f"Models to merge: {models_to_merge_paths}")
         print(f"Weights: {weight_values}")
+        if self._exclude_patterns:
+            print(f"Exclude patterns: {self._exclude_patterns}")
 
         # Perform the merge
         result = merger.merge(
             base_model=base_model_info.model_name,
             models_to_merge=models_to_merge_paths,
             method_params=method_params,
+            exclude_param_names_regex=self._exclude_patterns,
         )
 
         print("Merge successful!")
@@ -776,6 +785,7 @@ class ModelMerger:
                 base_model=first_step["base_model"],  # Used as architecture reference
                 models_to_merge=[first_step["base_model"], first_step["merge_model"]],  # 2 models for SLERP
                 method_params=slerp_params,
+                exclude_param_names_regex=self._exclude_patterns,
             )
 
             # Save intermediate result
@@ -807,6 +817,7 @@ class ModelMerger:
                         base_model=current_model_path,  # Used as architecture reference
                         models_to_merge=[current_model_path, step["merge_model"]],  # 2 models for SLERP
                         method_params=slerp_params,
+                        exclude_param_names_regex=self._exclude_patterns,
                     )
 
                     # Save new intermediate result
