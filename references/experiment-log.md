@@ -209,4 +209,46 @@ For merged model targeting `th-TH`:
 
 ---
 
+## 2026-01-20 – Retrospective: IncTar Task Vector Base Model Fix
+
+**Type:** Retrospective
+**General description:** Fixed critical bug in IncTar mode where task vectors were computed relative to source model instead of pretrained base.
+
+### What we tried
+
+1. **IncTar with AdaMerging** (before fix)
+   - sw-KE: 41.90% (vs 82.85% target-only)
+   - sq-AL: 64.09% (vs 86.31% target-only)
+   - Catastrophic failure
+
+2. **Root cause analysis**
+   - Task vectors computed as: `model - first_source_model`
+   - Should be: `model - pretrained_base_model`
+   - Pretrained base has 2-class head vs 60-class fine-tuned models
+
+3. **Fix implementation**
+   - Create pretrained base with correct num_labels (60)
+   - Use `ignore_mismatched_sizes=True` when loading
+   - All models now compute task vectors relative to true pretrained base
+
+### Key findings
+
+| Locale | Before Fix | After Fix | Target-only | Goal 2? |
+|--------|-----------|-----------|-------------|---------|
+| sw-KE | 41.90% | **82.75%** | 82.85% | Almost (-0.10%) |
+| sq-AL | 64.09% | **86.38%** | 86.31% | **Yes (+0.07%)** |
+
+### What failed
+
+1. **Original assumption**: Using first source as base would work for all modes
+2. **Reality**: IncTar requires true pretrained base for meaningful task vectors
+
+### Outcome
+
+- Goal 2 (IncTar) achieved for sq-AL: 86.38% > 86.31%
+- Created skills: `adamerging-cross-lingual`, `task-vector-base-model`
+- Fix applies to all task-vector methods (TIES, task_arithmetic, AdaMerging)
+
+---
+
 <!-- New entries go above this line -->

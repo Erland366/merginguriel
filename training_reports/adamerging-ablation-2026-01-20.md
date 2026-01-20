@@ -147,6 +147,36 @@ if torch.cuda.is_available():
 
 ---
 
+## IncTar Fix (Added Later)
+
+### Problem
+IncTar mode was failing catastrophically (41-64% vs 82-86% target-only) because task vectors were computed relative to the first source model instead of the pretrained base.
+
+### Solution
+Create pretrained base with correct classifier head:
+```python
+model = AutoModelForSequenceClassification.from_pretrained(
+    "xlm-roberta-base",
+    num_labels=60,  # Match fine-tuned models
+    ignore_mismatched_sizes=True
+)
+```
+
+### Results After Fix
+
+| Locale | Before Fix | After Fix | Target-only | Goal 2? |
+|--------|-----------|-----------|-------------|---------|
+| sw-KE | 41.90% | **82.75%** | 82.85% | Almost (-0.10%) |
+| sq-AL | 64.09% | **86.38%** | 86.31% | **Yes (+0.07%)** |
+
+### Learned Coefficients (IncTar)
+- sq-AL: [0.997, 0.002, 0.001] - 99.7% target weight
+- sw-KE: [0.988, 0.012, 0.001] - 98.8% target weight
+
+AdaMerging correctly learns to preserve the target model while incorporating minimal source influence.
+
+---
+
 ## Next Steps
 
 1. Re-run with GPU and more iterations (50-100)

@@ -798,23 +798,74 @@ class ModelMerger:
 
         return dataloader
 
+    def _create_pretrained_base_for_task_vectors(self, reference_model_path: str) -> str:
+        """
+        Create a pretrained base model with classifier head matching the fine-tuned models.
+
+        This is needed for proper task vector computation in IncTar mode, where we need:
+            task_vector = finetuned_model - pretrained_base
+
+        The pretrained xlm-roberta-base has a 2-class head, but our fine-tuned models have
+        60 classes (MASSIVE intents). This method creates a temporary model with:
+        - Pretrained encoder weights from xlm-roberta-base
+        - Randomly initialized classifier head with correct num_labels
+
+        Args:
+            reference_model_path: Path to a fine-tuned model to get num_labels from
+
+        Returns:
+            Path to the temporary pretrained base model
+        """
+        import os
+        import tempfile
+        from transformers import AutoModelForSequenceClassification, AutoConfig, AutoTokenizer
+
+        # Get num_labels from reference model
+        ref_config = AutoConfig.from_pretrained(reference_model_path)
+        num_labels = ref_config.num_labels
+
+        print(f"\n🔧 Creating pretrained base with {num_labels}-class classifier head")
+
+        # Load pretrained model with correct num_labels (classifier will be randomly initialized)
+        model = AutoModelForSequenceClassification.from_pretrained(
+            self.config.base_model,
+            num_labels=num_labels,
+            ignore_mismatched_sizes=True  # Allow loading despite classifier size mismatch
+        )
+
+        # Save to temporary directory
+        temp_dir = tempfile.mkdtemp(prefix="pretrained_base_")
+        model.save_pretrained(temp_dir)
+
+        # Also save tokenizer
+        tokenizer = AutoTokenizer.from_pretrained(self.config.base_model)
+        tokenizer.save_pretrained(temp_dir)
+
+        print(f"   Saved to: {temp_dir}")
+        return temp_dir
+
     def _perform_standard_merge(self, models_and_weights: Dict[str, ModelInfo], base_model_info: ModelInfo,
                                merger, method_params: Dict[str, Any]) -> Tuple[Any, Any]:
         """Perform standard model merging (non-incremental)."""
-        # For task-vector methods (ties, task_arithmetic, adamerging), the first source model
-        # serves as the architecture reference. Task vectors are computed as:
-        # - task_vector(model_i) = model_i - first_source_model
-        # This works for cross-lingual merging where all models have the same classifier structure.
+        # For task-vector methods (ties, task_arithmetic, adamerging), we need a proper
+        # pretrained base model. Task vectors should be computed as:
+        # - task_vector(model_i) = model_i - pretrained_base
+        # This is especially important for IncTar mode where the target model is included.
         TASK_VECTOR_METHODS = {'ties', 'task_arithmetic', 'adamerging'}
 
         if self.config.mode in TASK_VECTOR_METHODS:
-            # base_model_info is the first source model - use it as architecture reference
-            # models_and_weights contains the remaining source models
+            # Create pretrained base with correct classifier head (60 classes for MASSIVE)
+            # Use first available model as reference for num_labels
+            reference_model = base_model_info.model_name
+            pretrained_base_path = self._create_pretrained_base_for_task_vectors(reference_model)
+
+            # ALL models (including base_model_info) are now models to merge
+            # Task vectors will be computed relative to the pretrained base
             all_source_models = [base_model_info.model_name] + list(models_and_weights.keys())
             all_weights = [base_model_info.weight] + [info.weight for info in models_and_weights.values()]
 
-            print(f"Task-vector method: Using {base_model_info.model_name} as architecture reference")
-            print(f"All source models: {all_source_models}")
+            print(f"Task-vector method: Using pretrained base ({self.config.base_model}) for task vectors")
+            print(f"All models to merge: {all_source_models}")
             print(f"Weights: {[f'{w:.4f}' for w in all_weights]}")
 
             # Update method_params with all model weights for AdaMerging
@@ -822,13 +873,16 @@ class ModelMerger:
                 total = sum(all_weights)
                 method_params["initial_coefficients"] = [w / total for w in all_weights] if total > 0 else None
 
-            # For TIES/task_arithmetic: first model is base, rest are merged via task vectors
-            # For AdaMerging: same structure - learn optimal coefficients
+            # For TIES/task_arithmetic/AdaMerging: pretrained base is true base, all models are merged
             result = merger.merge(
-                base_model=base_model_info.model_name,
-                models_to_merge=list(models_and_weights.keys()),
+                base_model=pretrained_base_path,
+                models_to_merge=all_source_models,
                 method_params=method_params,
             )
+
+            # Clean up temporary pretrained base
+            import shutil
+            shutil.rmtree(pretrained_base_path, ignore_errors=True)
         else:
             # Standard behavior for non-task-vector methods
             models_to_merge_paths = list(models_and_weights.keys())
