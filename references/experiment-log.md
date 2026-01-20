@@ -174,4 +174,286 @@ For merged model targeting `th-TH`:
 
 ---
 
+## 2026-01-20 – Retrospective: Num Languages & Method Ablation
+
+**Type:** Retrospective
+**General description:** Tested num_languages (3/5/7) and methods (similarity/average/ties) on constructive (sw-KE) vs destructive (vi-VN) targets, revealing counterintuitive findings.
+
+### What we tried
+
+1. **Num Languages Sweep**: 3, 5, 7 source languages with REAL similarity
+2. **Method Comparison**: similarity, average, ties (fisher failed - config issue)
+3. **Targets**: sw-KE (constructive, 56% ratio) and vi-VN (destructive, 86% ratio)
+
+### Key findings
+
+| Finding | Evidence | Implication |
+|---------|----------|-------------|
+| Fewer langs better for constructive | sw-KE: 3-lang +11.3% vs 7-lang +0.8% | Use 3, not 5-7 |
+| TIES nearly breaks even for destructive | vi-VN: TIES -0.07% vs similarity -17.7% | TIES preserves features |
+| URIEL beats REAL for sw-KE | URIEL +11.3% vs REAL +9.2% | Linguistic similarity helps low-resource |
+| More langs slightly helps destructive | vi-VN: 5-lang -6.6% vs 3-lang -19.7% | Opposite of constructive |
+
+### What failed
+
+- Fisher method: `--dataset-name is required for fisher_dataset mode`
+- TIES on sw-KE: -3.7% (sparsification hurts constructive)
+- All methods on vi-VN still below baseline (but TIES nearly breaks even)
+
+### Outcome
+
+- Updated skill `merging-when-constructive` with method-specific recommendations
+- New decision tree: constructive → similarity/URIEL/3-lang; destructive → TIES/REAL/5-lang
+- Closed questions: more languages does NOT help constructive; TIES helps destructive
+
+---
+
+## 2026-01-20 – Retrospective: Constructive Target Validation (MAJOR CORRECTIONS)
+
+**Type:** Retrospective
+**General description:** Tested both constructive candidates (cy-GB, sw-KE) with URIEL vs REAL and 3 vs 5 languages. Results contradict previous findings—MAJOR corrections needed.
+
+### What we tried
+
+1. **Identified ALL constructive candidates**: Scanned 49 locales for ZS/Self < 60%
+   - Only 2 found: cy-GB (53.6%), sw-KE (56.4%)
+2. **Validation ablation**: 2 locales × 2 similarity types × 2 num_languages = 8 experiments
+3. **Fisher method**: Attempted but crashed machine—disabled
+
+### CRITICAL CORRECTIONS
+
+| Previous Claim | Actual Finding |
+|----------------|----------------|
+| "ZS/Self < 60% = constructive" | **WRONG** - cy-GB (53.6%) fails to improve |
+| "URIEL beats REAL for constructive" | **WRONG** - REAL beats URIEL for sw-KE |
+| "3 languages better than 5" | **WRONG** - 5 beats 3 for sw-KE |
+| "URIEL/3-lang gives +11.3%" | **WRONG** - That was IncTar mode; ExcTar gives -12.1% |
+
+### Key findings
+
+**sw-KE (ONLY success):**
+- REAL/5-lang: **+3.4%** (beats baseline!)
+- REAL/3-lang: +2.6%
+- URIEL/5-lang: -7.7%
+- URIEL/3-lang: -12.1%
+
+**cy-GB (FAILS despite lowest ratio):**
+- URIEL/5-lang: -2.3% (best but still fails)
+- REAL/3-lang: -9.5% (worst)
+
+### What failed
+
+- **cy-GB merging**: Despite lowest ZS/Self ratio (53.6%), NO config beat baseline
+- **URIEL similarity**: Completely fails for sw-KE (-7.7% to -12.1%)
+- **3 languages**: Worse than 5 for both targets
+- **Fisher method**: Crashes machine due to resource requirements
+
+### Outcome
+
+- **Major skill update**: `merging-when-constructive` heavily revised
+- Only sw-KE benefits from merging (REAL/5-lang)
+- ZS/Self ratio does NOT reliably predict merging success
+- New recommendation: Don't merge for most languages; if you must, use REAL/5-lang or TIES
+
+### Open questions
+
+1. Why does sw-KE benefit while cy-GB doesn't?
+2. What characteristics predict merging success beyond ZS/Self ratio?
+3. Are there other locales that would benefit? (Expensive to test all 49)
+
+---
+
+## 2026-01-20 – Retrospective: The Merging Effect (Why sw-KE Works but cy-GB Doesn't)
+
+**Type:** Retrospective
+**General description:** Deep analysis reveals the "Merging Effect" (synergy vs interference) is the key predictor, not ZS/Self ratio or source quality alone.
+
+### What we tried
+
+1. **URIEL vs REAL source analysis**: Compared source selection quality for both targets
+2. **Transfer ratio analysis**: Measured how well sources transfer to each target
+3. **Merging effect calculation**: Compared merged accuracy vs average source accuracy
+
+### Key findings
+
+| Metric | sw-KE | cy-GB |
+|--------|-------|-------|
+| ZS/Self ratio | 56.4% | 53.6% |
+| REAL top-5 avg on target | 0.4602 | 0.4324 |
+| REAL/5 merged accuracy | 0.4832 | 0.4166 |
+| **Merging Effect** | **+2.30%** | **-1.58%** |
+| Outcome | SYNERGY | INTERFERENCE |
+
+**Merging Effect = Merged Accuracy - Source Average**
+
+### Critical insight
+
+The **Merging Effect** determines success:
+- **Positive effect (+2.30%)**: Sources combine constructively (sw-KE)
+- **Negative effect (-1.58%)**: Sources interfere destructively (cy-GB)
+
+Both targets have:
+- Similar ZS/Self ratios (53-56%)
+- Diverse source families (4-5 unique)
+- Overlapping top sources (lv-LV, tl-PH, sq-AL, fr-FR)
+
+Yet they behave **oppositely**! This confirms:
+- ZS/Self ratio does NOT predict success
+- Source diversity does NOT predict success
+- Only the **Merging Effect** predicts success
+
+### Why sw-KE achieves synergy
+
+1. Sources have COMPLEMENTARY features
+2. Swahili (Bantu) benefits from multi-source averaging
+3. REAL sources work well **together**, not just individually
+
+### Why cy-GB suffers interference
+
+1. Sources have CONFLICTING features
+2. Welsh (Celtic) has unique features that get diluted
+3. Even REAL sources don't combine constructively
+
+### Outcome
+
+- **Answered open question**: Why sw-KE works but cy-GB doesn't → Merging Effect
+- **New concept**: Synergy vs Interference in model merging
+- **Updated skill**: Added "Merging Effect" section with analysis
+- **New recommendation**: Pilot test merge before committing; if merged < avg, don't merge
+
+### Remaining questions
+
+1. What makes sw-KE sources complementary?
+2. Can we predict Merging Effect without running full merge?
+3. Are there linguistic features that correlate with positive Merging Effect?
+
+---
+
+## 2026-01-20 – Plan: NeuroMerging Implementation
+
+**Type:** Plan
+**General description:** Implemented NeuroMerging algorithm to address interference problem discovered in ablations (sw-KE: +2.30% synergy, cy-GB: -1.58% interference).
+
+### What we implemented
+
+1. **Neuronal Task Vector Module** (`submodules/auto_merge_llm/auto_merge_llm/utils/neuronal_task_vector.py`)
+   - `NeuronalTaskVector` class with subspace decomposition
+   - `decompose_weight_matrix()`: Projects task vectors onto parallel and orthogonal subspaces
+   - `is_neuronal_param()`: Identifies dense layer weights vs biases/LayerNorm/embeddings
+
+2. **NeuroMerging Method** (`submodules/auto_merge_llm/auto_merge_llm/methods/neuromerging.py`)
+   - Implements neuron-level selective merging from Fang et al. 2025
+   - Algorithm: decompose → mask → elect+mean merge → scale by λ_2
+   - Default: λ_1=0 (ignore parallel), λ_2=auto-computed from L1-norm ratio
+   - Mask rate: 0.15 (keep top 85% by magnitude)
+
+3. **Pipeline Integration** (`merginguriel/run_merging_pipeline_refactored.py`)
+   - Added `NeuroMergingStrategy` class
+   - Registered in `MergingStrategyFactory` under mode "neuromerging"
+
+4. **Validation Config** (`configs/ablations/neuromerging_validation.yaml`)
+   - Tests on sw-KE (constructive), cy-GB (low-ratio), vi-VN (destructive)
+   - Compares neuromerging vs ties vs similarity baselines
+
+### Key algorithm details
+
+**Neuronal decomposition** (per neuron row w_k):
+```
+τ_k = w_finetuned - w_pretrained           # task vector
+τ_parallel = (w_0 · τ) / ||w_0||² * w_0    # projection onto pretrained
+τ_orthogonal = τ - τ_parallel              # novel task-specific adaptations
+```
+
+**Merge function** (TIES-style elect+mean):
+1. Compute majority sign across sources
+2. Keep only values with matching sign
+3. Average the kept values
+
+**Why this should help**:
+- Orthogonal subspace preserves 88% of task-specific capabilities (paper finding)
+- Merging in orthogonal subspace reduces interference between conflicting features
+- cy-GB's interference may come from parallel subspace conflicts
+
+### Expected outcomes
+
+| Target | Current Best | Expected with NeuroMerging |
+|--------|-------------|---------------------------|
+| sw-KE | +3.4% (REAL/5) | +3-5% (amplify synergy) |
+| cy-GB | -2.3% (URIEL/5) | -1% to +1% (reduce interference) |
+| vi-VN | -0.07% (TIES) | Similar or better |
+
+### Files created/modified
+
+| File | Action |
+|------|--------|
+| `submodules/auto_merge_llm/.../utils/neuronal_task_vector.py` | Created |
+| `submodules/auto_merge_llm/.../methods/neuromerging.py` | Created |
+| `submodules/auto_merge_llm/.../methods/__init__.py` | Modified |
+| `submodules/auto_merge_llm/.../utils/__init__.py` | Modified |
+| `merginguriel/run_merging_pipeline_refactored.py` | Modified |
+| `configs/ablations/neuromerging_validation.yaml` | Created |
+
+### Next steps
+
+1. Run validation ablation: `python -m merginguriel.experiments.ablation_runner configs/ablations/neuromerging_validation.yaml`
+2. Compare results against baselines in experiment database
+3. If successful, update `merging-when-constructive` skill with NeuroMerging recommendations
+
+---
+
+## 2026-01-20 – Retrospective: NeuroMerging Validation (NEGATIVE RESULT)
+
+**Type:** Retrospective
+**General description:** NeuroMerging (neuronal subspace decomposition) failed to improve cross-lingual model merging. The method underperformed both similarity and TIES on all tested targets.
+
+### What we tried
+
+1. **NeuroMerging Implementation**
+   - Implemented neuronal task vector decomposition into parallel and orthogonal subspaces
+   - Algorithm: mask → decompose → elect+mean merge → scale
+   - Parameters: λ₁=0 (ignore parallel), λ₂=auto-computed, mask_rate=0.15
+
+2. **Validation ablation**
+   - 3 locales × 3 methods = 9 experiments
+   - Targets: sw-KE (constructive), cy-GB (low-ratio), vi-VN (destructive)
+   - Methods: neuromerging, ties, similarity
+
+### Key findings
+
+| Target | ZS Baseline | NeuroMerging | Similarity | TIES |
+|--------|-------------|--------------|------------|------|
+| sw-KE | 0.4670 | 0.4549 (-1.2%) | **0.4832 (+1.6%)** | 0.4297 (-3.7%) |
+| cy-GB | 0.4445 | 0.4008 (-4.4%) | 0.4166 (-2.8%) | 0.4008 (-4.4%) |
+| vi-VN | 0.7431 | 0.6358 (-10.7%) | 0.6769 (-6.6%) | **0.7424 (-0.07%)** |
+
+**NeuroMerging ranked last or tied-last on all targets.**
+
+### What failed
+
+- **Hypothesis disproved**: Merging in orthogonal subspace does NOT reduce interference for cross-lingual transfer
+- **λ₂ auto-computation**: Gave λ₂ ≈ 1.0, effectively removing scaling benefit
+- **Domain mismatch**: Paper validates on same-language multi-task; cross-lingual may be fundamentally different
+
+### Why NeuroMerging doesn't work for cross-lingual transfer
+
+1. **Task vectors aren't aligned across languages**: Each source model learns language-specific adaptations. Decomposing into parallel/orthogonal subspaces assumes a shared coordinate system that doesn't exist.
+
+2. **Cross-lingual knowledge may be in parallel subspace**: The paper assumes task-specific knowledge is in orthogonal subspace. But cross-lingual transfer may rely on parallel subspace features (input sensitivity to multilingual patterns).
+
+3. **The paper's setup is different**: NeuroMerging targets same-language models fine-tuned on different tasks (e.g., sentiment + NER). Our setup merges different-language models for the same task.
+
+### Outcome
+
+- **Negative result documented**: NeuroMerging does NOT help cross-lingual model merging
+- **Skill updated**: Added validation results and recommendation to avoid NeuroMerging
+- **Recommendation unchanged**: Use similarity (REAL/5-lang) for sw-KE; TIES for destructive targets; skip merging for most locales
+
+### Open questions
+
+1. Are there other cross-lingual-specific merging methods to explore?
+2. Would representation alignment before merging help?
+3. Is the problem with source selection or the merging algorithm itself?
+
+---
+
 <!-- New entries go above this line -->

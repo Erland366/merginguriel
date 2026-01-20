@@ -348,6 +348,7 @@ class WeightCalculatorFactory:
             'task_arithmetic': SimilarityWeightCalculator,
             'slerp': SimilarityWeightCalculator,
             'regmean': SimilarityWeightCalculator,
+            'neuromerging': SimilarityWeightCalculator,
         }
 
         if mode not in calculators:
@@ -488,6 +489,52 @@ class TiesStrategy(MergingStrategy):
         return {
             "param_value_mask_rate": param_value_mask_rate,
             "scaling_coefficient": scaling_coefficient,
+        }
+
+
+class NeuroMergingStrategy(MergingStrategy):
+    """NeuroMerging strategy that decomposes task vectors into neuronal subspaces.
+
+    Merges primarily in the orthogonal subspace (task adaptability) while optionally
+    incorporating the parallel subspace (input sensitivity). This reduces task
+    interference by preserving task-specific features that don't conflict with
+    pretrained representations.
+    """
+
+    def get_merger(self, mode: str):
+        return merging_methods_dict["neuromerging"]()
+
+    def get_method_params(
+        self,
+        config: MergeConfig,
+        models_and_weights: Dict[str, ModelInfo],
+        base_model_info: ModelInfo,
+    ) -> Dict[str, Any]:
+        # NeuroMerging parameters
+        # Default values from paper (without validation data):
+        # - lambda_1 = 0 (ignore parallel subspace)
+        # - lambda_2 = auto-computed based on L1-norm ratio
+        # - mask_rate = 0.15 (keep top 85% by magnitude)
+
+        # Use config scaling if available, otherwise default
+        scaling_coefficient = 1.0
+
+        # Default: ignore parallel subspace (lambda_1 = 0)
+        # The orthogonal subspace preserves ~88% of task-specific capabilities
+        lambda_1 = 0.0
+
+        # lambda_2 will be auto-computed by the method based on masking ratio
+        # Set to None to trigger auto-computation
+        lambda_2 = None
+
+        # Default mask rate from paper
+        param_value_mask_rate = 0.15
+
+        return {
+            "scaling_coefficient": scaling_coefficient,
+            "param_value_mask_rate": param_value_mask_rate,
+            "lambda_1": lambda_1,
+            "lambda_2": lambda_2,
         }
 
 
@@ -639,6 +686,8 @@ class MergingStrategyFactory:
             return FisherDatasetStrategy()
         if mode == "ties":
             return TiesStrategy()
+        if mode == "neuromerging":
+            return NeuroMergingStrategy()
         if mode == "task_arithmetic":
             return TaskArithmeticStrategy()
         if mode == "slerp":

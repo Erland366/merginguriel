@@ -1,0 +1,31 @@
+# Ablation: Validate optimal config on BOTH constructive targets
+#
+# Purpose: Test if our decision tree recommendations work for both constructive locales
+# Key finding: Only 2 locales have ZS/Self < 60% (cy-GB: 53.6%, sw-KE: 56.4%)
+#
+# Expected runs: 2 locales × 2 similarity types × 2 num_languages = 8 runs
+
+ablation:
+  name: "constructive_validation"
+  description: "Validate optimal merging config on both constructive targets (cy-GB, sw-KE)"
+
+  fixed:
+    method: "similarity"
+    include_target: false
+    model_family: "xlm-roberta-base"
+    models_root: "haryos_model"
+    merged_models_dir: "merged_models"
+    locales:
+      - "cy-GB"  # Most constructive (53.6% ZS/Self)
+      - "sw-KE"  # Constructive (56.4% ZS/Self)
+
+  sweep:
+    similarity_type:
+      - "URIEL"  # Recommended for constructive
+      - "REAL"
+    num_languages:
+      - 3  # Recommended for constructive
+      - 5
+
+  db_path: "experiments_constructive.db"
+  resume: true

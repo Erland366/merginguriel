@@ -22,6 +22,7 @@ This file documents error patterns encountered and their solutions.
 | Similarity matrix not found | `FileNotFoundError` for evaluation_matrix.csv | REAL similarity requires pre-computed NxN matrix | Copy from `nxn_results/*/evaluation_matrix.csv` or run `run_nxn_evaluation.py` |
 | Wrong evaluation metric | STS-B Spearman ~0.55-0.58, seems similar across configs | Pipeline uses `evaluate_base_encoder.py` (proxy metric) | Use `evaluate_specific_model.py` for MASSIVE intent classification accuracy |
 | Locale not found in similarity | `Target locale '' not found in similarity matrix` | Ablation config has `locales` as list in sweep but code expects string | Fixed in ablation_runner.py; ensure locales handled as list |
+| Fisher method fails | `ValueError: --dataset-name is required for fisher_dataset mode` | Fisher merging requires dataset for importance weighting | Add `dataset_name: "AmazonScience/massive"` to config |
 
 ---
 

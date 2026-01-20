@@ -226,3 +226,4 @@ results_*.mdsubmodules/
 
 experiments.db
 haryos_model
+*.db

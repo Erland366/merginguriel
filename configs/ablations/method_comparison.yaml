@@ -16,6 +16,8 @@ ablation:
     model_family: "xlm-roberta-base"
     models_root: "haryos_model"
     merged_models_dir: "merged_models"
+    dataset_name: "AmazonScience/massive"  # Required for fisher method
+    text_column: "utt"  # MASSIVE uses 'utt' for utterances
     locales:
       - "sw-KE"  # Constructive (56% ZS/Self)
       - "vi-VN"  # Destructive (86% ZS/Self)
@@ -24,7 +26,7 @@ ablation:
     method:
       - "similarity"
       - "average"
-      - "fisher"
+      # - "fisher"  # Disabled: too resource-intensive, crashes machine
       - "ties"
 
   db_path: "experiments_methods.db"

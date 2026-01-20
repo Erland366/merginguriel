@@ -150,6 +150,7 @@ class AblationRunner:
                 locale=record.locale,
                 method=record.method,
                 similarity_type=record.similarity_type,
+                num_languages=record.num_languages,
             )
             if existing and self.config.resume:
                 # Skip if already completed
@@ -211,6 +212,11 @@ class AblationRunner:
                 base_model_dir=exp_config.get("models_root", "haryos_model"),
                 batch_size=exp_config.get("batch_size", 16),
                 max_seq_length=exp_config.get("max_seq_length", 128),
+                # Fisher-specific options
+                dataset_name=exp_config.get("dataset_name"),
+                text_column=exp_config.get("text_column", "text"),
+                num_fisher_examples=exp_config.get("num_fisher_examples", 1000),
+                fisher_data_mode=exp_config.get("fisher_data_mode", "target"),
             )
 
             # Run the pipeline (merge + STS-B sanity check)

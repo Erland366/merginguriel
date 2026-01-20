@@ -174,6 +174,7 @@ class ExperimentDB:
         similarity_type: Optional[str] = None,
         status: Optional[str] = None,
         ablation_name: Optional[str] = None,
+        num_languages: Optional[int] = None,
         limit: Optional[int] = None,
     ) -> List[ExperimentRecord]:
         """Find experiments matching the given criteria."""
@@ -195,6 +196,9 @@ class ExperimentDB:
         if ablation_name:
             conditions.append("ablation_name = ?")
             params.append(ablation_name)
+        if num_languages is not None:
+            conditions.append("num_languages = ?")
+            params.append(num_languages)
 
         sql = "SELECT * FROM experiments"
         if conditions:
