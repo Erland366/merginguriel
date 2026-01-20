@@ -217,6 +217,8 @@ class AblationRunner:
                 text_column=exp_config.get("text_column", "text"),
                 num_fisher_examples=exp_config.get("num_fisher_examples", 1000),
                 fisher_data_mode=exp_config.get("fisher_data_mode", "target"),
+                # Method-specific options
+                alpha=exp_config.get("alpha", 1.0),  # Soft projection for directional_consensus
             )
 
             # Run the pipeline (merge + STS-B sanity check)

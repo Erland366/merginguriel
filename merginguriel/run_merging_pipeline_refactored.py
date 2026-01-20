@@ -72,6 +72,8 @@ class MergeConfig:
     batch_size: int = 16
     max_seq_length: int = 128
     base_model_dir: str = ""
+    # Method-specific parameters
+    alpha: float = 1.0  # Soft projection strength for directional_consensus (0=no projection, 1=full)
 
 
 class WeightCalculator(ABC):
@@ -349,6 +351,7 @@ class WeightCalculatorFactory:
             'slerp': SimilarityWeightCalculator,
             'regmean': SimilarityWeightCalculator,
             'neuromerging': SimilarityWeightCalculator,
+            'directional_consensus': SimilarityWeightCalculator,
         }
 
         if mode not in calculators:
@@ -679,6 +682,50 @@ class RegMeanStrategy(MergingStrategy):
         }
 
 
+class DirectionalConsensusStrategy(MergingStrategy):
+    """Directional Consensus merging strategy that projects task vectors onto consensus direction.
+
+    Projects each task vector onto a per-layer consensus direction to reduce interference
+    from conflicting gradient directions across different language models.
+
+    Supports soft projection via the alpha parameter:
+    - alpha=1.0: Full projection (maximum variance reduction)
+    - alpha=0.0: No projection (equivalent to similarity method)
+    - 0 < alpha < 1: Interpolate between aligned and original
+    """
+
+    def get_merger(self, mode: str):
+        return merging_methods_dict["directional_consensus"]()
+
+    def get_method_params(
+        self,
+        config: MergeConfig,
+        models_and_weights: Dict[str, ModelInfo],
+        base_model_info: ModelInfo,
+    ) -> Dict[str, Any]:
+        # Get similarity weights for weighted aggregation
+        src_weights = [info.weight for info in models_and_weights.values()]
+
+        # Default parameters for directional consensus
+        scaling_coefficient = 1.0
+        aggregation_mode = "weighted"  # Use similarity-based weights
+        alpha = getattr(config, 'alpha', 1.0)  # Soft projection strength
+
+        print(f"\n📐 Directional Consensus Strategy: Projecting task vectors onto consensus direction")
+        print(f"   Models: {len(models_and_weights)}")
+        print(f"   Aggregation mode: {aggregation_mode}")
+        print(f"   Scaling coefficient: {scaling_coefficient}")
+        print(f"   Alpha (projection strength): {alpha}")
+        print(f"   Weights: {[f'{w:.3f}' for w in src_weights]}")
+
+        return {
+            "scaling_coefficient": scaling_coefficient,
+            "aggregation_mode": aggregation_mode,
+            "weights": src_weights,
+            "alpha": alpha,
+        }
+
+
 class MergingStrategyFactory:
     @staticmethod
     def create(mode: str) -> MergingStrategy:
@@ -694,6 +741,8 @@ class MergingStrategyFactory:
             return SlerpStrategy()
         if mode == "regmean":
             return RegMeanStrategy()
+        if mode == "directional_consensus":
+            return DirectionalConsensusStrategy()
         return LinearStrategy()
 
 

@@ -288,12 +288,85 @@ Before committing to merging:
 3. If `merged_perf < source_avg`, **do not merge**
 4. Positive merging effect indicates potential success
 
+## Directional Consensus: Variance Reduction for Interference (Jan 20, 2026)
+
+### The Idea
+
+**Hypothesis**: Task vectors from different languages point in different directions. Projecting them onto a consensus direction should reduce interference.
+
+**Algorithm** (per-parameter):
+```
+1. Extract task vectors: τ_i = model_i - xlmr_base
+2. Compute consensus direction: d = normalize(Σ τ_i)
+3. Project each vector: τ_aligned = (τ · d) × d
+4. Weighted aggregation: merged = base + Σ(w_i × τ_aligned_i)
+```
+
+### Validation Results
+
+| Target | Effect Type | directional_consensus | similarity | Δ vs similarity |
+|--------|-------------|----------------------|------------|-----------------|
+| cy-GB | INTERFERENCE | **42.60%** | 41.66% | **+0.94%** |
+| sw-KE | SYNERGY | 46.87% | **48.32%** | -1.45% |
+
+### Key Insight
+
+Directional consensus is a **variance reduction** technique:
+- **Helps interference** (cy-GB): Forces conflicting directions to align, reducing destructive interference
+- **Hurts synergy** (sw-KE): Removes beneficial orthogonal components that create constructive combination
+
+### When to Use
+
+| Merging Effect | Recommended Method | Rationale |
+|----------------|-------------------|-----------|
+| NEGATIVE (interference) | `directional_consensus` | Reduces variance, +0.94% for cy-GB |
+| POSITIVE (synergy) | `similarity` | Preserves beneficial variance |
+
+### Updated Decision Tree
+
+```
+├─ Target has NEGATIVE Merging Effect (interference)
+│   ├─ Use: directional_consensus
+│   ├─ Similarity: REAL
+│   ├─ Languages: 5
+│   └─ Expected: Reduce interference by ~1%
+│
+├─ Target has POSITIVE Merging Effect (synergy, e.g., sw-KE)
+│   ├─ Use: similarity (NOT directional_consensus!)
+│   ├─ Similarity: REAL
+│   ├─ Languages: 5
+│   └─ Expected: +3% improvement
+│
+└─ Unknown Merging Effect
+    ├─ Run pilot: compute source_avg and merged_perf
+    ├─ If merged < source_avg → use directional_consensus
+    └─ If merged > source_avg → use similarity
+```
+
+### Configuration
+
+```yaml
+method: "directional_consensus"
+similarity_type: "REAL"
+num_languages: 5
+include_target: false
+```
+
+### Implementation
+
+- Method: `submodules/auto_merge_llm/auto_merge_llm/methods/directional_consensus.py`
+- Config: `configs/ablations/directional_consensus_validation.yaml`
+- Database: `experiments_directional_consensus.db`
+
+---
+
 ## Open Questions
 
 1. ~~Why does sw-KE benefit while cy-GB doesn't?~~ → **ANSWERED**: Merging Effect (synergy vs interference)
-2. What makes sw-KE sources combine well? (complementary vs conflicting features)
-3. Can we predict Merging Effect without running the full merge?
-4. Are there linguistic features that predict positive Merging Effect?
+2. ~~Can we reduce interference for cy-GB?~~ → **ANSWERED**: Yes, directional_consensus helps (+0.94%)
+3. What makes sw-KE sources combine well? (complementary vs conflicting features)
+4. Can we predict Merging Effect without running the full merge?
+5. Are there linguistic features that predict positive Merging Effect?
 
 ## References
 
