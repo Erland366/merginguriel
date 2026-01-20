@@ -46,17 +46,23 @@ if submodule_path not in sys.path:
 
 
 def load_similarity_weights(similarity_matrix_path: str, available_locales: List[str], target_lang: str,
-                          num_languages: int = None, top_k: int = 20, sinkhorn_iterations: int = 20):
+                          num_languages: int = None, top_k: int = 20, sinkhorn_iterations: int = 20,
+                          include_target: bool = False):
     """
     Load similarity weights and create model-to-weight mapping for target language.
 
     Uses language_similarity_matrix_unified.csv and local model directory.
     Direct locale matching - no mapping needed!
+
+    Args:
+        include_target: If True, include the target language's model in the ensemble (IncTar mode).
+                       The target model gets weight 1.0 (highest confidence in self).
     """
     from merginguriel.similarity_utils import load_and_process_similarity
 
     try:
         print(f"Processing similarity weights for {len(available_locales)} available locales")
+        print(f"Include target mode: {'IncTar' if include_target else 'ExcTar'}")
 
         # Get similarity weights using the utility
         similar_languages = load_and_process_similarity(
@@ -82,6 +88,14 @@ def load_similarity_weights(similarity_matrix_path: str, available_locales: List
             else:
                 print(f"  ✗ Locale '{locale}' not in available models")
 
+        # IncTar mode: Include target language's own model with weight 1.0
+        if include_target and target_lang in available_locales_set:
+            models_and_weights[target_lang] = {
+                'weight': 1.0,  # Self-model gets full weight (highest confidence)
+                'locale': target_lang
+            }
+            print(f"  ✓ {target_lang} (target): 1.000000 [IncTar]")
+
         # Normalize weights to sum to 1.0 after filtering for available models
         if models_and_weights:
             total_weight = sum(info['weight'] for info in models_and_weights.values())
@@ -101,14 +115,23 @@ def load_similarity_weights(similarity_matrix_path: str, available_locales: List
         return None
 
 
-def load_model_from_local(locale: str, base_model: str = "xlm-roberta-base"):
-    """Load model directly from local haryos_model directory."""
+def load_model_from_local(locale: str, base_model: str = "xlm-roberta-base",
+                         models_root: str = None):
+    """Load model directly from local models directory.
+
+    Args:
+        locale: The locale code (e.g., 'sw-KE')
+        base_model: Base model name (e.g., 'xlm-roberta-base')
+        models_root: Root directory for models. If None, uses project_root/haryos_model
+    """
     try:
         print(f"Loading model for locale: {locale}")
 
         # Construct the local model path
-        model_dir = os.path.join("/home/coder/Python_project/MergingUriel/haryos_model",
-                                f"{base_model}_massive_k_{locale}")
+        if models_root is None:
+            models_root = os.path.join(project_root, "haryos_model")
+
+        model_dir = os.path.join(models_root, f"{base_model}_massive_k_{locale}")
 
         if not os.path.exists(model_dir):
             print(f"Model directory not found: {model_dir}")
@@ -206,7 +229,8 @@ def uriel_weighted_logits(logits_list: List[torch.Tensor], weights: List[float],
 
 
 def run_ensemble_inference(models_and_weights: Dict, test_data: List[str],
-                          voting_method: str = "majority", base_model: str = "xlm-roberta-base") -> Tuple[List[int], Dict]:
+                          voting_method: str = "majority", base_model: str = "xlm-roberta-base",
+                          models_root: str = None) -> Tuple[List[int], Dict]:
     """
     Run ensemble inference on multiple models using various voting methods.
 
@@ -214,6 +238,8 @@ def run_ensemble_inference(models_and_weights: Dict, test_data: List[str],
         models_and_weights: Dictionary mapping model paths to their info
         test_data: List of text examples to classify
         voting_method: "majority", "weighted_majority", "soft", or "uriel_logits"
+        base_model: Base model name (e.g., 'xlm-roberta-base')
+        models_root: Root directory for models. If None, uses project_root/haryos_model
 
     Returns:
         Tuple of (predictions, metadata)
@@ -234,7 +260,7 @@ def run_ensemble_inference(models_and_weights: Dict, test_data: List[str],
 
         print(f"\nLoading model for locale: {locale} (weight: {weight:.6f})")
 
-        model, tokenizer = load_model_from_local(locale, base_model)
+        model, tokenizer = load_model_from_local(locale, base_model, models_root)
 
         if model is not None and tokenizer is not None:
             models.append(model)
@@ -420,6 +446,12 @@ def main():
         default="urie_ensemble_results",
         help="Output directory for results"
     )
+    parser.add_argument(
+        "--include-target",
+        action="store_true",
+        default=False,
+        help="Include target language's model in ensemble (IncTar mode). Default: ExcTar"
+    )
     args = parser.parse_args()
 
     print("*****************************************************")
@@ -445,7 +477,8 @@ def main():
 
     models_and_weights = load_similarity_weights(
         similarity_matrix_path, available_locales, args.target_lang,
-        args.num_languages, args.top_k, args.sinkhorn_iters
+        args.num_languages, args.top_k, args.sinkhorn_iters,
+        include_target=args.include_target
     )
 
     if not models_and_weights:
@@ -482,7 +515,8 @@ def main():
     print(f"Error rate: {results['error_rate']:.4f}")
 
     # Save results
-    output_dir = os.path.join(project_root, args.output_dir, f"urie_{args.voting_method}_{args.target_lang}")
+    mode_suffix = "IncTar" if args.include_target else "ExcTar"
+    output_dir = os.path.join(project_root, args.output_dir, f"urie_{args.voting_method}_{args.target_lang}_{mode_suffix}")
     os.makedirs(output_dir, exist_ok=True)
 
     # Save detailed results
@@ -492,7 +526,9 @@ def main():
             "target_language": args.target_lang,
             "voting_method": args.voting_method,
             "num_models": len(models_and_weights),
-            "num_examples": len(test_texts)
+            "num_examples": len(test_texts),
+            "include_target": args.include_target,
+            "mode": mode_suffix
         },
         "models": models_and_weights,
         "metadata": metadata,

@@ -32,6 +32,7 @@ class ExperimentRecord:
     num_languages: int = 0
     include_target: bool = False
     model_family: str = ""
+    experiment_type: str = "merging"  # "ensemble" or "merging"
 
     # Results
     accuracy: Optional[float] = None
@@ -71,6 +72,7 @@ class ExperimentDB:
         num_languages INTEGER,
         include_target INTEGER,
         model_family TEXT,
+        experiment_type TEXT DEFAULT 'merging',
         accuracy REAL,
         status TEXT DEFAULT 'planned',
         results_dir TEXT,
@@ -84,6 +86,7 @@ class ExperimentDB:
     CREATE INDEX IF NOT EXISTS idx_method ON experiments(method);
     CREATE INDEX IF NOT EXISTS idx_status ON experiments(status);
     CREATE INDEX IF NOT EXISTS idx_ablation ON experiments(ablation_name);
+    CREATE INDEX IF NOT EXISTS idx_experiment_type ON experiments(experiment_type);
     """
 
     def __init__(self, db_path: str = "experiments.db"):
@@ -111,13 +114,14 @@ class ExperimentDB:
                 INSERT INTO experiments (
                     ablation_name, started_at, completed_at, locale, method,
                     similarity_type, num_languages, include_target, model_family,
-                    accuracy, status, results_dir, error_message, config_json, notes
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    experiment_type, accuracy, status, results_dir, error_message,
+                    config_json, notes
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 record.ablation_name, record.started_at, record.completed_at,
                 record.locale, record.method, record.similarity_type,
                 record.num_languages, int(record.include_target), record.model_family,
-                record.accuracy, record.status, record.results_dir,
+                record.experiment_type, record.accuracy, record.status, record.results_dir,
                 record.error_message, record.config_json, record.notes
             ))
             return cursor.lastrowid
@@ -133,14 +137,14 @@ class ExperimentDB:
                     ablation_name = ?, started_at = ?, completed_at = ?,
                     locale = ?, method = ?, similarity_type = ?,
                     num_languages = ?, include_target = ?, model_family = ?,
-                    accuracy = ?, status = ?, results_dir = ?,
+                    experiment_type = ?, accuracy = ?, status = ?, results_dir = ?,
                     error_message = ?, config_json = ?, notes = ?
                 WHERE id = ?
             """, (
                 record.ablation_name, record.started_at, record.completed_at,
                 record.locale, record.method, record.similarity_type,
                 record.num_languages, int(record.include_target), record.model_family,
-                record.accuracy, record.status, record.results_dir,
+                record.experiment_type, record.accuracy, record.status, record.results_dir,
                 record.error_message, record.config_json, record.notes,
                 record.id
             ))
@@ -175,6 +179,7 @@ class ExperimentDB:
         status: Optional[str] = None,
         ablation_name: Optional[str] = None,
         num_languages: Optional[int] = None,
+        experiment_type: Optional[str] = None,
         limit: Optional[int] = None,
     ) -> List[ExperimentRecord]:
         """Find experiments matching the given criteria."""
@@ -199,6 +204,9 @@ class ExperimentDB:
         if num_languages is not None:
             conditions.append("num_languages = ?")
             params.append(num_languages)
+        if experiment_type:
+            conditions.append("experiment_type = ?")
+            params.append(experiment_type)
 
         sql = "SELECT * FROM experiments"
         if conditions:
