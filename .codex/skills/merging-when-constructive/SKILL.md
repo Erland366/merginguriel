@@ -292,13 +292,13 @@ Before committing to merging:
 
 1. ~~Why does sw-KE benefit while cy-GB doesn't?~~ → **ANSWERED**: Merging Effect (synergy vs interference)
 2. What makes sw-KE sources combine well? (complementary vs conflicting features)
-3. ~~Can we predict Merging Effect without running the full merge?~~ → **PARTIALLY ANSWERED**: See Merging Effect Prediction below (78% accuracy)
-4. Are there linguistic features that predict positive Merging Effect?
-5. How to quantify "regional coherence" as a predictive feature?
+3. ~~Can we predict Merging Effect without running the full merge?~~ → **ANSWERED (NEGATIVE)**: No reliable predictor found. 21-target validation shows 62% accuracy at best—source-level features don't capture merging dynamics.
+4. ~~Are there linguistic features that predict positive Merging Effect?~~ → **ANSWERED (NEGATIVE)**: Tested diversity, coherence, quality, variance. None reliably predict. hi-IN (100% coherence) has -7.93% effect.
+5. ~~How to quantify "regional coherence" as a predictive feature?~~ → **ANSWERED (NEGATIVE)**: Regional coherence does NOT predict synergy. r=-0.06 correlation.
 
 ---
 
-## Merging Effect Prediction (Jan 20, 2026)
+## Merging Effect Prediction (Jan 20-21, 2026)
 
 ### Research Question
 
@@ -306,7 +306,7 @@ Can we predict synergy vs interference BEFORE running the expensive merge?
 
 ### The Predictor
 
-**Formula**:
+**Formula V1** (diversity-based):
 ```
 synergy_score = diversity_score / (1 + source_acc_std × 10)
 
@@ -315,75 +315,97 @@ where:
   source_acc_std = std(source_accuracies_on_target)
 ```
 
-**Implementation**: `analysis/merging_effect_predictor.py`
+**Implementation**: `analysis/merging_effect_predictor.py`, `analysis/merging_effect_predictor_v2.py`
 
-### Validation Results (78% accuracy)
+### Validation Results (21 targets) - NEGATIVE RESULT
 
-| Target | Rank | Synergy Score | Predicted | Merged Acc | Expected | Effect | Actual | Match |
-|--------|------|---------------|-----------|------------|----------|--------|--------|-------|
-| az-AZ | 1 | 0.1514 | SYNERGY | 0.6627 | 0.6371 | +2.57% | SYNERGY | ✓ |
-| tr-TR | 2 | 0.1255 | SYNERGY | 0.7290 | 0.6883 | +4.07% | SYNERGY | ✓ |
-| af-ZA | 4 | 0.1192 | SYNERGY | 0.5740 | 0.6018 | -2.78% | INTERFERENCE | ✗ |
-| am-ET | 47 | 0.0600 | INTERFERENCE | 0.4361 | 0.4658 | -2.97% | INTERFERENCE | ✓ |
-| tl-PH | 48 | 0.0417 | INTERFERENCE | 0.5921 | 0.5272 | +6.49% | SYNERGY | ✗ |
-| id-ID | 49 | 0.0375 | INTERFERENCE | 0.7091 | 0.7386 | -2.95% | INTERFERENCE | ✓ |
+| Predictor | Accuracy | Notes |
+|-----------|----------|-------|
+| V1 (diversity-based) | **47.6%** (10/21) | Worse than random! |
+| V3 (+ coherence bonus) | **61.9%** (13/21) | Still unreliable |
 
-**Combined with prior results**: 7/9 correct (78%)
+### Full Results Table (sorted by effect)
 
-### What Works
+| Target | Effect | Outcome | Coherence | Quality | Diversity | Match |
+|--------|--------|---------|-----------|---------|-----------|-------|
+| tl-PH | +6.49% | SYNERGY | 1.00 | 0.63 | 0.058 | ✓ |
+| tr-TR | +4.07% | SYNERGY | 0.40 | 0.81 | 0.145 | ✓ |
+| th-TH | +2.72% | SYNERGY | 0.80 | 0.74 | 0.149 | ✓ |
+| az-AZ | +2.57% | SYNERGY | 0.40 | 0.75 | 0.173 | ✓ |
+| fa-IR | +2.35% | SYNERGY | 0.40 | 0.79 | 0.183 | ✓ |
+| sw-KE | +2.30% | SYNERGY | 0.80 | 0.47 | 0.140 | ✓ |
+| el-GR | +2.06% | SYNERGY | 0.20 | 0.75 | 0.145 | ✗ |
+| ms-MY | +1.88% | SYNERGY | 1.00 | 0.75 | 0.102 | ✓ |
+| km-KH | +0.72% | SYNERGY | 0.80 | 0.64 | 0.154 | ✓ |
+| my-MM | +0.29% | SYNERGY | 0.60 | 0.72 | 0.081 | ✗ |
+| ka-GE | -0.11% | INTERF | 0.40 | 0.62 | 0.136 | ✓ |
+| vi-VN | -0.27% | INTERF | 1.00 | 0.79 | 0.110 | ✗ |
+| cy-GB | -1.58% | INTERF | 0.60 | 0.49 | 0.160 | ✓ |
+| lv-LV | -1.84% | INTERF | 0.40 | 0.72 | 0.126 | ✗ |
+| ko-KR | -1.86% | INTERF | 0.40 | 0.79 | 0.144 | ✗ |
+| af-ZA | -2.78% | INTERF | 0.40 | 0.71 | 0.158 | ✗ |
+| id-ID | -2.95% | INTERF | 1.00 | 0.86 | 0.058 | ✗ |
+| am-ET | -2.97% | INTERF | 0.60 | 0.57 | 0.081 | ✓ |
+| bn-BD | -3.07% | INTERF | 0.60 | 0.69 | 0.112 | ✓ |
+| ml-IN | -4.60% | INTERF | 0.60 | 0.75 | 0.112 | ✓ |
+| hi-IN | -7.93% | INTERF | 1.00 | 0.79 | 0.069 | ✗ |
 
-| Pattern | Examples | Confidence |
-|---------|----------|------------|
-| High diversity + Low variance → SYNERGY | az-AZ (+2.57%), tr-TR (+4.07%) | High |
-| Low diversity + High variance → INTERFERENCE | am-ET (-2.97%), id-ID (-2.95%) | High |
+### Critical Finding: Regional Coherence Hypothesis DISPROVED
 
-### What Doesn't Fit
+**High coherence does NOT guarantee synergy:**
 
-| Failure | Why | Lesson |
-|---------|-----|--------|
-| af-ZA (predicted SYNERGY, actual INTERFERENCE) | High diversity but sources weak (60-64% vs target 85%) | Source quality matters |
-| tl-PH (predicted INTERFERENCE, actual SYNERGY +6.49%) | Low diversity but regional coherence (all SE Asian) | Regional coherence enables synergy |
+| Target | Coherence | Effect | Outcome |
+|--------|-----------|--------|---------|
+| hi-IN | 1.00 | **-7.93%** | INTERFERENCE (worst!) |
+| vi-VN | 1.00 | -0.27% | INTERFERENCE |
+| id-ID | 1.00 | -2.95% | INTERFERENCE |
+| tl-PH | 1.00 | +6.49% | SYNERGY |
+| ms-MY | 1.00 | +1.88% | SYNERGY |
 
-### Updated Decision Tree
+### Feature Correlations with Actual Effect
+
+| Feature | Correlation | Interpretation |
+|---------|-------------|----------------|
+| diversity | **+0.28** | Best predictor, but weak |
+| acc_std | +0.19 | Contrary to hypothesis |
+| coherence | **-0.06** | Slightly NEGATIVE! |
+| quality | -0.13 | Contrary to hypothesis |
+
+### Pattern Analysis
+
+SYNERGY vs INTERFERENCE targets have **nearly identical** feature profiles:
+
+| Metric | SYNERGY (n=10) | INTERFERENCE (n=11) |
+|--------|----------------|---------------------|
+| Diversity | 0.133 | 0.115 |
+| Acc Std | 0.036 | 0.035 |
+| Coherence | 0.64 | 0.64 |
+| Quality | 0.70 | 0.71 |
+
+### Conclusion: Prediction is Fundamentally Difficult
+
+**Key insight**: Source-level features (diversity, coherence, quality, variance) do NOT reliably predict Merging Effect. The interaction between source models during merging is more complex than these proxies can capture.
+
+### Updated Recommendation
 
 ```
-Before merging, compute synergy_score:
+DO NOT rely on any predictor for merging decisions.
 
-├─ synergy_score > 0.12 AND source_quality > 70%
-│   └─ MERGE: High confidence synergy expected
-│
-├─ synergy_score < 0.06 AND sources NOT regionally coherent
-│   └─ DON'T MERGE: High confidence interference expected
-│
-├─ Sources from same linguistic region (e.g., all SE Asian)
-│   └─ TEST EMPIRICALLY: Regional coherence may override low diversity
-│
-└─ All other cases
-    └─ TEST EMPIRICALLY: Predictor uncertain
+The only reliable approach:
+1. Run a pilot merge experiment
+2. Compute Merging Effect = merged_acc - avg(source_accs)
+3. If effect > 0, proceed with merge
+4. If effect < 0, use best single source instead
 ```
 
-### Practical Usage
+### What We Learned
 
-```python
-# Before committing to full merge:
-from analysis.merging_effect_predictor import analyze_target
-
-result = analyze_target(target_locale, nxn_matrix, similarity_matrix)
-if result['synergy_score'] > 0.12 and result['source_quality'] > 0.70:
-    print("High confidence: proceed with merge")
-elif result['synergy_score'] < 0.06:
-    print("High confidence: skip merge, use best source")
-else:
-    print("Uncertain: run pilot merge experiment")
-```
-
-### Failure Modes (Prediction)
-
-| What Failed | Why | Lesson |
-|-------------|-----|--------|
-| af-ZA high-diversity prediction | Sources much weaker than target (60-64% vs 85%) | Check source_quality > 70% |
-| tl-PH low-diversity prediction | Regional coherence (all SE Asian) created synergy | Check for geographic clustering |
-| Weak correlation on 6 samples | Need more validation data | Expand to 15+ targets |
+| Hypothesis | Status | Evidence |
+|------------|--------|----------|
+| High diversity → synergy | **WEAK** | r=+0.28, best but not reliable |
+| High coherence → synergy | **DISPROVED** | r=-0.06, hi-IN worst case |
+| Low acc variance → synergy | **DISPROVED** | r=+0.19, opposite direction |
+| High source quality → synergy | **DISPROVED** | r=-0.13, opposite direction |
 
 ---
 

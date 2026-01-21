@@ -543,4 +543,71 @@ Can we predict whether cross-lingual model merging will result in SYNERGY or INT
 
 ---
 
+## 2026-01-21 – Retrospective: Expanded Merging Effect Prediction Validation (NEGATIVE RESULT)
+
+**Type:** Retrospective
+**General description:** Expanded validation to 21 targets disproved the regional coherence hypothesis and showed source-level features cannot reliably predict Merging Effect.
+
+### What we tried
+
+1. **Enhanced Predictor (V2/V3)**
+   - Added source_quality feature: `source_acc_mean / target_self_perf`
+   - Added regional_coherence feature: `max(region_counts) / num_sources`
+   - V3 formula: `synergy_score_v1 + coherence_bonus`
+
+2. **Expanded Validation (12 new targets)**
+   - High coherence: ms-MY, hi-IN, km-KH, th-TH
+   - Middle score: ko-KR, fa-IR, lv-LV, el-GR
+   - Low score: my-MM, ka-GE, bn-BD, ml-IN
+
+3. **Regional Coherence Analysis**
+   - Analyzed tl-PH phenomenon (100% SE Asian sources → +6.49% synergy)
+   - Identified 7 high-synergy-potential regional clusters
+   - Computed within-region transfer and similarity
+
+### Key findings (NEGATIVE)
+
+| Predictor | Accuracy | Notes |
+|-----------|----------|-------|
+| V1 (diversity) | 47.6% (10/21) | Worse than random |
+| V3 (+ coherence) | 61.9% (13/21) | Still unreliable |
+
+**Regional coherence hypothesis DISPROVED:**
+
+| Target | Coherence | Effect | Outcome |
+|--------|-----------|--------|---------|
+| hi-IN | 1.00 | **-7.93%** | INTERFERENCE (worst!) |
+| vi-VN | 1.00 | -0.27% | INTERFERENCE |
+| id-ID | 1.00 | -2.95% | INTERFERENCE |
+
+**Feature correlations with actual Merging Effect:**
+- diversity: +0.28 (weak positive)
+- coherence: -0.06 (slightly negative!)
+- quality: -0.13 (negative)
+- acc_std: +0.19 (opposite to hypothesis)
+
+### What failed
+
+- **Regional coherence bonus**: Caused false positives (hi-IN, vi-VN, id-ID)
+- **All hypotheses**: None of diversity, coherence, quality, variance reliably predict outcome
+- **Pattern separation**: SYNERGY and INTERFERENCE targets have nearly identical feature profiles
+
+### Outcome
+
+- **Negative result documented**: Source-level features cannot predict Merging Effect
+- **Skill updated**: `merging-when-constructive` with full 21-target results
+- **Recommendation changed**: "DO NOT rely on any predictor; run pilot experiments instead"
+- **Open questions closed**: Questions 3, 4, 5 answered with negative findings
+
+### Files created
+
+| File | Purpose |
+|------|---------|
+| `analysis/merging_effect_predictor_v2.py` | Enhanced predictor with V1-V4 formulas |
+| `analysis/regional_coherence_analysis.py` | tl-PH deep dive and cluster analysis |
+| `configs/ablations/expanded_predictor_validation.yaml` | 12-target validation config |
+| `experiments_expanded_validation.db` | Validation experiment results |
+
+---
+
 <!-- New entries go above this line -->
