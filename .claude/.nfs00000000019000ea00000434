@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(tree:*)",
+      "Bash(wc:*)",
+      "Bash(done)",
+      "Bash(pip show:*)",
+      "Bash(ln:*)",
+      "Bash(git submodule:*)",
+      "Bash(PYTHONPATH=/home/coder/Python_project/MergingUriel_Root/MergingUriel-code-simplifier python:*)",
+      "Skill(domain-retrospective)",
+      "Bash(git worktree:*)",
+      "Bash(tmux list-sessions:*)",
+      "Bash(git -C /home/coder/Python_project/MergingUriel_Root/idea4-merging-effect-prediction worktree list)"
+    ]
+  }
+}

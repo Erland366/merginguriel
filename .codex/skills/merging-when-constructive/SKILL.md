@@ -12,7 +12,7 @@ metadata:
     - massive-dataset
   domain: research
   created: 2026-01-20
-  updated: 2026-01-20
+  updated: 2026-01-21
   author: Claude
 ---
 
@@ -288,11 +288,68 @@ Before committing to merging:
 3. If `merged_perf < source_avg`, **do not merge**
 4. Positive merging effect indicates potential success
 
+## Source Compatibility Analysis (Jan 21, 2026)
+
+### The Idea
+
+Before merging, analyze whether selected sources are **compatible** with each other using pairwise compatibility metrics. The hypothesis: not all good sources combine well together.
+
+### Metrics Tested
+
+| Metric | What it Measures | Result |
+|--------|------------------|--------|
+| **Task Vector Cosine** | Parameter-space: `cos(τ_A, τ_B)` where τ = model - pretrained | **Small improvement (+0.3%)** |
+| **CKA** | Representation-space: hidden state similarity on shared inputs | No improvement |
+
+### Ablation Results
+
+| Target | Baseline | TV Cosine × Sim | CKA × Sim |
+|--------|----------|-----------------|-----------|
+| cy-GB | 43.44% | **43.68% (+0.24%)** | 43.38% (-0.06%) |
+| sw-KE | 43.14% | **43.51% (+0.37%)** | 43.21% (+0.07%) |
+
+### Why TV Cosine Works but CKA Doesn't
+
+1. **Parameter-space captures interference directly**: Task vectors represent actual weight changes. Similar task vectors merge constructively; orthogonal ones interfere.
+2. **Representation similarity ≠ merge compatibility**: Two models can produce similar representations via different weight configurations.
+3. **TV Cosine is computationally cheaper**: No forward passes needed, just parameter comparison.
+
+### When to Use
+
+- Use `similarity_x_tv_compatibility` when **marginal gains matter**
+- TV Cosine compatibility is a **weak positive signal** (~0.3% improvement)
+- Does **NOT** change failure to success (cy-GB still fails to beat baseline)
+- Best as a **tiebreaker** or supplementary signal, not primary predictor
+
+### Configuration
+
+```yaml
+method: "similarity_x_tv_compatibility"  # Multiplicative: weight × compatibility
+similarity_type: "REAL"
+num_languages: 5
+include_target: false
+```
+
+### Pre-computed Matrices
+
+Located in `nxn_results/compatibility_matrix/`:
+- `task_vector_cosine_matrix.csv` (48×48, mean=0.072)
+- `cka_matrix.csv` (48×48, mean=0.649)
+- `computation_log.json` (metadata)
+
+### Implementation
+
+- Core module: `merginguriel/compatibility.py`
+- Pre-computation: `merginguriel/compute_compatibility_matrix.py`
+- Weight calculator: `CompatibilityWeightCalculator` in pipeline
+
+---
+
 ## Open Questions
 
 1. ~~Why does sw-KE benefit while cy-GB doesn't?~~ → **ANSWERED**: Merging Effect (synergy vs interference)
 2. What makes sw-KE sources combine well? (complementary vs conflicting features)
-3. ~~Can we predict Merging Effect without running the full merge?~~ → **ANSWERED (NEGATIVE)**: No reliable predictor found. 21-target validation shows 62% accuracy at best—source-level features don't capture merging dynamics.
+3. ~~Can we predict Merging Effect without running the full merge?~~ → **ANSWERED (NEGATIVE)**: No reliable predictor found. 21-target validation shows 62% accuracy at best—source-level features don't capture merging dynamics. TV Cosine compatibility provides weak signal (+0.3%) but not strong enough to flip outcomes.
 4. ~~Are there linguistic features that predict positive Merging Effect?~~ → **ANSWERED (NEGATIVE)**: Tested diversity, coherence, quality, variance. None reliably predict. hi-IN (100% coherence) has -7.93% effect.
 5. ~~How to quantify "regional coherence" as a predictive feature?~~ → **ANSWERED (NEGATIVE)**: Regional coherence does NOT predict synergy. r=-0.06 correlation.
 

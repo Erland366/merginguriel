@@ -34,6 +34,11 @@ if submodule_path not in sys.path:
 
 from merginguriel.utils import get_similarity_scores
 from merginguriel.similarity_utils import load_and_process_similarity
+from merginguriel.compatibility import (
+    load_compatibility_matrix,
+    get_source_compatibility_scores,
+    apply_compatibility_weights,
+)
 from auto_merge_llm.methods import merging_methods_dict
 
 
@@ -330,6 +335,106 @@ class IterativeWeightCalculator(WeightCalculator):
         return models_and_weights, base_model_info
 
 
+class CompatibilityWeightCalculator(SimilarityWeightCalculator):
+    """
+    Weight calculator that incorporates source compatibility analysis.
+
+    Extends similarity-based selection with compatibility scoring:
+    final_weight = similarity_weight × compatibility_score
+
+    Compatibility measures how well source models work together when merged,
+    independent of the target language.
+    """
+
+    # Default paths for compatibility matrices
+    DEFAULT_TV_MATRIX = Path(project_root) / "nxn_results" / "compatibility_matrix" / "task_vector_cosine_matrix.csv"
+    DEFAULT_CKA_MATRIX = Path(project_root) / "nxn_results" / "compatibility_matrix" / "cka_matrix.csv"
+
+    def __init__(self, compatibility_type: str = "task_vector_cosine", matrix_path: Optional[Path] = None):
+        """
+        Initialize compatibility weight calculator.
+
+        Args:
+            compatibility_type: Type of compatibility metric ("task_vector_cosine" or "cka")
+            matrix_path: Path to pre-computed compatibility matrix (uses default if None)
+        """
+        super().__init__()
+        self.compatibility_type = compatibility_type
+        self.matrix_path = matrix_path
+        self.compatibility_matrix = None
+
+    def _load_compatibility_matrix(self):
+        """Load the compatibility matrix if not already loaded."""
+        if self.compatibility_matrix is not None:
+            return
+
+        # Determine path
+        if self.matrix_path:
+            path = self.matrix_path
+        elif self.compatibility_type == "cka":
+            path = self.DEFAULT_CKA_MATRIX
+        else:
+            path = self.DEFAULT_TV_MATRIX
+
+        if not path.exists():
+            raise FileNotFoundError(
+                f"Compatibility matrix not found: {path}\n"
+                f"Run: python -m merginguriel.compute_compatibility_matrix --metric {self.compatibility_type}"
+            )
+
+        self.compatibility_matrix = load_compatibility_matrix(path, verbose=True)
+
+    def calculate_weights(self, config: MergeConfig) -> Tuple[Dict[str, ModelInfo], ModelInfo]:
+        """
+        Calculate weights with compatibility adjustment.
+
+        1. Get similarity-based weights from parent class
+        2. Load compatibility matrix
+        3. Apply multiplicative compatibility weighting
+        """
+        print(f"\n--- Calculating Compatibility-Adjusted Weights ({self.compatibility_type}) ---")
+
+        # Step 1: Get similarity-based selection
+        models_and_weights, base_model_info = super().calculate_weights(config)
+
+        # Step 2: Load compatibility matrix
+        self._load_compatibility_matrix()
+
+        # Step 3: Get source locales
+        source_locales = [info.locale for info in models_and_weights.values()]
+        source_locales.append(base_model_info.locale)
+
+        # Step 4: Compute compatibility scores for each source
+        compat_scores = get_source_compatibility_scores(
+            self.compatibility_matrix,
+            source_locales,
+        )
+
+        print(f"\nCompatibility scores (avg pairwise with other sources):")
+        for locale, score in compat_scores.items():
+            print(f"  - {locale}: {score:.4f}")
+
+        # Step 5: Apply multiplicative weighting
+        # Adjust weights: new_weight = old_weight * compatibility_score
+        base_model_info.weight *= compat_scores.get(base_model_info.locale, 1.0)
+        for info in models_and_weights.values():
+            info.weight *= compat_scores.get(info.locale, 1.0)
+
+        # Step 6: Renormalize weights to sum to 1
+        total_weight = base_model_info.weight + sum(info.weight for info in models_and_weights.values())
+        if total_weight > 0:
+            base_model_info.weight /= total_weight
+            for info in models_and_weights.values():
+                info.weight /= total_weight
+
+        print(f"\nFinal compatibility-adjusted weights:")
+        print(f"  - {base_model_info.locale} (base): {base_model_info.weight:.6f}")
+        for model_path, info in models_and_weights.items():
+            print(f"  - {info.locale}: {info.weight:.6f}")
+
+        return models_and_weights, base_model_info
+
+
 class WeightCalculatorFactory:
     """Factory for creating weight calculators."""
 
@@ -349,6 +454,9 @@ class WeightCalculatorFactory:
             'slerp': SimilarityWeightCalculator,
             'regmean': SimilarityWeightCalculator,
             'neuromerging': SimilarityWeightCalculator,
+            # Compatibility-aware weight calculators
+            'similarity_x_tv_compatibility': CompatibilityWeightCalculator,
+            'similarity_x_cka_compatibility': CompatibilityWeightCalculator,
         }
 
         if mode not in calculators:
@@ -362,6 +470,16 @@ class WeightCalculatorFactory:
             return calculator_class(
                 kwargs.get('active_model_states'),
                 kwargs.get('target_locales')
+            )
+        elif mode == 'similarity_x_tv_compatibility':
+            return calculator_class(
+                compatibility_type="task_vector_cosine",
+                matrix_path=kwargs.get('compatibility_matrix_path')
+            )
+        elif mode == 'similarity_x_cka_compatibility':
+            return calculator_class(
+                compatibility_type="cka",
+                matrix_path=kwargs.get('compatibility_matrix_path')
             )
         else:
             return calculator_class()
