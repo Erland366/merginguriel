@@ -456,4 +456,66 @@ Yet they behave **oppositely**! This confirms:
 
 ---
 
+## 2026-01-21 – Retrospective: Source Compatibility Ablation
+
+**Type:** Retrospective
+**General description:** Tested whether pairwise source compatibility (Task Vector Cosine, CKA) can predict and improve merge quality. TV Cosine provides weak but consistent improvement (+0.3%).
+
+### What we tried
+
+1. **Hypothesis**: Not all good source models are compatible. Two sources might transfer well individually but interfere when merged.
+
+2. **Method**: Pre-computed N×N compatibility matrices (48 locales) using two metrics:
+   - **Task Vector Cosine**: Parameter-space similarity `cos(τ_A, τ_B)` where τ = model - pretrained
+   - **CKA**: Representation-space similarity using hidden states on shared inputs
+
+3. **Integration**: Multiplicative weighting `final_weight = similarity × compatibility`
+
+4. **Ablation**: 2 targets × 3 methods = 6 experiments
+   - Targets: sw-KE (constructive), cy-GB (low-ratio but destructive)
+   - Methods: similarity (baseline), similarity × TV Cosine, similarity × CKA
+
+### Key findings
+
+| Target | Baseline | TV Cosine × Sim | CKA × Sim |
+|--------|----------|-----------------|-----------|
+| cy-GB | 43.44% | **43.68% (+0.24%)** | 43.38% (-0.06%) |
+| sw-KE | 43.14% | **43.51% (+0.37%)** | 43.21% (+0.07%) |
+
+- **Task Vector Cosine consistently outperforms baseline** on both targets
+- **CKA is essentially neutral** (minimal change)
+- Improvements are modest (~0.3%) but consistent
+
+### What failed
+
+- **CKA didn't help**: Representation-space similarity doesn't predict merge compatibility
+- **Improvements are small**: Parameter-space compatibility helps but doesn't dramatically change outcomes
+- **cy-GB still doesn't beat ZS baseline** (43.68% vs 44.45% baseline)
+
+### Why TV Cosine works but CKA doesn't
+
+1. **Parameter-space captures interference directly**: Task vectors represent actual weight changes. Similar task vectors merge constructively; orthogonal ones interfere.
+2. **Representation similarity ≠ merge compatibility**: Two models can produce similar representations via different weight configurations.
+3. **TV Cosine is computationally cheaper**: No forward passes needed.
+
+### Outcome
+
+- **Partially answered open question**: "Can we predict Merging Effect without full merge?" → Yes, partially. TV Cosine provides weak signal.
+- **New method**: `similarity_x_tv_compatibility` added to pipeline
+- **Created skill**: `source-compatibility`
+- **Updated skill**: `merging-when-constructive` with Source Compatibility Analysis section
+- **Recommendation**: Use TV Cosine compatibility as tiebreaker, not primary predictor
+
+### Files created
+
+| File | Purpose |
+|------|---------|
+| `merginguriel/compatibility.py` | Core compatibility metrics |
+| `merginguriel/compute_compatibility_matrix.py` | Pre-computation CLI |
+| `nxn_results/compatibility_matrix/*.csv` | Pre-computed 48×48 matrices |
+| `configs/ablations/source_compatibility.yaml` | Ablation config |
+| `.codex/skills/source-compatibility/SKILL.md` | New result skill |
+
+---
+
 <!-- New entries go above this line -->
