@@ -144,13 +144,20 @@ class AblationRunner:
         records = self.plan()
         ids = []
         for record in records:
-            # Check if already exists
+            # Check if already exists - include all key config fields
+            # Also check config_json for DARE settings
+            config_dict = json.loads(record.config_json) if record.config_json else {}
+            dare_rate = config_dict.get("dare_drop_rate", 0.0)
+            dare_search = f'"dare_drop_rate": {dare_rate}' if dare_rate > 0 else None
+
             existing = self.db.find(
                 ablation_name=self.config.name,
                 locale=record.locale,
                 method=record.method,
                 similarity_type=record.similarity_type,
                 num_languages=record.num_languages,
+                include_target=record.include_target,
+                config_json_contains=dare_search,
             )
             if existing and self.config.resume:
                 # Skip if already completed
@@ -202,6 +209,10 @@ class AblationRunner:
 
             merged_models_dir = exp_config.get("merged_models_dir", "merged_models")
 
+            # Extract DARE parameters from config
+            dare_drop_rate = exp_config.get("dare_drop_rate", 0.0)
+            dare_enabled = dare_drop_rate > 0.0
+
             merge_config = MergeConfig(
                 mode=record.method,
                 target_lang=record.locale,
@@ -219,6 +230,11 @@ class AblationRunner:
                 fisher_data_mode=exp_config.get("fisher_data_mode", "target"),
                 # Method-specific options
                 alpha=exp_config.get("alpha", 1.0),  # Soft projection for directional_consensus
+                # DARE options
+                dare_enabled=dare_enabled,
+                dare_drop_rate=dare_drop_rate,
+                dare_rescale=exp_config.get("dare_rescale", True),
+                dare_seed=exp_config.get("dare_seed", None),
             )
 
             # Run the pipeline (merge + STS-B sanity check)

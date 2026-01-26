@@ -65,7 +65,7 @@ class MergeConfig:
     label_column: str = "label"
     num_fisher_examples: int = 100
     base_model: str = "xlm-roberta-base"
-        # Similarity matrix options
+    # Similarity matrix options
     similarity_source: str = "sparse"  # 'sparse' (precomputed) or 'dense' (on-the-fly)
     similarity_type: str = "URIEL"  # 'URIEL' (linguistic features) or 'REAL' (empirical evaluation results)
     include_target: bool = False  # Include target language model in merging (IT mode)
@@ -79,6 +79,16 @@ class MergeConfig:
     base_model_dir: str = ""
     # Method-specific parameters
     alpha: float = 1.0  # Soft projection strength for directional_consensus (0=no projection, 1=full)
+    # DARE options (Drop And REscale preprocessing)
+    dare_enabled: bool = False  # Enable DARE preprocessing
+    dare_drop_rate: float = 0.9  # Probability of dropping delta params (paper recommends 0.9)
+    dare_rescale: bool = True  # Whether to rescale remaining params by 1/(1-p)
+    dare_seed: Optional[int] = None  # Random seed for reproducibility
+    # AdaMerging options (entropy-based coefficient learning)
+    adamerging_mode: str = "task_wise"  # 'task_wise' or 'layer_wise'
+    adamerging_iterations: int = 100  # Number of optimization iterations
+    adamerging_lr: float = 1e-3  # Learning rate for coefficient optimization
+    adamerging_use_ties: bool = False  # Apply TIES preprocessing before AdaMerging
 
 
 class WeightCalculator(ABC):
@@ -457,6 +467,7 @@ class WeightCalculatorFactory:
             'regmean': SimilarityWeightCalculator,
             'neuromerging': SimilarityWeightCalculator,
             'directional_consensus': SimilarityWeightCalculator,
+            'adamerging': SimilarityWeightCalculator,
             # Compatibility-aware weight calculators
             'similarity_x_tv_compatibility': CompatibilityWeightCalculator,
             'similarity_x_cka_compatibility': CompatibilityWeightCalculator,
@@ -610,6 +621,11 @@ class TiesStrategy(MergingStrategy):
         return {
             "param_value_mask_rate": param_value_mask_rate,
             "scaling_coefficient": scaling_coefficient,
+            # DARE preprocessing options
+            "dare_enabled": config.dare_enabled,
+            "dare_drop_rate": config.dare_drop_rate,
+            "dare_rescale": config.dare_rescale,
+            "dare_seed": config.dare_seed,
         }
 
 
@@ -688,6 +704,11 @@ class TaskArithmeticStrategy(MergingStrategy):
         return {
             "scaling_coefficient": scaling_coefficient,
             "param_value_mask_rate": param_value_mask_rate,
+            # DARE preprocessing options
+            "dare_enabled": config.dare_enabled,
+            "dare_drop_rate": config.dare_drop_rate,
+            "dare_rescale": config.dare_rescale,
+            "dare_seed": config.dare_seed,
         }
 
 
@@ -844,6 +865,53 @@ class DirectionalConsensusStrategy(MergingStrategy):
         }
 
 
+class AdaMergingStrategy(MergingStrategy):
+    """AdaMerging strategy that learns coefficients via entropy minimization on target data."""
+
+    def get_merger(self, mode: str):
+        return merging_methods_dict["adamerging"]()
+
+    def get_method_params(
+        self,
+        config: MergeConfig,
+        models_and_weights: Dict[str, ModelInfo],
+        base_model_info: ModelInfo,
+    ) -> Dict[str, Any]:
+        """
+        Build AdaMerging method parameters.
+
+        AdaMerging learns optimal coefficients by minimizing entropy of predictions
+        on unlabeled target language data.
+        """
+        # Get initial coefficients from similarity weights
+        src_weights = [info.weight for info in models_and_weights.values()]
+
+        # Normalize to sum to 1
+        total = sum(src_weights)
+        if total > 0:
+            initial_coefficients = [w / total for w in src_weights]
+        else:
+            initial_coefficients = [1.0 / len(src_weights)] * len(src_weights)
+
+        print(f"\n🧠 AdaMerging Strategy: Learning coefficients via entropy minimization")
+        print(f"   Mode: {config.adamerging_mode}")
+        print(f"   Initial coefficients: {[f'{c:.3f}' for c in initial_coefficients]}")
+        print(f"   Iterations: {config.adamerging_iterations}")
+        print(f"   Learning rate: {config.adamerging_lr}")
+        print(f"   Use TIES preprocessing: {config.adamerging_use_ties}")
+
+        return {
+            "adamerging_mode": config.adamerging_mode,
+            "initial_coefficients": initial_coefficients,
+            "learning_rate": config.adamerging_lr,
+            "num_iterations": config.adamerging_iterations,
+            "use_ties": config.adamerging_use_ties,
+            "param_value_mask_rate": 0.8,  # For TIES preprocessing if enabled
+            # DataLoader will be set by the caller since it needs target locale data
+            "target_dataloader": None,  # Must be provided externally
+        }
+
+
 class MergingStrategyFactory:
     @staticmethod
     def create(mode: str) -> MergingStrategy:
@@ -861,6 +929,8 @@ class MergingStrategyFactory:
             return RegMeanStrategy()
         if mode == "directional_consensus":
             return DirectionalConsensusStrategy()
+        if mode == "adamerging":
+            return AdaMergingStrategy()
         return LinearStrategy()
 
 
@@ -887,6 +957,11 @@ class ModelMerger:
         # Set up method parameters via strategy
         method_params = self.strategy.get_method_params(self.config, models_and_weights, base_model_info)
 
+        # For AdaMerging, create target dataloader for entropy optimization
+        if self.config.mode == "adamerging":
+            target_dataloader = self._create_adamerging_dataloader()
+            method_params["target_dataloader"] = target_dataloader
+
         # Check if this is incremental SLERP
         if self.config.mode == "slerp" and method_params.get("incremental_slerp", False):
             return self._perform_incremental_slerp(models_and_weights, base_model_info, merger, method_params)
@@ -894,26 +969,162 @@ class ModelMerger:
             # Standard merging for all other methods
             return self._perform_standard_merge(models_and_weights, base_model_info, merger, method_params)
 
+    def _create_adamerging_dataloader(self):
+        """Create DataLoader for AdaMerging entropy optimization using target language data."""
+        from datasets import load_dataset
+        from transformers import AutoTokenizer
+        import torch
+        from torch.utils.data import DataLoader
+
+        print(f"\n📦 Creating DataLoader for AdaMerging (target: {self.config.target_lang})")
+
+        # Load MASSIVE dataset for target locale
+        dataset = load_dataset(
+            "AmazonScience/massive",
+            self.config.target_lang,
+            split="test",
+            trust_remote_code=True
+        )
+
+        # Load tokenizer
+        tokenizer = AutoTokenizer.from_pretrained(self.config.base_model)
+
+        # Tokenize dataset
+        def tokenize_function(examples):
+            return tokenizer(
+                examples["utt"],
+                padding="max_length",
+                truncation=True,
+                max_length=self.config.max_seq_length,
+                return_tensors="pt"
+            )
+
+        # Process in batches
+        tokenized = dataset.map(
+            tokenize_function,
+            batched=True,
+            remove_columns=dataset.column_names
+        )
+        tokenized.set_format("torch")
+
+        # Create DataLoader (small batch for memory efficiency during optimization)
+        dataloader = DataLoader(
+            tokenized,
+            batch_size=self.config.batch_size,
+            shuffle=True
+        )
+
+        print(f"   Dataset size: {len(dataset)} examples")
+        print(f"   Batch size: {self.config.batch_size}")
+        print(f"   Batches: {len(dataloader)}")
+
+        return dataloader
+
+    def _create_pretrained_base_for_task_vectors(self, reference_model_path: str) -> str:
+        """
+        Create a pretrained base model with classifier head matching the fine-tuned models.
+
+        This is needed for proper task vector computation in IncTar mode, where we need:
+            task_vector = finetuned_model - pretrained_base
+
+        The pretrained xlm-roberta-base has a 2-class head, but our fine-tuned models have
+        60 classes (MASSIVE intents). This method creates a temporary model with:
+        - Pretrained encoder weights from xlm-roberta-base
+        - Randomly initialized classifier head with correct num_labels
+
+        Args:
+            reference_model_path: Path to a fine-tuned model to get num_labels from
+
+        Returns:
+            Path to the temporary pretrained base model
+        """
+        import os
+        import tempfile
+        from transformers import AutoModelForSequenceClassification, AutoConfig, AutoTokenizer
+
+        # Get num_labels from reference model
+        ref_config = AutoConfig.from_pretrained(reference_model_path)
+        num_labels = ref_config.num_labels
+
+        print(f"\n🔧 Creating pretrained base with {num_labels}-class classifier head")
+
+        # Load pretrained model with correct num_labels (classifier will be randomly initialized)
+        model = AutoModelForSequenceClassification.from_pretrained(
+            self.config.base_model,
+            num_labels=num_labels,
+            ignore_mismatched_sizes=True  # Allow loading despite classifier size mismatch
+        )
+
+        # Save to temporary directory
+        temp_dir = tempfile.mkdtemp(prefix="pretrained_base_")
+        model.save_pretrained(temp_dir)
+
+        # Also save tokenizer
+        tokenizer = AutoTokenizer.from_pretrained(self.config.base_model)
+        tokenizer.save_pretrained(temp_dir)
+
+        print(f"   Saved to: {temp_dir}")
+        return temp_dir
+
     def _perform_standard_merge(self, models_and_weights: Dict[str, ModelInfo], base_model_info: ModelInfo,
                                merger, method_params: Dict[str, Any]) -> Tuple[Any, Any]:
         """Perform standard model merging (non-incremental)."""
-        # Prepare model paths and weights
-        models_to_merge_paths = list(models_and_weights.keys())
-        weight_values = [info.weight for info in models_and_weights.values()]
+        # For task-vector methods (ties, task_arithmetic, adamerging), we need a proper
+        # pretrained base model. Task vectors should be computed as:
+        # - task_vector(model_i) = model_i - pretrained_base
+        # This is especially important for IncTar mode where the target model is included.
+        TASK_VECTOR_METHODS = {'ties', 'task_arithmetic', 'adamerging'}
 
-        print(f"Base model: {base_model_info.model_name}")
-        print(f"Models to merge: {models_to_merge_paths}")
-        print(f"Weights: {weight_values}")
-        if self._exclude_patterns:
-            print(f"Exclude patterns: {self._exclude_patterns}")
+        if self.config.mode in TASK_VECTOR_METHODS:
+            # Create pretrained base with correct classifier head (60 classes for MASSIVE)
+            # Use first available model as reference for num_labels
+            reference_model = base_model_info.model_name
+            pretrained_base_path = self._create_pretrained_base_for_task_vectors(reference_model)
 
-        # Perform the merge
-        result = merger.merge(
-            base_model=base_model_info.model_name,
-            models_to_merge=models_to_merge_paths,
-            method_params=method_params,
-            exclude_param_names_regex=self._exclude_patterns,
-        )
+            # ALL models (including base_model_info) are now models to merge
+            # Task vectors will be computed relative to the pretrained base
+            all_source_models = [base_model_info.model_name] + list(models_and_weights.keys())
+            all_weights = [base_model_info.weight] + [info.weight for info in models_and_weights.values()]
+
+            print(f"Task-vector method: Using pretrained base ({self.config.base_model}) for task vectors")
+            print(f"All models to merge: {all_source_models}")
+            print(f"Weights: {[f'{w:.4f}' for w in all_weights]}")
+            if self._exclude_patterns:
+                print(f"Exclude patterns: {self._exclude_patterns}")
+
+            # Update method_params with all model weights for AdaMerging
+            if self.config.mode == "adamerging":
+                total = sum(all_weights)
+                method_params["initial_coefficients"] = [w / total for w in all_weights] if total > 0 else None
+
+            # For TIES/task_arithmetic/AdaMerging: pretrained base is true base, all models are merged
+            result = merger.merge(
+                base_model=pretrained_base_path,
+                models_to_merge=all_source_models,
+                method_params=method_params,
+                exclude_param_names_regex=self._exclude_patterns,
+            )
+
+            # Clean up temporary pretrained base
+            import shutil
+            shutil.rmtree(pretrained_base_path, ignore_errors=True)
+        else:
+            # Standard behavior for non-task-vector methods
+            models_to_merge_paths = list(models_and_weights.keys())
+            weight_values = [info.weight for info in models_and_weights.values()]
+
+            print(f"Base model: {base_model_info.model_name}")
+            print(f"Models to merge: {models_to_merge_paths}")
+            print(f"Weights: {weight_values}")
+            if self._exclude_patterns:
+                print(f"Exclude patterns: {self._exclude_patterns}")
+
+            result = merger.merge(
+                base_model=base_model_info.model_name,
+                models_to_merge=models_to_merge_paths,
+                method_params=method_params,
+                exclude_param_names_regex=self._exclude_patterns,
+            )
 
         print("Merge successful!")
         return result['merged_model'], result['base_tokenizer']
@@ -1180,6 +1391,16 @@ def create_config_from_args(args) -> MergeConfig:
         batch_size=args.batch_size,
         max_seq_length=args.max_seq_length,
         base_model_dir=args.base_model_dir,
+        # DARE options
+        dare_enabled=args.dare_drop_rate > 0.0,
+        dare_drop_rate=args.dare_drop_rate,
+        dare_rescale=not args.dare_no_rescale,
+        dare_seed=args.dare_seed,
+        # AdaMerging options
+        adamerging_mode=args.adamerging_mode,
+        adamerging_iterations=args.adamerging_iterations,
+        adamerging_lr=args.adamerging_lr,
+        adamerging_use_ties=args.adamerging_use_ties,
     )
 
 
@@ -1300,7 +1521,7 @@ def main():
         type=str,
         default=None,  # Changed to allow config override
         choices=['uriel', 'manual', 'similarity', 'average', 'fisher', 'iterative',
-                'ties', 'task_arithmetic', 'slerp', 'regmean'],
+                'ties', 'task_arithmetic', 'slerp', 'regmean', 'adamerging'],
         action=TrackProvidedArgsAction,
         help="The merging mode to use."
     )
@@ -1442,6 +1663,56 @@ def main():
         default=128,
         action=TrackProvidedArgsAction,
         help="Max sequence length for tokenization in Fisher computation"
+    )
+    # DARE (Drop And REscale) preprocessing options
+    parser.add_argument(
+        "--dare-drop-rate",
+        type=float,
+        default=0.0,
+        action=TrackProvidedArgsAction,
+        help="DARE drop rate (0.0-1.0). Set >0 to enable DARE preprocessing. Paper recommends 0.9"
+    )
+    parser.add_argument(
+        "--dare-no-rescale",
+        action="store_true",
+        default=False,
+        help="Disable DARE rescaling (not recommended, but available for ablation)"
+    )
+    parser.add_argument(
+        "--dare-seed",
+        type=int,
+        default=None,
+        action=TrackProvidedArgsAction,
+        help="Random seed for DARE preprocessing (for reproducibility)"
+    )
+    # AdaMerging options (entropy-based coefficient learning)
+    parser.add_argument(
+        "--adamerging-mode",
+        type=str,
+        default="task_wise",
+        choices=["task_wise", "layer_wise"],
+        action=TrackProvidedArgsAction,
+        help="AdaMerging mode: task_wise (one coeff per model) or layer_wise (one coeff per layer per model)"
+    )
+    parser.add_argument(
+        "--adamerging-iterations",
+        type=int,
+        default=100,
+        action=TrackProvidedArgsAction,
+        help="Number of optimization iterations for AdaMerging"
+    )
+    parser.add_argument(
+        "--adamerging-lr",
+        type=float,
+        default=1e-3,
+        action=TrackProvidedArgsAction,
+        help="Learning rate for AdaMerging coefficient optimization"
+    )
+    parser.add_argument(
+        "--adamerging-use-ties",
+        action="store_true",
+        default=False,
+        help="Apply TIES preprocessing before AdaMerging (AdaMerging++ variant)"
     )
 
     args = parser.parse_args()
