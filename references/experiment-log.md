@@ -456,4 +456,158 @@ Yet they behave **oppositely**! This confirms:
 
 ---
 
+## 2026-01-20 – Retrospective: Merging Effect Prediction (Idea 4)
+
+**Type:** Retrospective
+**General description:** Developed and validated a predictor for synergy vs interference in model merging, achieving 78% accuracy (7/9 correct) but revealing important failure modes.
+
+### Research Question
+
+Can we predict whether cross-lingual model merging will result in SYNERGY or INTERFERENCE before running the expensive merge operation?
+
+### What we tried
+
+1. **Feature Engineering** (`analysis/merging_effect_analysis.py`)
+   - Computed source diversity: `1 - mean(source_pairwise_similarity)`
+   - Computed source accuracy variance: `std(source_accuracies_on_target)`
+   - Source-target similarity features
+
+2. **Predictor Formula** (`analysis/merging_effect_predictor.py`)
+   - `synergy_score = diversity_score / (1 + source_acc_std × 10)`
+   - Higher score → more likely to achieve synergy
+   - Ranked all 49 locales by synergy_score
+
+3. **Validation Experiment** (`configs/ablations/synergy_prediction_validation.yaml`)
+   - 6 targets: 3 high-synergy (az-AZ, tr-TR, af-ZA), 3 low-synergy (am-ET, tl-PH, id-ID)
+   - Method: similarity with REAL/5-lang
+
+### Key findings
+
+| Target | Rank | Synergy Score | Predicted | Merged Acc | Expected | Effect | Actual | Match |
+|--------|------|---------------|-----------|------------|----------|--------|--------|-------|
+| az-AZ | 1 | 0.1514 | SYNERGY | 0.6627 | 0.6371 | +2.57% | SYNERGY | ✓ |
+| tr-TR | 2 | 0.1255 | SYNERGY | 0.7290 | 0.6883 | +4.07% | SYNERGY | ✓ |
+| af-ZA | 4 | 0.1192 | SYNERGY | 0.5740 | 0.6018 | -2.78% | INTERFERENCE | ✗ |
+| am-ET | 47 | 0.0600 | INTERFERENCE | 0.4361 | 0.4658 | -2.97% | INTERFERENCE | ✓ |
+| tl-PH | 48 | 0.0417 | INTERFERENCE | 0.5921 | 0.5272 | +6.49% | SYNERGY | ✗ |
+| id-ID | 49 | 0.0375 | INTERFERENCE | 0.7091 | 0.7386 | -2.95% | INTERFERENCE | ✓ |
+
+**Combined accuracy**: 7/9 (78%) including prior results (sw-KE, cy-GB, vi-VN)
+
+### What worked
+
+| Pattern | Examples | Confidence |
+|---------|----------|------------|
+| High diversity + Low variance → SYNERGY | az-AZ (+2.57%), tr-TR (+4.07%) | High |
+| Low diversity + High variance → INTERFERENCE | am-ET (-2.97%), id-ID (-2.95%) | High |
+
+### What failed
+
+| Failure | Prediction | Actual | Reason |
+|---------|------------|--------|--------|
+| af-ZA | SYNERGY | INTERFERENCE (-2.78%) | High diversity but weak sources (60-64% vs target 85%) |
+| tl-PH | INTERFERENCE | SYNERGY (+6.49%) | Low diversity but regional coherence (all SE Asian sources) |
+
+### Insights
+
+1. **Source quality threshold**: Diversity alone doesn't help when sources are much weaker than target. Need `source_quality > 70%` of target.
+
+2. **Regional coherence**: Sources from same linguistic region (e.g., all Southeast Asian) may synergize despite low diversity. tl-PH sources (vi-VN, km-KH, jv-ID, th-TH, ms-MY) are geographically clustered.
+
+3. **Feature correlations are weak**: On 6 samples, diversity has +0.15 correlation with actual effect, source_acc_std has -0.18. Need more data.
+
+### Outcome
+
+- **Partial success**: 78% accuracy is better than random (50%) but not production-ready
+- **Updated skill**: `merging-when-constructive` with Merging Effect Prediction section
+- **Files created**:
+  - `analysis/merging_effect_analysis.py` - Feature computation
+  - `analysis/merging_effect_predictor.py` - All-locale predictions
+  - `analysis/merging_effect_predictions.csv` - Full predictions (49 locales)
+  - `RESEARCH_SUMMARY.md` - Research documentation
+
+### Practical recommendations
+
+| Condition | Recommendation | Confidence |
+|-----------|----------------|------------|
+| synergy_score > 0.12 AND source_quality > 70% | Merge | High |
+| synergy_score < 0.06 AND sources NOT regionally coherent | Don't merge | High |
+| Sources from same linguistic region | Test empirically | Low |
+| All other cases | Test empirically | Low |
+
+### Open questions
+
+1. How to quantify "regional coherence" as a predictive feature?
+2. What is the optimal source quality threshold?
+3. Would expanding validation to 15+ targets improve correlations?
+
+---
+
+## 2026-01-21 – Retrospective: Expanded Merging Effect Prediction Validation (NEGATIVE RESULT)
+
+**Type:** Retrospective
+**General description:** Expanded validation to 21 targets disproved the regional coherence hypothesis and showed source-level features cannot reliably predict Merging Effect.
+
+### What we tried
+
+1. **Enhanced Predictor (V2/V3)**
+   - Added source_quality feature: `source_acc_mean / target_self_perf`
+   - Added regional_coherence feature: `max(region_counts) / num_sources`
+   - V3 formula: `synergy_score_v1 + coherence_bonus`
+
+2. **Expanded Validation (12 new targets)**
+   - High coherence: ms-MY, hi-IN, km-KH, th-TH
+   - Middle score: ko-KR, fa-IR, lv-LV, el-GR
+   - Low score: my-MM, ka-GE, bn-BD, ml-IN
+
+3. **Regional Coherence Analysis**
+   - Analyzed tl-PH phenomenon (100% SE Asian sources → +6.49% synergy)
+   - Identified 7 high-synergy-potential regional clusters
+   - Computed within-region transfer and similarity
+
+### Key findings (NEGATIVE)
+
+| Predictor | Accuracy | Notes |
+|-----------|----------|-------|
+| V1 (diversity) | 47.6% (10/21) | Worse than random |
+| V3 (+ coherence) | 61.9% (13/21) | Still unreliable |
+
+**Regional coherence hypothesis DISPROVED:**
+
+| Target | Coherence | Effect | Outcome |
+|--------|-----------|--------|---------|
+| hi-IN | 1.00 | **-7.93%** | INTERFERENCE (worst!) |
+| vi-VN | 1.00 | -0.27% | INTERFERENCE |
+| id-ID | 1.00 | -2.95% | INTERFERENCE |
+
+**Feature correlations with actual Merging Effect:**
+- diversity: +0.28 (weak positive)
+- coherence: -0.06 (slightly negative!)
+- quality: -0.13 (negative)
+- acc_std: +0.19 (opposite to hypothesis)
+
+### What failed
+
+- **Regional coherence bonus**: Caused false positives (hi-IN, vi-VN, id-ID)
+- **All hypotheses**: None of diversity, coherence, quality, variance reliably predict outcome
+- **Pattern separation**: SYNERGY and INTERFERENCE targets have nearly identical feature profiles
+
+### Outcome
+
+- **Negative result documented**: Source-level features cannot predict Merging Effect
+- **Skill updated**: `merging-when-constructive` with full 21-target results
+- **Recommendation changed**: "DO NOT rely on any predictor; run pilot experiments instead"
+- **Open questions closed**: Questions 3, 4, 5 answered with negative findings
+
+### Files created
+
+| File | Purpose |
+|------|---------|
+| `analysis/merging_effect_predictor_v2.py` | Enhanced predictor with V1-V4 formulas |
+| `analysis/regional_coherence_analysis.py` | tl-PH deep dive and cluster analysis |
+| `configs/ablations/expanded_predictor_validation.yaml` | 12-target validation config |
+| `experiments_expanded_validation.db` | Validation experiment results |
+
+---
+
 <!-- New entries go above this line -->

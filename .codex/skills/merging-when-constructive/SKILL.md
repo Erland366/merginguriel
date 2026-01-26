@@ -292,8 +292,122 @@ Before committing to merging:
 
 1. ~~Why does sw-KE benefit while cy-GB doesn't?~~ → **ANSWERED**: Merging Effect (synergy vs interference)
 2. What makes sw-KE sources combine well? (complementary vs conflicting features)
-3. Can we predict Merging Effect without running the full merge?
-4. Are there linguistic features that predict positive Merging Effect?
+3. ~~Can we predict Merging Effect without running the full merge?~~ → **ANSWERED (NEGATIVE)**: No reliable predictor found. 21-target validation shows 62% accuracy at best—source-level features don't capture merging dynamics.
+4. ~~Are there linguistic features that predict positive Merging Effect?~~ → **ANSWERED (NEGATIVE)**: Tested diversity, coherence, quality, variance. None reliably predict. hi-IN (100% coherence) has -7.93% effect.
+5. ~~How to quantify "regional coherence" as a predictive feature?~~ → **ANSWERED (NEGATIVE)**: Regional coherence does NOT predict synergy. r=-0.06 correlation.
+
+---
+
+## Merging Effect Prediction (Jan 20-21, 2026)
+
+### Research Question
+
+Can we predict synergy vs interference BEFORE running the expensive merge?
+
+### The Predictor
+
+**Formula V1** (diversity-based):
+```
+synergy_score = diversity_score / (1 + source_acc_std × 10)
+
+where:
+  diversity_score = 1 - mean(source_pairwise_similarity)
+  source_acc_std = std(source_accuracies_on_target)
+```
+
+**Implementation**: `analysis/merging_effect_predictor.py`, `analysis/merging_effect_predictor_v2.py`
+
+### Validation Results (21 targets) - NEGATIVE RESULT
+
+| Predictor | Accuracy | Notes |
+|-----------|----------|-------|
+| V1 (diversity-based) | **47.6%** (10/21) | Worse than random! |
+| V3 (+ coherence bonus) | **61.9%** (13/21) | Still unreliable |
+
+### Full Results Table (sorted by effect)
+
+| Target | Effect | Outcome | Coherence | Quality | Diversity | Match |
+|--------|--------|---------|-----------|---------|-----------|-------|
+| tl-PH | +6.49% | SYNERGY | 1.00 | 0.63 | 0.058 | ✓ |
+| tr-TR | +4.07% | SYNERGY | 0.40 | 0.81 | 0.145 | ✓ |
+| th-TH | +2.72% | SYNERGY | 0.80 | 0.74 | 0.149 | ✓ |
+| az-AZ | +2.57% | SYNERGY | 0.40 | 0.75 | 0.173 | ✓ |
+| fa-IR | +2.35% | SYNERGY | 0.40 | 0.79 | 0.183 | ✓ |
+| sw-KE | +2.30% | SYNERGY | 0.80 | 0.47 | 0.140 | ✓ |
+| el-GR | +2.06% | SYNERGY | 0.20 | 0.75 | 0.145 | ✗ |
+| ms-MY | +1.88% | SYNERGY | 1.00 | 0.75 | 0.102 | ✓ |
+| km-KH | +0.72% | SYNERGY | 0.80 | 0.64 | 0.154 | ✓ |
+| my-MM | +0.29% | SYNERGY | 0.60 | 0.72 | 0.081 | ✗ |
+| ka-GE | -0.11% | INTERF | 0.40 | 0.62 | 0.136 | ✓ |
+| vi-VN | -0.27% | INTERF | 1.00 | 0.79 | 0.110 | ✗ |
+| cy-GB | -1.58% | INTERF | 0.60 | 0.49 | 0.160 | ✓ |
+| lv-LV | -1.84% | INTERF | 0.40 | 0.72 | 0.126 | ✗ |
+| ko-KR | -1.86% | INTERF | 0.40 | 0.79 | 0.144 | ✗ |
+| af-ZA | -2.78% | INTERF | 0.40 | 0.71 | 0.158 | ✗ |
+| id-ID | -2.95% | INTERF | 1.00 | 0.86 | 0.058 | ✗ |
+| am-ET | -2.97% | INTERF | 0.60 | 0.57 | 0.081 | ✓ |
+| bn-BD | -3.07% | INTERF | 0.60 | 0.69 | 0.112 | ✓ |
+| ml-IN | -4.60% | INTERF | 0.60 | 0.75 | 0.112 | ✓ |
+| hi-IN | -7.93% | INTERF | 1.00 | 0.79 | 0.069 | ✗ |
+
+### Critical Finding: Regional Coherence Hypothesis DISPROVED
+
+**High coherence does NOT guarantee synergy:**
+
+| Target | Coherence | Effect | Outcome |
+|--------|-----------|--------|---------|
+| hi-IN | 1.00 | **-7.93%** | INTERFERENCE (worst!) |
+| vi-VN | 1.00 | -0.27% | INTERFERENCE |
+| id-ID | 1.00 | -2.95% | INTERFERENCE |
+| tl-PH | 1.00 | +6.49% | SYNERGY |
+| ms-MY | 1.00 | +1.88% | SYNERGY |
+
+### Feature Correlations with Actual Effect
+
+| Feature | Correlation | Interpretation |
+|---------|-------------|----------------|
+| diversity | **+0.28** | Best predictor, but weak |
+| acc_std | +0.19 | Contrary to hypothesis |
+| coherence | **-0.06** | Slightly NEGATIVE! |
+| quality | -0.13 | Contrary to hypothesis |
+
+### Pattern Analysis
+
+SYNERGY vs INTERFERENCE targets have **nearly identical** feature profiles:
+
+| Metric | SYNERGY (n=10) | INTERFERENCE (n=11) |
+|--------|----------------|---------------------|
+| Diversity | 0.133 | 0.115 |
+| Acc Std | 0.036 | 0.035 |
+| Coherence | 0.64 | 0.64 |
+| Quality | 0.70 | 0.71 |
+
+### Conclusion: Prediction is Fundamentally Difficult
+
+**Key insight**: Source-level features (diversity, coherence, quality, variance) do NOT reliably predict Merging Effect. The interaction between source models during merging is more complex than these proxies can capture.
+
+### Updated Recommendation
+
+```
+DO NOT rely on any predictor for merging decisions.
+
+The only reliable approach:
+1. Run a pilot merge experiment
+2. Compute Merging Effect = merged_acc - avg(source_accs)
+3. If effect > 0, proceed with merge
+4. If effect < 0, use best single source instead
+```
+
+### What We Learned
+
+| Hypothesis | Status | Evidence |
+|------------|--------|----------|
+| High diversity → synergy | **WEAK** | r=+0.28, best but not reliable |
+| High coherence → synergy | **DISPROVED** | r=-0.06, hi-IN worst case |
+| Low acc variance → synergy | **DISPROVED** | r=+0.19, opposite direction |
+| High source quality → synergy | **DISPROVED** | r=-0.13, opposite direction |
+
+---
 
 ## References
 

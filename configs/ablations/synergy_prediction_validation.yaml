@@ -1,0 +1,41 @@
+# Ablation: Validate Synergy Prediction Model
+#
+# Purpose: Test if our synergy_score predictor correctly identifies targets that
+#          benefit from merging (high score) vs those that suffer interference (low score)
+#
+# Predictor formula: synergy_score = diversity_score / (1 + source_acc_std * 10)
+# Key feature: diversity_score has +0.83 correlation with actual Merging Effect
+#
+# Expected runs: 6 locales × 1 method × 1 similarity × 1 num_languages = 6 runs
+
+ablation:
+  name: "synergy_prediction_validation"
+  description: "Validate synergy predictor on high/low scored targets"
+
+  fixed:
+    method: "similarity"
+    similarity_type: "REAL"
+    num_languages: 5
+    include_target: false
+    model_family: "xlm-roberta-base"
+    models_root: "haryos_model"
+    merged_models_dir: "merged_models"
+
+  sweep:
+    locales:
+      # HIGH synergy predictions (should show positive Merging Effect)
+      - "az-AZ"   # Rank 1, synergy_score=0.1514
+      - "tr-TR"   # Rank 2, synergy_score=0.1255
+      - "af-ZA"   # Rank 4, synergy_score=0.1192
+      # LOW synergy predictions (should show negative Merging Effect)
+      - "am-ET"   # Rank 47, synergy_score=0.0600
+      - "tl-PH"   # Rank 48, synergy_score=0.0417
+      - "id-ID"   # Rank 49, synergy_score=0.0375
+
+  db_path: "experiments_synergy_validation.db"
+  resume: true
+
+# Validation success criteria:
+# - High-synergy targets (az-AZ, tr-TR, af-ZA): Merging Effect > 0%
+# - Low-synergy targets (am-ET, tl-PH, id-ID): Merging Effect < 0%
+# - Predictor validated if 5/6 predictions match
