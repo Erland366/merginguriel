@@ -1,10 +1,22 @@
-# Task Vector Base Model Selection
-
-**Type:** Result skill (critical fix)
-**Created:** 2026-01-20
-**Domain:** Cross-lingual model merging
-
 ---
+name: task-vector-base-model
+description: >
+  Select the correct pretrained base model for task-vector merging methods.
+  Use when: running TIES/task_arithmetic/AdaMerging with IncTar mode.
+metadata:
+  short-description: "Task vectors must be computed vs pretrained base (esp. IncTar)"
+  tags:
+    - cross-lingual
+    - model-merging
+    - task-vector
+    - base-model
+    - inctar
+  domain: research
+  created: 2026-01-20
+  author: MergingUriel
+---
+
+# Task Vector Base Model Selection
 
 ## Description
 

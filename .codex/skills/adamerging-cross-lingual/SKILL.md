@@ -1,10 +1,22 @@
-# AdaMerging for Cross-Lingual Model Merging
-
-**Type:** Result skill (negative + conditional positive)
-**Created:** 2026-01-20
-**Domain:** Cross-lingual model merging
-
 ---
+name: adamerging-cross-lingual
+description: >
+  Guidance for when and how to use AdaMerging for cross-lingual model merging.
+  Use when: TIES underperforms (ExcTar) or to preserve/enhance target (IncTar).
+metadata:
+  short-description: "Use AdaMerging selectively; GPU + correct base model are critical"
+  tags:
+    - cross-lingual
+    - model-merging
+    - adamerging
+    - task-vector
+    - entropy-minimization
+  domain: research
+  created: 2026-01-20
+  author: MergingUriel
+---
+
+# AdaMerging for Cross-Lingual Model Merging
 
 ## Description
 
