@@ -672,4 +672,55 @@ Can we predict whether cross-lingual model merging will result in SYNERGY or INT
 
 ---
 
+## 2026-01-20 – Retrospective: Directional Consensus Merging
+
+**Type:** Retrospective
+**General description:** Implemented and validated directional consensus merging—a variance reduction technique that projects task vectors onto per-layer consensus direction. Partially supports hypothesis: helps interference targets but hurts synergy targets.
+
+### What we tried
+
+1. **New method implementation**: `directional_consensus`
+   - Projects task vectors onto normalized sum direction per-layer
+   - Algorithm: d = normalize(Σ τ_i), then τ_aligned = (τ · d) × d
+   - Weighted aggregation with REAL similarity weights
+
+2. **Validation ablation**: 8 experiments
+   - Targets: sw-KE (synergy), cy-GB (interference)
+   - Methods: directional_consensus, similarity, task_arithmetic, ties
+
+### Key findings
+
+| Target | Effect Type | directional_consensus | similarity | Δ |
+|--------|-------------|----------------------|------------|---|
+| cy-GB | INTERFERENCE | **42.60%** | 41.66% | **+0.94%** |
+| sw-KE | SYNERGY | 46.87% | **48.32%** | -1.45% |
+
+**Partial hypothesis support:**
+- Direction alignment HELPS interference (cy-GB: +0.94%)
+- Direction alignment HURTS synergy (sw-KE: -1.45%)
+
+### What failed
+
+- **sw-KE performance**: directional_consensus underperforms similarity
+- **Projection too aggressive**: Removes beneficial orthogonal components for synergy cases
+
+### Outcome
+
+- **Method implemented**: `directional_consensus` available in pipeline
+- **Skill updated**: `merging-when-constructive` with method-specific recommendations
+- **New insight**: Directional consensus = variance reduction; helps interference, hurts synergy
+- **Database**: `experiments_directional_consensus.db`
+
+### Files created/modified
+
+| File | Action |
+|------|--------|
+| `submodules/auto_merge_llm/.../methods/directional_consensus.py` | Created |
+| `submodules/auto_merge_llm/.../methods/__init__.py` | Modified |
+| `merginguriel/run_merging_pipeline_refactored.py` | Modified |
+| `configs/ablations/directional_consensus_validation.yaml` | Created |
+| `.codex/skills/merging-when-constructive/SKILL.md` | Updated |
+
+---
+
 <!-- New entries go above this line -->
