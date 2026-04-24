@@ -1,0 +1,1907 @@
+"""
+Refactored Model Merging Pipeline (moved under merginguriel/)
+
+A composable and extensible pipeline for merging language models using various strategies.
+This version uses classes to make the code more modular and easier to extend.
+"""
+
+import os
+import sys
+from datetime import datetime
+import subprocess
+import warnings
+import numpy as np
+import argparse
+import pandas as pd
+from abc import ABC, abstractmethod
+from typing import Dict, List, Optional, Tuple, Any
+from dataclasses import dataclass
+from pathlib import Path
+
+# Resolve repository root (one level up when this file is inside merginguriel/)
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
+
+DEFAULT_MODEL_DIRS = {
+    "xlm-roberta-base": Path(project_root) / "haryos_model",
+    "xlm-roberta-large": Path(project_root) / "haryos_model_large",
+}
+
+submodule_path = os.path.join(project_root, 'submodules/auto_merge_llm')
+if submodule_path not in sys.path:
+    sys.path.insert(0, submodule_path)
+
+from merginguriel.utils import get_similarity_scores
+from merginguriel.similarity_utils import load_and_process_similarity
+from merginguriel.compatibility import (
+    load_compatibility_matrix,
+    get_source_compatibility_scores,
+    apply_compatibility_weights,
+)
+from auto_merge_llm.methods import merging_methods_dict
+
+
+@dataclass
+class ModelInfo:
+    """Data class to hold model information."""
+    model_name: str
+    subfolder: str
+    language: str
+    locale: str
+    weight: float
+
+
+@dataclass
+class MergeConfig:
+    """Configuration for model merging."""
+    mode: str
+    target_lang: str = "sq-AL"
+    subfolder_pattern: str = ""  # No longer needed with consolidated model structure
+    num_languages: int = 5
+    dataset_name: Optional[str] = None
+    dataset_split: str = "train"
+    text_column: str = "text"
+    label_column: str = "label"
+    num_fisher_examples: int = 100
+    base_model: str = "xlm-roberta-base"
+    # Similarity matrix options
+    similarity_source: str = "sparse"  # 'sparse' (precomputed) or 'dense' (on-the-fly)
+    similarity_type: str = "URIEL"  # 'URIEL' (linguistic features) or 'REAL' (empirical evaluation results)
+    include_target: bool = False  # Include target language model in merging (IT mode)
+    top_k: int = 20
+    sinkhorn_iters: int = 20
+    # Fisher/dataset options
+    fisher_data_mode: str = "target"  # {target|sources|both}
+    preweight: str = "equal"  # {equal|uriel}
+    batch_size: int = 16
+    max_seq_length: int = 128
+    base_model_dir: str = ""
+    # Method-specific parameters
+    alpha: float = 1.0  # Soft projection strength for directional_consensus (0=no projection, 1=full)
+    # DARE options (Drop And REscale preprocessing)
+    dare_enabled: bool = False  # Enable DARE preprocessing
+    dare_drop_rate: float = 0.9  # Probability of dropping delta params (paper recommends 0.9)
+    dare_rescale: bool = True  # Whether to rescale remaining params by 1/(1-p)
+    dare_seed: Optional[int] = None  # Random seed for reproducibility
+    # AdaMerging options (entropy-based coefficient learning)
+    adamerging_mode: str = "task_wise"  # 'task_wise' or 'layer_wise'
+    adamerging_iterations: int = 100  # Number of optimization iterations
+    adamerging_lr: float = 1e-3  # Learning rate for coefficient optimization
+    adamerging_use_ties: bool = False  # Apply TIES preprocessing before AdaMerging
+    statsmerging_mode: str = "task_wise"
+    statsmerging_svd_rank: int = 3
+    statsmerging_hidden_dim: int = 64
+    statsmerging_num_layers: int = 2
+    statsmerging_lr: float = 1e-3
+    statsmerging_epochs: int = 100
+    statsmerging_batch_size: int = 16
+    statsmerging_num_examples: Optional[int] = 1000
+    statsmerging_normalize: str = "softmax"
+    statsmerging_dataset_split: str = "validation"
+    statsmerging_seed: int = 42
+
+
+class WeightCalculator(ABC):
+    """Abstract base class for weight calculation strategies."""
+
+    @abstractmethod
+    def calculate_weights(self, config: MergeConfig) -> Tuple[Dict[str, ModelInfo], ModelInfo]:
+        """
+        Calculate weights for models to be merged.
+
+        Returns:
+            Tuple of (models_and_weights, base_model_info)
+        """
+        pass
+
+
+class UrielWeightCalculator(WeightCalculator):
+    """Weight calculator using URIEL language similarity."""
+
+    def __init__(self):
+        self.models_to_merge = {
+            "ind": "lur601/xlm_roberta-base-finetuned-paxn-id",
+            "jav": "w11wo/xlm-roberta-base-finetuned-ud-javanese",
+        }
+        self.source_language = "eng"
+
+    def calculate_weights(self, config: MergeConfig) -> Tuple[Dict[str, ModelInfo], ModelInfo]:
+        print("\n--- Calculating URIEL Similarity Weights ---")
+
+        df_path = os.path.join(project_root, "big_assets/language_similarity_matrix.csv")
+        df = pd.read_csv(df_path, index_col=0)
+        target_langs = list(self.models_to_merge.keys())
+        scores = get_similarity_scores(self.source_language, target_langs, df)
+        weights = scores["normalized_scores"]
+
+        if not weights or sum(weights.values()) == 0:
+            raise ValueError("Could not calculate weights")
+
+        models_and_weights = {}
+        for lang, weight in weights.items():
+            model_name = self.models_to_merge[lang]
+            models_and_weights[model_name] = ModelInfo(
+                model_name=model_name,
+                subfolder="",  # URIEL mode doesn't use subfolders
+                language=lang,
+                locale=lang,
+                weight=weight
+            )
+
+        # Use the first model as base
+        first_model_name = list(models_and_weights.keys())[0]
+        base_model_info = models_and_weights[first_model_name]
+        models_and_weights.pop(first_model_name)
+
+        print("Calculated Normalized Weights:")
+        for lang, weight in weights.items():
+            print(f"  - {self.models_to_merge[lang]}: {weight:.4f}")
+
+        return models_and_weights, base_model_info
+
+
+class SimilarityWeightCalculator(WeightCalculator):
+    """Weight calculator using pre-computed similarity matrix."""
+
+    def calculate_weights(self, config: MergeConfig) -> Tuple[Dict[str, ModelInfo], ModelInfo]:
+        target_lang = config.target_lang
+        print(f"\n--- Computing Similarity Weights for {target_lang} ---")
+        print(f"Using {config.similarity_type} similarity matrix with top-k + Sinkhorn normalization")
+
+        # Choose similarity matrix based on type
+        if config.similarity_type == "URIEL":
+            similarity_matrix_path = os.path.join(project_root, "language_similarity_matrix_unified.csv")
+        elif config.similarity_type == "REAL":
+            # Use the latest NxN evaluation results
+            similarity_matrix_path = os.path.join(project_root, "nxn_results", "nxn_eval_20251027_103544", "evaluation_matrix.csv")
+        else:
+            raise ValueError(f"Unknown similarity type: {config.similarity_type}")
+
+        similar_languages = load_and_process_similarity(
+            similarity_matrix_path, target_lang, config.num_languages,
+            config.top_k, config.sinkhorn_iters, config.include_target, verbose=True
+        )
+
+        if not similar_languages:
+            raise ValueError("Could not compute similarity weights")
+
+        if config.base_model_dir:
+            base_dir = Path(config.base_model_dir).expanduser()
+            if not base_dir.is_absolute():
+                base_dir = Path(project_root) / base_dir
+        else:
+            base_dir = DEFAULT_MODEL_DIRS.get(
+                config.base_model,
+                Path(project_root) / "haryos_model",
+            )
+
+        # Create model mapping using the resolved base directory
+        models_and_weights: Dict[str, ModelInfo] = {}
+        for locale, weight in similar_languages:
+            model_path = base_dir / f"{config.base_model}_massive_k_{locale}"
+
+            if not model_path.exists():
+                print(f"  ✗ Model path not found: {model_path}")
+                continue
+
+            model_path_str = str(model_path)
+            models_and_weights[model_path_str] = ModelInfo(
+                model_name=model_path_str,
+                subfolder="",
+                language=locale,
+                locale=locale,
+                weight=weight,
+            )
+            print(f"  ✓ {model_path_str}: {weight:.6f} (locale: {locale})")
+
+        if not models_and_weights:
+            raise ValueError("No local models found for the target language")
+
+        # Use first model as base
+        first_model_key = list(models_and_weights.keys())[0]
+        base_model_info = models_and_weights[first_model_key]
+        models_and_weights.pop(first_model_key)
+
+        # Normalize weights to sum to 1.0
+        total_weight = sum(info.weight for info in models_and_weights.values()) + base_model_info.weight
+        if total_weight > 0:
+            normalization_factor = 1.0 / total_weight
+            base_model_info.weight *= normalization_factor
+            for info in models_and_weights.values():
+                info.weight *= normalization_factor
+
+        return models_and_weights, base_model_info
+
+  
+
+class ManualWeightCalculator(WeightCalculator):
+    """Weight calculator using manually specified weights."""
+
+    def __init__(self, weights: Optional[Dict[str, float]] = None):
+        if weights is None:
+            # Default example weights for testing
+            self.weights = {
+                "lur601/xlm-roberta-base-finetuned-panx-en": 0.6,
+                "lur601/xlm-roberta-base-finetuned-panx-it": 0.4,
+            }
+        else:
+            self.weights = weights
+
+    def calculate_weights(self, config: MergeConfig) -> Tuple[Dict[str, ModelInfo], ModelInfo]:
+        print("\n--- Validating Manual Configuration ---")
+
+        total_weight = sum(self.weights.values())
+        if not np.isclose(total_weight, 1.0):
+            raise ValueError(f"Your weights must sum to 1.0, but they sum to {total_weight}")
+
+        models_and_weights = {}
+        for model_name, weight in self.weights.items():
+            models_and_weights[model_name] = ModelInfo(
+                model_name=model_name,
+                subfolder="",  # Manual mode doesn't use subfolders
+                language="",
+                locale="",
+                weight=weight
+            )
+
+        # Use first model as base
+        first_model_name = list(models_and_weights.keys())[0]
+        base_model_info = models_and_weights[first_model_name]
+        models_and_weights.pop(first_model_name)
+
+        print("Manual weights are valid.")
+        for model, weight in self.weights.items():
+            print(f"  - Weight {weight:.4f}: {model}")
+
+        return models_and_weights, base_model_info
+
+
+class AverageWeightCalculator(SimilarityWeightCalculator):
+    """Weight calculator using equal weights for all models."""
+
+    def calculate_weights(self, config: MergeConfig) -> Tuple[Dict[str, ModelInfo], ModelInfo]:
+        target_lang = config.target_lang
+        print(f"\n--- Setting Up Average (Equal) Weights for {target_lang} ---")
+
+        # Use the parent class to get models, then set equal weights
+        models_and_weights, base_model_info = super().calculate_weights(config)
+
+        if not models_and_weights:
+            raise ValueError("No models found for the target language")
+
+        # Set equal weights
+        num_models = len(models_and_weights) + 1  # +1 for base model
+        equal_weight = 1.0 / num_models
+
+        base_model_info.weight = equal_weight
+        for info in models_and_weights.values():
+            info.weight = equal_weight
+
+        print(f"Using equal weights for {num_models} models: {equal_weight:.6f} each")
+
+        return models_and_weights, base_model_info
+
+
+class IterativeWeightCalculator(WeightCalculator):
+    """Weight calculator for iterative training merges."""
+
+    def __init__(self, active_model_states: Optional[Dict[str, Any]] = None, target_locales: Optional[List[str]] = None):
+        self.active_model_states = active_model_states or {}
+        self.target_locales = target_locales or []
+
+    def calculate_weights(self, config: MergeConfig) -> Tuple[Dict[str, ModelInfo], ModelInfo]:
+        print("\n--- Setting Up Iterative Merging Weights ---")
+
+        # For iterative merging, we use the provided model states and equal weights
+        # This can be extended to support more sophisticated weight calculation strategies
+
+        if not self.active_model_states:
+            # Fallback to similarity-based weights if no states provided
+            print("No active model states provided, falling back to similarity-based weights")
+            similarity_calculator = SimilarityWeightCalculator()
+            return similarity_calculator.calculate_weights(config)
+
+        models_and_weights = {}
+        equal_weight = 1.0 / len(self.active_model_states)
+
+        for locale, model_info in self.active_model_states.items():
+            model_path = model_info.get('checkpoint_path', model_info.get('locale', locale))
+
+            models_and_weights[model_path] = ModelInfo(
+                model_name=model_path,
+                subfolder="",
+                language=locale,
+                locale=locale,
+                weight=equal_weight
+            )
+            print(f"  - {locale}: {equal_weight:.6f} (from checkpoint: {model_path})")
+
+        if not models_and_weights:
+            raise ValueError("No models available for iterative merging")
+
+        # Use first model as base
+        first_model_key = list(models_and_weights.keys())[0]
+        base_model_info = models_and_weights[first_model_key]
+        models_and_weights.pop(first_model_key)
+
+        # Renormalize weights
+        num_models = len(models_and_weights) + 1  # +1 for base model
+        final_equal_weight = 1.0 / num_models
+
+        base_model_info.weight = final_equal_weight
+        for info in models_and_weights.values():
+            info.weight = final_equal_weight
+
+        print(f"Using equal weights for {num_models} models in iterative merge: {final_equal_weight:.6f} each")
+
+        return models_and_weights, base_model_info
+
+
+class CompatibilityWeightCalculator(SimilarityWeightCalculator):
+    """
+    Weight calculator that incorporates source compatibility analysis.
+
+    Extends similarity-based selection with compatibility scoring:
+    final_weight = similarity_weight × compatibility_score
+
+    Compatibility measures how well source models work together when merged,
+    independent of the target language.
+    """
+
+    # Default paths for compatibility matrices
+    DEFAULT_TV_MATRIX = Path(project_root) / "nxn_results" / "compatibility_matrix" / "task_vector_cosine_matrix.csv"
+    DEFAULT_CKA_MATRIX = Path(project_root) / "nxn_results" / "compatibility_matrix" / "cka_matrix.csv"
+
+    def __init__(self, compatibility_type: str = "task_vector_cosine", matrix_path: Optional[Path] = None):
+        """
+        Initialize compatibility weight calculator.
+
+        Args:
+            compatibility_type: Type of compatibility metric ("task_vector_cosine" or "cka")
+            matrix_path: Path to pre-computed compatibility matrix (uses default if None)
+        """
+        super().__init__()
+        self.compatibility_type = compatibility_type
+        self.matrix_path = matrix_path
+        self.compatibility_matrix = None
+
+    def _load_compatibility_matrix(self):
+        """Load the compatibility matrix if not already loaded."""
+        if self.compatibility_matrix is not None:
+            return
+
+        # Determine path
+        if self.matrix_path:
+            path = self.matrix_path
+        elif self.compatibility_type == "cka":
+            path = self.DEFAULT_CKA_MATRIX
+        else:
+            path = self.DEFAULT_TV_MATRIX
+
+        if not path.exists():
+            raise FileNotFoundError(
+                f"Compatibility matrix not found: {path}\n"
+                f"Run: python -m merginguriel.compute_compatibility_matrix --metric {self.compatibility_type}"
+            )
+
+        self.compatibility_matrix = load_compatibility_matrix(path, verbose=True)
+
+    def calculate_weights(self, config: MergeConfig) -> Tuple[Dict[str, ModelInfo], ModelInfo]:
+        """
+        Calculate weights with compatibility adjustment.
+
+        1. Get similarity-based weights from parent class
+        2. Load compatibility matrix
+        3. Apply multiplicative compatibility weighting
+        """
+        print(f"\n--- Calculating Compatibility-Adjusted Weights ({self.compatibility_type}) ---")
+
+        # Step 1: Get similarity-based selection
+        models_and_weights, base_model_info = super().calculate_weights(config)
+
+        # Step 2: Load compatibility matrix
+        self._load_compatibility_matrix()
+
+        # Step 3: Get source locales
+        source_locales = [info.locale for info in models_and_weights.values()]
+        source_locales.append(base_model_info.locale)
+
+        # Step 4: Compute compatibility scores for each source
+        compat_scores = get_source_compatibility_scores(
+            self.compatibility_matrix,
+            source_locales,
+        )
+
+        print(f"\nCompatibility scores (avg pairwise with other sources):")
+        for locale, score in compat_scores.items():
+            print(f"  - {locale}: {score:.4f}")
+
+        # Step 5: Apply multiplicative weighting
+        # Adjust weights: new_weight = old_weight * compatibility_score
+        base_model_info.weight *= compat_scores.get(base_model_info.locale, 1.0)
+        for info in models_and_weights.values():
+            info.weight *= compat_scores.get(info.locale, 1.0)
+
+        # Step 6: Renormalize weights to sum to 1
+        total_weight = base_model_info.weight + sum(info.weight for info in models_and_weights.values())
+        if total_weight > 0:
+            base_model_info.weight /= total_weight
+            for info in models_and_weights.values():
+                info.weight /= total_weight
+
+        print(f"\nFinal compatibility-adjusted weights:")
+        print(f"  - {base_model_info.locale} (base): {base_model_info.weight:.6f}")
+        for model_path, info in models_and_weights.items():
+            print(f"  - {info.locale}: {info.weight:.6f}")
+
+        return models_and_weights, base_model_info
+
+
+class WeightCalculatorFactory:
+    """Factory for creating weight calculators."""
+
+    @staticmethod
+    def create_calculator(mode: str, **kwargs) -> WeightCalculator:
+        """Create a weight calculator based on the mode."""
+        calculators = {
+            'uriel': UrielWeightCalculator,
+            'manual': ManualWeightCalculator,
+            'similarity': SimilarityWeightCalculator,
+            'average': AverageWeightCalculator,
+            'iterative': IterativeWeightCalculator,
+            'fisher': SimilarityWeightCalculator,
+            # Advanced merging methods use similarity-based weights
+            'ties': SimilarityWeightCalculator,
+            'task_arithmetic': SimilarityWeightCalculator,
+            'slerp': SimilarityWeightCalculator,
+            'regmean': SimilarityWeightCalculator,
+            'neuromerging': SimilarityWeightCalculator,
+            'directional_consensus': SimilarityWeightCalculator,
+            'adamerging': SimilarityWeightCalculator,
+            'statsmerging': SimilarityWeightCalculator,
+            # Compatibility-aware weight calculators
+            'similarity_x_tv_compatibility': CompatibilityWeightCalculator,
+            'similarity_x_cka_compatibility': CompatibilityWeightCalculator,
+        }
+
+        if mode not in calculators:
+            raise ValueError(f"Unknown mode: {mode}")
+
+        calculator_class = calculators[mode]
+
+        if mode == 'manual':
+            return calculator_class(kwargs.get('weights'))
+        elif mode == 'iterative':
+            return calculator_class(
+                kwargs.get('active_model_states'),
+                kwargs.get('target_locales')
+            )
+        elif mode == 'similarity_x_tv_compatibility':
+            return calculator_class(
+                compatibility_type="task_vector_cosine",
+                matrix_path=kwargs.get('compatibility_matrix_path')
+            )
+        elif mode == 'similarity_x_cka_compatibility':
+            return calculator_class(
+                compatibility_type="cka",
+                matrix_path=kwargs.get('compatibility_matrix_path')
+            )
+        else:
+            return calculator_class()
+
+
+class MergingStrategy(ABC):
+    """Strategy interface for selecting merger and building method params."""
+
+    @abstractmethod
+    def get_merger(self, mode: str):
+        pass
+
+    @abstractmethod
+    def get_method_params(
+        self,
+        config: MergeConfig,
+        models_and_weights: Dict[str, ModelInfo],
+        base_model_info: ModelInfo,
+    ) -> Dict[str, Any]:
+        pass
+
+
+class LinearStrategy(MergingStrategy):
+    def get_merger(self, mode: str):
+        return merging_methods_dict["linear"]()
+
+    def get_method_params(
+        self,
+        config: MergeConfig,
+        models_and_weights: Dict[str, ModelInfo],
+        base_model_info: ModelInfo,
+    ) -> Dict[str, Any]:
+        weights = [info.weight for info in models_and_weights.values()]
+        return {"weights": weights}
+
+
+class FisherSimpleStrategy(MergingStrategy):
+    def get_merger(self, mode: str):
+        # Supports both 'fisher' and 'fisher_simple' registered methods
+        return merging_methods_dict[mode]()
+
+    def get_method_params(
+        self,
+        config: MergeConfig,
+        models_and_weights: Dict[str, ModelInfo],
+        base_model_info: ModelInfo,
+    ) -> Dict[str, Any]:
+        raw_weights = [info.weight for info in models_and_weights.values()]
+        if not raw_weights:
+            return {}
+        total = sum(raw_weights)
+        if total <= 0:
+            norm = [1.0 / len(raw_weights)] * len(raw_weights)
+        else:
+            norm = [w / total for w in raw_weights]
+        return {"weights": norm}
+
+
+class FisherDatasetStrategy(MergingStrategy):
+    def get_merger(self, mode: str):
+        return merging_methods_dict["fisher_dataset"]()
+
+    def get_method_params(
+        self,
+        config: MergeConfig,
+        models_and_weights: Dict[str, ModelInfo],
+        base_model_info: ModelInfo,
+    ) -> Dict[str, Any]:
+        if not config.dataset_name:
+            raise ValueError("--dataset-name is required for fisher_dataset mode")
+
+        fisher_scaling_coefficients: Optional[List[float]] = None
+        if config.preweight == "uriel":
+            src_weights = [info.weight for info in models_and_weights.values()]
+            total = sum(src_weights)
+            if total > 0:
+                fisher_scaling_coefficients = [w / total for w in src_weights]
+            else:
+                fisher_scaling_coefficients = [1.0 / max(1, len(src_weights))] * len(src_weights)
+
+        return {
+            "dataset_config": {
+                "dataset_name": config.dataset_name,
+                "dataset_split": config.dataset_split,
+                "text_column": config.text_column,
+                "label_column": config.label_column,
+            },
+            "fisher_data_mode": config.fisher_data_mode,
+            "target_locale": config.target_lang,
+            "source_locales": [info.locale for info in models_and_weights.values()],
+            "num_fisher_examples": config.num_fisher_examples,
+            "batch_size": config.batch_size,
+            "max_seq_length": config.max_seq_length,
+            "normalize_fisher_weight": True,
+            "minimal_fisher_weight": 1e-6,
+            "fisher_scaling_coefficients": fisher_scaling_coefficients,
+        }
+
+
+class TiesStrategy(MergingStrategy):
+    """TIES merging strategy that resolves sign disagreements and prunes low-magnitude weights."""
+
+    def get_merger(self, mode: str):
+        return merging_methods_dict["ties"]()
+
+    def get_method_params(
+        self,
+        config: MergeConfig,
+        models_and_weights: Dict[str, ModelInfo],
+        base_model_info: ModelInfo,
+    ) -> Dict[str, Any]:
+        # TIES method parameters
+        # Use URIEL weights to influence the merging process
+        src_weights = [info.weight for info in models_and_weights.values()]
+
+        # Default parameters for TIES
+        param_value_mask_rate = 0.8  # Mask 80% of smallest-magnitude parameters
+        scaling_coefficient = 1.0    # Scaling coefficient for task vectors
+
+        # If we have meaningful weights, we can adjust scaling
+        if src_weights and max(src_weights) > 0:
+            # Use the maximum weight as scaling coefficient for better preservation
+            scaling_coefficient = max(src_weights)
+
+        return {
+            "param_value_mask_rate": param_value_mask_rate,
+            "scaling_coefficient": scaling_coefficient,
+            # DARE preprocessing options
+            "dare_enabled": config.dare_enabled,
+            "dare_drop_rate": config.dare_drop_rate,
+            "dare_rescale": config.dare_rescale,
+            "dare_seed": config.dare_seed,
+        }
+
+
+class NeuroMergingStrategy(MergingStrategy):
+    """NeuroMerging strategy that decomposes task vectors into neuronal subspaces.
+
+    Merges primarily in the orthogonal subspace (task adaptability) while optionally
+    incorporating the parallel subspace (input sensitivity). This reduces task
+    interference by preserving task-specific features that don't conflict with
+    pretrained representations.
+    """
+
+    def get_merger(self, mode: str):
+        return merging_methods_dict["neuromerging"]()
+
+    def get_method_params(
+        self,
+        config: MergeConfig,
+        models_and_weights: Dict[str, ModelInfo],
+        base_model_info: ModelInfo,
+    ) -> Dict[str, Any]:
+        # NeuroMerging parameters
+        # Default values from paper (without validation data):
+        # - lambda_1 = 0 (ignore parallel subspace)
+        # - lambda_2 = auto-computed based on L1-norm ratio
+        # - mask_rate = 0.15 (keep top 85% by magnitude)
+
+        # Use config scaling if available, otherwise default
+        scaling_coefficient = 1.0
+
+        # Default: ignore parallel subspace (lambda_1 = 0)
+        # The orthogonal subspace preserves ~88% of task-specific capabilities
+        lambda_1 = 0.0
+
+        # lambda_2 will be auto-computed by the method based on masking ratio
+        # Set to None to trigger auto-computation
+        lambda_2 = None
+
+        # Default mask rate from paper
+        param_value_mask_rate = 0.15
+
+        return {
+            "scaling_coefficient": scaling_coefficient,
+            "param_value_mask_rate": param_value_mask_rate,
+            "lambda_1": lambda_1,
+            "lambda_2": lambda_2,
+        }
+
+
+class TaskArithmeticStrategy(MergingStrategy):
+    """TaskArithmetic merging strategy that adds/subtracts task vectors."""
+
+    def get_merger(self, mode: str):
+        return merging_methods_dict["task_arithmetic"]()
+
+    def get_method_params(
+        self,
+        config: MergeConfig,
+        models_and_weights: Dict[str, ModelInfo],
+        base_model_info: ModelInfo,
+    ) -> Dict[str, Any]:
+        # TaskArithmetic parameters
+        # For task_arithmetic, scaling_coefficient should be a single float
+        # We'll use the average of weights or a default value
+        src_weights = [info.weight for info in models_and_weights.values()]
+
+        if src_weights:
+            # Use the average weight as the scaling coefficient
+            scaling_coefficient = sum(src_weights) / len(src_weights)
+        else:
+            scaling_coefficient = 1.0  # Default if no weights
+
+        # Optional: mask smallest parameters (DARE-like behavior)
+        param_value_mask_rate = 0.0  # Default: no masking
+
+        return {
+            "scaling_coefficient": scaling_coefficient,
+            "param_value_mask_rate": param_value_mask_rate,
+            # DARE preprocessing options
+            "dare_enabled": config.dare_enabled,
+            "dare_drop_rate": config.dare_drop_rate,
+            "dare_rescale": config.dare_rescale,
+            "dare_seed": config.dare_seed,
+        }
+
+
+class SlerpStrategy(MergingStrategy):
+    """SLERP (Spherical Linear Interpolation) merging strategy with incremental merging support."""
+
+    def get_merger(self, mode: str):
+        return merging_methods_dict["slerp"]()
+
+    def get_method_params(
+        self,
+        config: MergeConfig,
+        models_and_weights: Dict[str, ModelInfo],
+        base_model_info: ModelInfo,
+    ) -> Dict[str, Any]:
+        # For incremental SLERP, we need parameters for each merge step
+        # We'll use the model weights to determine interpolation ratios
+
+        # Get all models including base model for sorting
+        all_models = [(base_model_info.model_name, base_model_info.weight)]
+        all_models.extend([(name, info.weight) for name, info in models_and_weights.items()])
+
+        # Sort models by weight (descending) - merge most important first
+        all_models.sort(key=lambda x: x[1], reverse=True)
+
+        # The first model (highest weight) becomes the initial base
+        # Subsequent models are merged one by one
+        merge_steps = []
+
+        for i in range(1, len(all_models)):
+            current_model_name, current_weight = all_models[i]
+            prev_model_name, prev_weight = all_models[i-1]
+
+            # Calculate interpolation ratio based on relative weights
+            # Higher weight model gets more influence
+            total_weight = current_weight + prev_weight
+            if total_weight > 0:
+                slerp_t = prev_weight / total_weight  # Base model gets proportion of its weight
+            else:
+                slerp_t = 0.5  # Equal interpolation if weights are zero
+
+            merge_steps.append({
+                "slerp_t": slerp_t,
+                "dot_threshold": 0.9995,  # Default threshold from auto-merge-llm
+                "base_model": prev_model_name,
+                "merge_model": current_model_name,
+                "base_weight": prev_weight,
+                "merge_weight": current_weight
+            })
+
+        return {
+            "incremental_slerp": True,
+            "merge_steps": merge_steps,
+            "total_models": len(all_models)
+        }
+
+
+class RegMeanStrategy(MergingStrategy):
+    """RegMean merging strategy - simplified implementation using linear merging."""
+
+    def get_merger(self, mode: str):
+        # For now, use linear merging as RegMean requires complex trainer setup
+        # Full RegMean integration would require actual training data and trainers
+        return merging_methods_dict["linear"]()
+
+    def get_method_params(
+        self,
+        config: MergeConfig,
+        models_and_weights: Dict[str, ModelInfo],
+        base_model_info: ModelInfo,
+    ) -> Dict[str, Any]:
+        """
+        Simplified RegMean implementation.
+
+        NOTE: Full RegMean requires:
+        - Actual training data and data loaders
+        - Trainer instances for each model
+        - Complex setup to compute regression matrices
+
+        For practical use in this pipeline, we implement a simplified approach
+        that uses URIEL-weighted linear merging, which captures the spirit of RegMean
+        (data-driven coefficient optimization) without the complexity.
+        """
+
+        # Get URIEL weights as data-driven coefficients
+        weights = [info.weight for info in models_and_weights.values()]
+
+        # Additional RegMean-inspired parameters for potential future enhancement
+        # These would be used in a full RegMean implementation
+        num_models = len(models_and_weights)
+        regmean_lambda = 1.0  # Regularization strength
+        reduce_non_diagonal_ratio = 0.5  # Matrix regularization
+
+        print(f"\n📊 RegMean Strategy: Using simplified linear merging")
+        print(f"   Models: {num_models + 1} (including base model)")
+        print(f"   URIEL weights: {[f'{w:.3f}' for w in weights]}")
+        print(f"   Note: Full RegMean requires trainer setup, using weighted linear as approximation")
+
+        return {
+            "weights": weights,
+            # Metadata for documentation
+            "regmean_metadata": {
+                "original_method": "regmean",
+                "approximation": "linear_with_uriel_weights",
+                "num_models": num_models + 1,
+                "regularization_lambda": regmean_lambda,
+                "reduce_non_diagonal_ratio": reduce_non_diagonal_ratio,
+                "reason": "RegMean requires complex trainer setup, using simplified approach"
+            }
+        }
+
+
+class DirectionalConsensusStrategy(MergingStrategy):
+    """Directional Consensus merging strategy that projects task vectors onto consensus direction.
+
+    Projects each task vector onto a per-layer consensus direction to reduce interference
+    from conflicting gradient directions across different language models.
+
+    Supports soft projection via the alpha parameter:
+    - alpha=1.0: Full projection (maximum variance reduction)
+    - alpha=0.0: No projection (equivalent to similarity method)
+    - 0 < alpha < 1: Interpolate between aligned and original
+    """
+
+    def get_merger(self, mode: str):
+        return merging_methods_dict["directional_consensus"]()
+
+    def get_method_params(
+        self,
+        config: MergeConfig,
+        models_and_weights: Dict[str, ModelInfo],
+        base_model_info: ModelInfo,
+    ) -> Dict[str, Any]:
+        # Get similarity weights for weighted aggregation
+        src_weights = [info.weight for info in models_and_weights.values()]
+
+        # Default parameters for directional consensus
+        scaling_coefficient = 1.0
+        aggregation_mode = "weighted"  # Use similarity-based weights
+        alpha = getattr(config, 'alpha', 1.0)  # Soft projection strength
+
+        print(f"\n📐 Directional Consensus Strategy: Projecting task vectors onto consensus direction")
+        print(f"   Models: {len(models_and_weights)}")
+        print(f"   Aggregation mode: {aggregation_mode}")
+        print(f"   Scaling coefficient: {scaling_coefficient}")
+        print(f"   Alpha (projection strength): {alpha}")
+        print(f"   Weights: {[f'{w:.3f}' for w in src_weights]}")
+
+        return {
+            "scaling_coefficient": scaling_coefficient,
+            "aggregation_mode": aggregation_mode,
+            "weights": src_weights,
+            "alpha": alpha,
+        }
+
+
+class AdaMergingStrategy(MergingStrategy):
+    """AdaMerging strategy that learns coefficients via entropy minimization on target data."""
+
+    def get_merger(self, mode: str):
+        return merging_methods_dict["adamerging"]()
+
+    def get_method_params(
+        self,
+        config: MergeConfig,
+        models_and_weights: Dict[str, ModelInfo],
+        base_model_info: ModelInfo,
+    ) -> Dict[str, Any]:
+        """
+        Build AdaMerging method parameters.
+
+        AdaMerging learns optimal coefficients by minimizing entropy of predictions
+        on unlabeled target language data.
+        """
+        # Get initial coefficients from similarity weights
+        src_weights = [info.weight for info in models_and_weights.values()]
+
+        # Normalize to sum to 1
+        total = sum(src_weights)
+        if total > 0:
+            initial_coefficients = [w / total for w in src_weights]
+        else:
+            initial_coefficients = [1.0 / len(src_weights)] * len(src_weights)
+
+        print(f"\n🧠 AdaMerging Strategy: Learning coefficients via entropy minimization")
+        print(f"   Mode: {config.adamerging_mode}")
+        print(f"   Initial coefficients: {[f'{c:.3f}' for c in initial_coefficients]}")
+        print(f"   Iterations: {config.adamerging_iterations}")
+        print(f"   Learning rate: {config.adamerging_lr}")
+        print(f"   Use TIES preprocessing: {config.adamerging_use_ties}")
+
+        return {
+            "adamerging_mode": config.adamerging_mode,
+            "initial_coefficients": initial_coefficients,
+            "learning_rate": config.adamerging_lr,
+            "num_iterations": config.adamerging_iterations,
+            "use_ties": config.adamerging_use_ties,
+            "param_value_mask_rate": 0.8,  # For TIES preprocessing if enabled
+            # DataLoader will be set by the caller since it needs target locale data
+            "target_dataloader": None,  # Must be provided externally
+        }
+
+
+class StatsMergingStrategy(MergingStrategy):
+    def get_merger(self, mode: str):
+        return merging_methods_dict["statsmerging"]()
+
+    def get_method_params(
+        self,
+        config: MergeConfig,
+        models_and_weights: Dict[str, ModelInfo],
+        base_model_info: ModelInfo,
+    ) -> Dict[str, Any]:
+        if not config.dataset_name:
+            raise ValueError("--dataset-name is required for statsmerging mode")
+
+        print("\n📊 StatsMerging Strategy: Learning coefficients via weight statistics")
+        print(f"   Mode: {config.statsmerging_mode}")
+        print(f"   SVD rank: {config.statsmerging_svd_rank}")
+        print(f"   Hidden dim: {config.statsmerging_hidden_dim}")
+        print(f"   Num layers: {config.statsmerging_num_layers}")
+        print(f"   Epochs: {config.statsmerging_epochs}")
+        print(f"   Learning rate: {config.statsmerging_lr}")
+        print(f"   Normalize: {config.statsmerging_normalize}")
+        print(f"   Dataset split: {config.statsmerging_dataset_split}")
+        print(f"   Examples per locale: {config.statsmerging_num_examples}")
+
+        return {
+            "statsmerging_mode": config.statsmerging_mode,
+            "stats_svd_rank": config.statsmerging_svd_rank,
+            "stats_hidden_dim": config.statsmerging_hidden_dim,
+            "stats_num_layers": config.statsmerging_num_layers,
+            "stats_lr": config.statsmerging_lr,
+            "stats_epochs": config.statsmerging_epochs,
+            "stats_batch_size": config.statsmerging_batch_size,
+            "stats_num_examples": config.statsmerging_num_examples,
+            "stats_normalize": config.statsmerging_normalize,
+            "dataset_name": config.dataset_name,
+            "dataset_split": config.statsmerging_dataset_split,
+            "text_column": config.text_column,
+            "max_seq_length": config.max_seq_length,
+            "stats_seed": config.statsmerging_seed,
+            "model_locales": [base_model_info.locale] + [info.locale for info in models_and_weights.values()],
+        }
+
+
+class MergingStrategyFactory:
+    @staticmethod
+    def create(mode: str) -> MergingStrategy:
+        if mode == "fisher":
+            return FisherDatasetStrategy()
+        if mode == "ties":
+            return TiesStrategy()
+        if mode == "neuromerging":
+            return NeuroMergingStrategy()
+        if mode == "task_arithmetic":
+            return TaskArithmeticStrategy()
+        if mode == "slerp":
+            return SlerpStrategy()
+        if mode == "regmean":
+            return RegMeanStrategy()
+        if mode == "directional_consensus":
+            return DirectionalConsensusStrategy()
+        if mode == "adamerging":
+            return AdaMergingStrategy()
+        if mode == "statsmerging":
+            return StatsMergingStrategy()
+        return LinearStrategy()
+
+
+class ModelMerger:
+    """Handles the actual model merging process."""
+
+    def __init__(self, config: MergeConfig, exclude_param_names_regex: List[str] = None):
+        self.config = config
+        self.strategy = MergingStrategyFactory.create(config.mode)
+        # Layer exclusion patterns for selective layer merging
+        self._exclude_patterns: List[str] = exclude_param_names_regex or []
+
+    def set_exclude_patterns(self, patterns: List[str]) -> None:
+        """Set regex patterns for parameters to exclude from merging."""
+        self._exclude_patterns = patterns
+
+    def merge_models(self, models_and_weights: Dict[str, ModelInfo], base_model_info: ModelInfo) -> Tuple[Any, Any]:
+        """Perform the model merging."""
+        print("\n--- Performing Model Merge ---")
+
+        # Choose the appropriate merging method via strategy
+        merger = self.strategy.get_merger(self.config.mode)
+
+        # Set up method parameters via strategy
+        method_params = self.strategy.get_method_params(self.config, models_and_weights, base_model_info)
+
+        # For AdaMerging, create target dataloader for entropy optimization
+        if self.config.mode == "adamerging":
+            target_dataloader = self._create_adamerging_dataloader()
+            method_params["target_dataloader"] = target_dataloader
+
+        # Check if this is incremental SLERP
+        if self.config.mode == "slerp" and method_params.get("incremental_slerp", False):
+            return self._perform_incremental_slerp(models_and_weights, base_model_info, merger, method_params)
+        else:
+            # Standard merging for all other methods
+            return self._perform_standard_merge(models_and_weights, base_model_info, merger, method_params)
+
+    def _create_adamerging_dataloader(self):
+        """Create DataLoader for AdaMerging entropy optimization using target language data."""
+        from datasets import load_dataset
+        from transformers import AutoTokenizer
+        import torch
+        from torch.utils.data import DataLoader
+
+        print(f"\n📦 Creating DataLoader for AdaMerging (target: {self.config.target_lang})")
+
+        # Load MASSIVE dataset for target locale
+        dataset = load_dataset(
+            "AmazonScience/massive",
+            self.config.target_lang,
+            split="test",
+            trust_remote_code=True
+        )
+
+        # Load tokenizer
+        tokenizer = AutoTokenizer.from_pretrained(self.config.base_model)
+
+        # Tokenize dataset
+        def tokenize_function(examples):
+            return tokenizer(
+                examples["utt"],
+                padding="max_length",
+                truncation=True,
+                max_length=self.config.max_seq_length,
+                return_tensors="pt"
+            )
+
+        # Process in batches
+        tokenized = dataset.map(
+            tokenize_function,
+            batched=True,
+            remove_columns=dataset.column_names
+        )
+        tokenized.set_format("torch")
+
+        # Create DataLoader (small batch for memory efficiency during optimization)
+        dataloader = DataLoader(
+            tokenized,
+            batch_size=self.config.batch_size,
+            shuffle=True
+        )
+
+        print(f"   Dataset size: {len(dataset)} examples")
+        print(f"   Batch size: {self.config.batch_size}")
+        print(f"   Batches: {len(dataloader)}")
+
+        return dataloader
+
+    def _create_pretrained_base_for_task_vectors(self, reference_model_path: str) -> str:
+        """
+        Create a pretrained base model with classifier head matching the fine-tuned models.
+
+        This is needed for proper task vector computation in IncTar mode, where we need:
+            task_vector = finetuned_model - pretrained_base
+
+        The pretrained xlm-roberta-base has a 2-class head, but our fine-tuned models have
+        60 classes (MASSIVE intents). This method creates a temporary model with:
+        - Pretrained encoder weights from xlm-roberta-base
+        - Randomly initialized classifier head with correct num_labels
+
+        Args:
+            reference_model_path: Path to a fine-tuned model to get num_labels from
+
+        Returns:
+            Path to the temporary pretrained base model
+        """
+        import os
+        import tempfile
+        from transformers import AutoModelForSequenceClassification, AutoConfig, AutoTokenizer
+
+        # Get num_labels from reference model
+        ref_config = AutoConfig.from_pretrained(reference_model_path)
+        num_labels = ref_config.num_labels
+
+        print(f"\n🔧 Creating pretrained base with {num_labels}-class classifier head")
+
+        # Load pretrained model with correct num_labels (classifier will be randomly initialized)
+        model = AutoModelForSequenceClassification.from_pretrained(
+            self.config.base_model,
+            num_labels=num_labels,
+            ignore_mismatched_sizes=True  # Allow loading despite classifier size mismatch
+        )
+
+        # Save to temporary directory
+        temp_dir = tempfile.mkdtemp(prefix="pretrained_base_")
+        model.save_pretrained(temp_dir)
+
+        # Also save tokenizer
+        tokenizer = AutoTokenizer.from_pretrained(self.config.base_model)
+        tokenizer.save_pretrained(temp_dir)
+
+        print(f"   Saved to: {temp_dir}")
+        return temp_dir
+
+    def _perform_standard_merge(self, models_and_weights: Dict[str, ModelInfo], base_model_info: ModelInfo,
+                               merger, method_params: Dict[str, Any]) -> Tuple[Any, Any]:
+        """Perform standard model merging (non-incremental)."""
+        # For task-vector methods (ties, task_arithmetic, adamerging), we need a proper
+        # pretrained base model. Task vectors should be computed as:
+        # - task_vector(model_i) = model_i - pretrained_base
+        # This is especially important for IncTar mode where the target model is included.
+        TASK_VECTOR_METHODS = {'ties', 'task_arithmetic', 'adamerging', 'statsmerging'}
+
+        if self.config.mode in TASK_VECTOR_METHODS:
+            # Create pretrained base with correct classifier head (60 classes for MASSIVE)
+            # Use first available model as reference for num_labels
+            reference_model = base_model_info.model_name
+            pretrained_base_path = self._create_pretrained_base_for_task_vectors(reference_model)
+
+            # ALL models (including base_model_info) are now models to merge
+            # Task vectors will be computed relative to the pretrained base
+            all_source_models = [base_model_info.model_name] + list(models_and_weights.keys())
+            all_weights = [base_model_info.weight] + [info.weight for info in models_and_weights.values()]
+
+            print(f"Task-vector method: Using pretrained base ({self.config.base_model}) for task vectors")
+            print(f"All models to merge: {all_source_models}")
+            print(f"Weights: {[f'{w:.4f}' for w in all_weights]}")
+            if self._exclude_patterns:
+                print(f"Exclude patterns: {self._exclude_patterns}")
+
+            # Update method_params with all model weights for AdaMerging
+            if self.config.mode == "adamerging":
+                total = sum(all_weights)
+                method_params["initial_coefficients"] = [w / total for w in all_weights] if total > 0 else None
+
+            # For TIES/task_arithmetic/AdaMerging: pretrained base is true base, all models are merged
+            result = merger.merge(
+                base_model=pretrained_base_path,
+                models_to_merge=all_source_models,
+                method_params=method_params,
+                exclude_param_names_regex=self._exclude_patterns,
+            )
+
+            # Clean up temporary pretrained base
+            import shutil
+            shutil.rmtree(pretrained_base_path, ignore_errors=True)
+        else:
+            # Standard behavior for non-task-vector methods
+            models_to_merge_paths = list(models_and_weights.keys())
+            weight_values = [info.weight for info in models_and_weights.values()]
+
+            print(f"Base model: {base_model_info.model_name}")
+            print(f"Models to merge: {models_to_merge_paths}")
+            print(f"Weights: {weight_values}")
+            if self._exclude_patterns:
+                print(f"Exclude patterns: {self._exclude_patterns}")
+
+            result = merger.merge(
+                base_model=base_model_info.model_name,
+                models_to_merge=models_to_merge_paths,
+                method_params=method_params,
+                exclude_param_names_regex=self._exclude_patterns,
+            )
+
+        print("Merge successful!")
+        return result['merged_model'], result['base_tokenizer']
+
+    def _perform_incremental_slerp(self, models_and_weights: Dict[str, ModelInfo], base_model_info: ModelInfo,
+                                  merger, method_params: Dict[str, Any]) -> Tuple[Any, Any]:
+        """Perform incremental SLERP merging for multiple models."""
+        merge_steps = method_params["merge_steps"]
+        total_models = method_params["total_models"]
+
+        print(f"🔄 Starting Incremental SLERP merging for {total_models} models...")
+        print(f"   Number of merge steps: {len(merge_steps)}")
+
+        # Create temporary directory for intermediate models
+        import tempfile
+        temp_dir = tempfile.mkdtemp(prefix="incremental_slerp_")
+        print(f"   Using temporary directory: {temp_dir}")
+
+        try:
+            # Start with the first two models
+            first_step = merge_steps[0]
+            print(f"\n📦 Step 1/{len(merge_steps)}:")
+            print(f"   Base:  {first_step['base_model']} (weight: {first_step['base_weight']:.4f})")
+            print(f"   Merge: {first_step['merge_model']} (weight: {first_step['merge_weight']:.4f})")
+            print(f"   SLERP interpolation ratio: {first_step['slerp_t']:.4f}")
+
+            # Prepare SLERP parameters for first step
+            slerp_params = {
+                "slerp_t": first_step["slerp_t"],
+                "dot_threshold": first_step["dot_threshold"]
+            }
+
+            # Perform first SLERP merge
+            # SLERP expects exactly 2 models in models_to_merge list
+            result = merger.merge(
+                base_model=first_step["base_model"],  # Used as architecture reference
+                models_to_merge=[first_step["base_model"], first_step["merge_model"]],  # 2 models for SLERP
+                method_params=slerp_params,
+                exclude_param_names_regex=self._exclude_patterns,
+            )
+
+            # Save intermediate result
+            intermediate_path = os.path.join(temp_dir, "step_1_model")
+            result['merged_model'].save_pretrained(intermediate_path)
+            result['base_tokenizer'].save_pretrained(intermediate_path)
+
+            current_model_path = intermediate_path
+            print(f"   ✅ Step 1 completed, saved intermediate model")
+
+            # Continue with remaining steps
+            for i in range(1, len(merge_steps)):
+                step = merge_steps[i]
+                print(f"\n📦 Step {i+1}/{len(merge_steps)}:")
+                print(f"   Base:  intermediate_model (weight: cumulative)")
+                print(f"   Merge: {step['merge_model']} (weight: {step['merge_weight']:.4f})")
+                print(f"   SLERP interpolation ratio: {step['slerp_t']:.4f}")
+
+                # Prepare SLERP parameters for this step
+                slerp_params = {
+                    "slerp_t": step["slerp_t"],
+                    "dot_threshold": step["dot_threshold"]
+                }
+
+                try:
+                    # Perform SLERP merge using intermediate model as base
+                    # SLERP expects exactly 2 models in models_to_merge list
+                    result = merger.merge(
+                        base_model=current_model_path,  # Used as architecture reference
+                        models_to_merge=[current_model_path, step["merge_model"]],  # 2 models for SLERP
+                        method_params=slerp_params,
+                        exclude_param_names_regex=self._exclude_patterns,
+                    )
+
+                    # Save new intermediate result
+                    intermediate_path = os.path.join(temp_dir, f"step_{i+1}_model")
+                    result['merged_model'].save_pretrained(intermediate_path)
+                    result['base_tokenizer'].save_pretrained(intermediate_path)
+
+                    current_model_path = intermediate_path
+                    print(f"   ✅ Step {i+1} completed, saved intermediate model")
+
+                except Exception as e:
+                    print(f"   ❌ Step {i+1} failed: {e}")
+                    raise RuntimeError(f"Incremental SLERP failed at step {i+1}: {e}")
+
+            print(f"\n🎉 Incremental SLERP merging completed successfully!")
+            print(f"   Final merged model created from {total_models} source models")
+
+            # Load final model and tokenizer
+            from transformers import AutoModel, AutoTokenizer
+            final_model = AutoModel.from_pretrained(current_model_path)
+            final_tokenizer = AutoTokenizer.from_pretrained(current_model_path)
+
+            return final_model, final_tokenizer
+
+        finally:
+            # Clean up temporary directory
+            import shutil
+            try:
+                shutil.rmtree(temp_dir)
+                print(f"   🧹 Cleaned up temporary directory: {temp_dir}")
+            except Exception as e:
+                print(f"   ⚠️  Warning: Could not clean up temp directory {temp_dir}: {e}")
+
+    # _get_method_params removed in favor of strategy pattern
+
+
+class OutputManager:
+    """Manages saving models and results."""
+
+    def __init__(self, project_root: str, merged_models_dir: str = "merged_models"):
+        self.project_root = project_root
+        self.merged_models_dir = merged_models_dir
+
+    def save_model_and_details(self, merged_model: Any, tokenizer: Any, config: MergeConfig,
+                              models_and_weights: Dict[str, ModelInfo], base_model_info: ModelInfo) -> str:
+        """Save the merged model and merge details."""
+        # Get the number of models merged
+        num_models = len(models_and_weights)
+
+        # Extract base model name from base_model_info.model_name
+        base_model_name = base_model_info.model_name
+        # Clean up the model name to get just the model family (xlm-roberta-base, xlm-roberta-large)
+        if "/" in base_model_name:
+            base_model_name = base_model_name.split("/")[-1]  # Get last part after slash
+
+        # Extract model family using model-agnostic detection
+        from merginguriel.naming_config import naming_manager
+        try:
+            base_model_name = naming_manager.extract_model_family(base_model_name)
+        except ValueError:
+            pass  # Keep original base_model_name if extraction fails
+
+        # Use centralized naming manager with IT/ET support
+        from merginguriel.naming_config import naming_manager
+        merged_model_dir_name = naming_manager.get_merged_model_dir_name(
+            experiment_type='merging',
+            method=config.mode,
+            similarity_type=config.similarity_type,
+            locale=config.target_lang,
+            model_family=base_model_name,
+            num_merged=num_models,
+            include_target=config.include_target
+        )
+        output_dir = os.path.join(self.project_root, self.merged_models_dir, merged_model_dir_name)
+
+        os.makedirs(output_dir, exist_ok=True)
+        merged_model.save_pretrained(output_dir)
+        tokenizer.save_pretrained(output_dir)
+        print(f"Model saved successfully to: {output_dir}")
+
+        self._save_merge_details(output_dir, config, models_and_weights, base_model_info)
+
+        return output_dir
+
+    def _save_merge_details(self, output_dir: str, config: MergeConfig,
+                           models_and_weights: Dict[str, ModelInfo], base_model_info: ModelInfo):
+        """Save details about the merge."""
+        filepath = os.path.join(output_dir, "merge_details.txt")
+        with open(filepath, 'w') as f:
+            f.write(f"Merge Mode: {config.mode}\n")
+            f.write(f"Timestamp (UTC): {datetime.utcnow().isoformat()}\n\n")
+            f.write(f"Base Model (for architecture): {config.base_model}\n")
+            f.write(f"Target Language: {config.target_lang}\n")
+            f.write("\n--- Merged Models and Weights ---\n")
+
+            # Include base model
+            all_models = [base_model_info] + list(models_and_weights.values())
+
+            for i, model_info in enumerate(all_models):
+                f.write(f"{i+1}. Model: {model_info.model_name}\n")
+                if model_info.subfolder:
+                    f.write(f"   - Subfolder: {model_info.subfolder}\n")
+                if model_info.language:
+                    f.write(f"   - Language: {model_info.language}\n")
+                if model_info.locale:
+                    f.write(f"   - Locale: {model_info.locale}\n")
+                f.write(f"   - Weight: {model_info.weight:.6f} ({model_info.weight*100:.2f}% of total)\n")
+
+            total_weight = sum(info.weight for info in all_models)
+            f.write(f"\nTotal Weight: {total_weight:.6f}\n")
+
+        print(f"Merge details saved to: {filepath}")
+
+
+class Evaluator:
+    """Handles model evaluation."""
+
+    def __init__(self, project_root: str, merged_models_dir: str = "merged_models"):
+        self.project_root = project_root
+        self.merged_models_dir = merged_models_dir
+
+    def evaluate_model(self, model_path: str):
+        """Evaluate the merged model."""
+        evaluation_script_path = os.path.join(self.project_root, "merginguriel/evaluate_base_encoder.py")
+        if not os.path.exists(evaluation_script_path):
+            raise FileNotFoundError(f"Evaluation script not found at {evaluation_script_path}")
+
+        print(f"\n--- Starting evaluation for model: {model_path} ---")
+        command = [sys.executable, evaluation_script_path, "--model_name_or_path", model_path]
+        try:
+            subprocess.run(command, check=True)
+            print(f"--- Evaluation finished for {model_path} ---")
+        except subprocess.CalledProcessError as e:
+            raise RuntimeError(f"Evaluation failed with error: {e}")
+
+
+class MergingPipeline:
+    """Main pipeline orchestrator for model merging."""
+
+    def __init__(self, config: MergeConfig, merged_models_dir: str = "merged_models"):
+        self.config = config
+        self.project_root = project_root
+        self.weight_calculator = WeightCalculatorFactory.create_calculator(config.mode)
+        self.model_merger = ModelMerger(config)
+        self.output_manager = OutputManager(self.project_root, merged_models_dir)
+        self.evaluator = Evaluator(self.project_root)
+
+    def run(self):
+        """Run the complete merging pipeline."""
+        print("*****************************************************")
+        print(f"*        Model Merging Pipeline (Mode: {self.config.mode.upper()})      *")
+        print("*****************************************************")
+
+        # Step 1: Calculate weights
+        models_and_weights, base_model_info = self.weight_calculator.calculate_weights(self.config)
+
+        # Step 2: Merge models
+        merged_model, tokenizer = self.model_merger.merge_models(models_and_weights, base_model_info)
+
+        # Step 3: Save results
+        output_dir = self.output_manager.save_model_and_details(
+            merged_model, tokenizer, self.config, models_and_weights, base_model_info
+        )
+
+        # Step 4: Evaluate
+        self.evaluator.evaluate_model(output_dir)
+
+        print("\n*****************************************************")
+        print("*                  Pipeline Finished                *")
+        print("*****************************************************")
+
+
+def create_config_from_args(args) -> MergeConfig:
+    """Create MergeConfig from command line arguments."""
+    return MergeConfig(
+        mode=args.mode,
+        target_lang=args.target_lang,
+        subfolder_pattern=args.subfolder_pattern,
+        num_languages=args.num_languages,
+        dataset_name=args.dataset_name,
+        dataset_split=args.dataset_split,
+        text_column=args.text_column,
+        label_column=args.label_column,
+        num_fisher_examples=args.num_fisher_examples,
+        base_model=args.base_model,
+        similarity_source=args.similarity_source,
+        similarity_type=args.similarity_type,
+        include_target=args.include_target,
+        top_k=args.top_k,
+        sinkhorn_iters=args.sinkhorn_iters,
+        fisher_data_mode=args.fisher_data_mode,
+        preweight=args.preweight,
+        batch_size=args.batch_size,
+        max_seq_length=args.max_seq_length,
+        base_model_dir=args.base_model_dir,
+        # DARE options
+        dare_enabled=args.dare_drop_rate > 0.0,
+        dare_drop_rate=args.dare_drop_rate,
+        dare_rescale=not args.dare_no_rescale,
+        dare_seed=args.dare_seed,
+        # AdaMerging options
+        adamerging_mode=args.adamerging_mode,
+        adamerging_iterations=args.adamerging_iterations,
+        adamerging_lr=args.adamerging_lr,
+        adamerging_use_ties=args.adamerging_use_ties,
+        statsmerging_mode=args.statsmerging_mode,
+        statsmerging_svd_rank=args.statsmerging_svd_rank,
+        statsmerging_hidden_dim=args.statsmerging_hidden_dim,
+        statsmerging_num_layers=args.statsmerging_num_layers,
+        statsmerging_lr=args.statsmerging_lr,
+        statsmerging_epochs=args.statsmerging_epochs,
+        statsmerging_batch_size=args.statsmerging_batch_size,
+        statsmerging_num_examples=args.statsmerging_num_examples,
+        statsmerging_normalize=args.statsmerging_normalize,
+        statsmerging_dataset_split=args.statsmerging_dataset_split,
+        statsmerging_seed=args.statsmerging_seed,
+    )
+
+
+def create_config_from_yaml(yaml_path: Path, args) -> MergeConfig:
+    """Create MergeConfig from YAML file with CLI overrides.
+
+    Args:
+        yaml_path: Path to YAML config file
+        args: Parsed CLI arguments for overrides
+
+    Returns:
+        MergeConfig instance
+    """
+    from merginguriel.config import (
+        ConfigLoader,
+        PipelineConfig,
+        ConfigDeprecationWarning,
+    )
+
+    # Load config from YAML
+    pipeline_config = PipelineConfig.from_yaml(yaml_path)
+
+    # Track which CLI args were explicitly provided
+    provided_args = getattr(args, "_provided_args", set())
+
+    # CLI arg to config path mapping
+    arg_to_config = {
+        "mode": "mode",
+        "target_lang": "target.locale",
+        "similarity_type": "similarity.type",
+        "similarity_source": "similarity.source",
+        "top_k": "similarity.top_k",
+        "sinkhorn_iters": "similarity.sinkhorn_iters",
+        "include_target": "target.inclusion",
+        "base_model": "model.base_model",
+        "num_languages": "model.num_languages",
+        "dataset_name": "dataset.name",
+        "dataset_split": "dataset.split",
+        "text_column": "dataset.text_column",
+        "label_column": "dataset.label_column",
+        "fisher_data_mode": "fisher.data_mode",
+        "preweight": "fisher.preweight",
+        "num_fisher_examples": "fisher.num_examples",
+        "batch_size": "fisher.batch_size",
+        "max_seq_length": "fisher.max_seq_length",
+        "statsmerging_mode": "statsmerging.mode",
+        "statsmerging_svd_rank": "statsmerging.svd_rank",
+        "statsmerging_hidden_dim": "statsmerging.hidden_dim",
+        "statsmerging_num_layers": "statsmerging.num_layers",
+        "statsmerging_lr": "statsmerging.lr",
+        "statsmerging_epochs": "statsmerging.epochs",
+        "statsmerging_batch_size": "statsmerging.batch_size",
+        "statsmerging_num_examples": "statsmerging.num_examples",
+        "statsmerging_normalize": "statsmerging.normalize",
+        "statsmerging_dataset_split": "statsmerging.dataset_split",
+        "statsmerging_seed": "statsmerging.seed",
+    }
+
+    # Override with CLI args if provided (with deprecation warnings)
+    args_dict = vars(args)
+    for arg_name, config_path in arg_to_config.items():
+        if arg_name in provided_args:
+            arg_value = args_dict.get(arg_name)
+            if arg_value is not None:
+                # Emit deprecation warning
+                warnings.warn(
+                    f"CLI argument '--{arg_name.replace('_', '-')}' is deprecated when using --config. "
+                    f"Use config file with '{config_path}' instead. "
+                    f"CLI value will override config file for backward compatibility.",
+                    ConfigDeprecationWarning,
+                    stacklevel=2
+                )
+                # Set the value in config
+                ConfigLoader._set_nested_attr(pipeline_config, config_path, arg_value)
+
+    # Convert PipelineConfig to legacy MergeConfig format
+    # Handle include_target specially - it's a bool in CLI but "IncTar"/"ExcTar" in config
+    include_target = pipeline_config.target.inclusion == "IncTar"
+
+    return MergeConfig(
+        mode=pipeline_config.mode,
+        target_lang=pipeline_config.target.locale,
+        subfolder_pattern=getattr(args, "subfolder_pattern", ""),
+        num_languages=pipeline_config.model.num_languages,
+        dataset_name=pipeline_config.dataset.name,
+        dataset_split=pipeline_config.dataset.split,
+        text_column=pipeline_config.dataset.text_column,
+        label_column=pipeline_config.dataset.label_column,
+        num_fisher_examples=pipeline_config.fisher.num_examples,
+        base_model=pipeline_config.model.base_model,
+        similarity_source=pipeline_config.similarity.source,
+        similarity_type=pipeline_config.similarity.type,
+        include_target=include_target,
+        top_k=pipeline_config.similarity.top_k,
+        sinkhorn_iters=pipeline_config.similarity.sinkhorn_iters,
+        fisher_data_mode=pipeline_config.fisher.data_mode,
+        preweight=pipeline_config.fisher.preweight,
+        batch_size=pipeline_config.fisher.batch_size,
+        max_seq_length=pipeline_config.fisher.max_seq_length,
+        base_model_dir=getattr(args, "base_model_dir", ""),
+        statsmerging_mode=pipeline_config.statsmerging.mode,
+        statsmerging_svd_rank=pipeline_config.statsmerging.svd_rank,
+        statsmerging_hidden_dim=pipeline_config.statsmerging.hidden_dim,
+        statsmerging_num_layers=pipeline_config.statsmerging.num_layers,
+        statsmerging_lr=pipeline_config.statsmerging.lr,
+        statsmerging_epochs=pipeline_config.statsmerging.epochs,
+        statsmerging_batch_size=pipeline_config.statsmerging.batch_size,
+        statsmerging_num_examples=pipeline_config.statsmerging.num_examples,
+        statsmerging_normalize=pipeline_config.statsmerging.normalize,
+        statsmerging_dataset_split=pipeline_config.statsmerging.dataset_split,
+        statsmerging_seed=pipeline_config.statsmerging.seed,
+    )
+
+
+class TrackProvidedArgsAction(argparse.Action):
+    """Custom argparse action that tracks which arguments were explicitly provided."""
+
+    def __call__(self, parser, namespace, values, option_string=None):
+        setattr(namespace, self.dest, values)
+        # Track that this argument was provided
+        if not hasattr(namespace, "_provided_args"):
+            namespace._provided_args = set()
+        namespace._provided_args.add(self.dest)
+
+
+def main():
+    """Main function."""
+    parser = argparse.ArgumentParser(description="A composable pipeline to merge models using various strategies.")
+
+    # Config file argument (new)
+    parser.add_argument(
+        "--config",
+        type=Path,
+        default=None,
+        help="Path to YAML config file. If provided, CLI args override config values with deprecation warnings."
+    )
+
+    parser.add_argument(
+        "--mode",
+        type=str,
+        default=None,  # Changed to allow config override
+        choices=['uriel', 'manual', 'similarity', 'average', 'fisher', 'iterative',
+                'ties', 'task_arithmetic', 'slerp', 'regmean', 'adamerging', 'statsmerging'],
+        action=TrackProvidedArgsAction,
+        help="The merging mode to use."
+    )
+    parser.add_argument(
+        "--target-lang",
+        type=str,
+        default="sq-AL",
+        action=TrackProvidedArgsAction,
+        help="Target language/locale for similarity-based merging (e.g., sq-AL, th-TH, af-ZA)"
+    )
+    parser.add_argument(
+        "--base-model",
+        type=str,
+        default="xlm-roberta-base",
+        action=TrackProvidedArgsAction,
+        help="Base model name for model path construction (e.g., xlm-roberta-base, xlm-roberta-large)"
+    )
+    parser.add_argument(
+        "--base-model-dir",
+        type=str,
+        default="",
+        help="Optional override for the directory containing base-model checkpoints."
+    )
+    parser.add_argument(
+        "--merged-models-dir",
+        type=str,
+        default="merged_models",
+        help="Directory for saving merged models (default: merged_models)"
+    )
+    parser.add_argument(
+        "--subfolder-pattern",
+        type=str,
+        default="alpha_0.5_{locale}_epoch-9",
+        help="Subfolder pattern to use for model loading"
+    )
+    parser.add_argument(
+        "--num-languages",
+        type=int,
+        default=5,
+        action=TrackProvidedArgsAction,
+        help="Number of languages to include in merging"
+    )
+    parser.add_argument(
+        "--dataset-name",
+        type=str,
+        default=None,
+        action=TrackProvidedArgsAction,
+        help="HuggingFace dataset name for Fisher and StatsMerging"
+    )
+    parser.add_argument(
+        "--dataset-split",
+        type=str,
+        default="train",
+        action=TrackProvidedArgsAction,
+        help="Dataset split to use"
+    )
+    parser.add_argument(
+        "--text-column",
+        type=str,
+        default="utt",
+        action=TrackProvidedArgsAction,
+        help="Column name containing text data (MASSIVE uses 'utt')"
+    )
+    parser.add_argument(
+        "--label-column",
+        type=str,
+        default="label",
+        action=TrackProvidedArgsAction,
+        help="Column name containing labels"
+    )
+    parser.add_argument(
+        "--num-fisher-examples",
+        type=int,
+        default=1000,
+        action=TrackProvidedArgsAction,
+        help="Number of examples to use for Fisher computation"
+    )
+    parser.add_argument(
+        "--similarity-source",
+        type=str,
+        choices=["sparse", "dense"],
+        default="sparse",
+        action=TrackProvidedArgsAction,
+        help="Use precomputed sparse CSV or compute dense similarities on-the-fly with top-k + Sinkhorn"
+    )
+    parser.add_argument(
+        "--similarity-type",
+        type=str,
+        choices=["URIEL", "REAL"],
+        default="URIEL",
+        action=TrackProvidedArgsAction,
+        help="Type of similarity matrix to use: URIEL (linguistic features) or REAL (empirical evaluation results)"
+    )
+    parser.add_argument(
+        "--include-target",
+        action="store_true",
+        help="Include target language model in merging (IT mode). Default is exclude target (ET mode)."
+    )
+    parser.add_argument(
+        "--top-k",
+        type=int,
+        default=20,
+        action=TrackProvidedArgsAction,
+        help="Top-K neighbors to preserve per language when computing similarities on-the-fly"
+    )
+    parser.add_argument(
+        "--sinkhorn-iters",
+        type=int,
+        default=20,
+        action=TrackProvidedArgsAction,
+        help="Sinkhorn normalization iterations for similarity computation"
+    )
+    parser.add_argument(
+        "--fisher-data-mode",
+        type=str,
+        choices=["target", "sources", "both"],
+        default="target",
+        action=TrackProvidedArgsAction,
+        help="Which data distribution to compute Fisher on: target locale only, the selected source locales, or both"
+    )
+    parser.add_argument(
+        "--preweight",
+        type=str,
+        choices=["equal", "uriel"],
+        default="uriel",
+        action=TrackProvidedArgsAction,
+        help="Pre-weight models before Fisher merging: equal or URIEL cosine weights"
+    )
+    parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=16,
+        action=TrackProvidedArgsAction,
+        help="Batch size for dataset-enabled Fisher computation"
+    )
+    parser.add_argument(
+        "--max-seq-length",
+        type=int,
+        default=128,
+        action=TrackProvidedArgsAction,
+        help="Max sequence length for tokenization in Fisher computation"
+    )
+    # DARE (Drop And REscale) preprocessing options
+    parser.add_argument(
+        "--dare-drop-rate",
+        type=float,
+        default=0.0,
+        action=TrackProvidedArgsAction,
+        help="DARE drop rate (0.0-1.0). Set >0 to enable DARE preprocessing. Paper recommends 0.9"
+    )
+    parser.add_argument(
+        "--dare-no-rescale",
+        action="store_true",
+        default=False,
+        help="Disable DARE rescaling (not recommended, but available for ablation)"
+    )
+    parser.add_argument(
+        "--dare-seed",
+        type=int,
+        default=None,
+        action=TrackProvidedArgsAction,
+        help="Random seed for DARE preprocessing (for reproducibility)"
+    )
+    # AdaMerging options (entropy-based coefficient learning)
+    parser.add_argument(
+        "--adamerging-mode",
+        type=str,
+        default="task_wise",
+        choices=["task_wise", "layer_wise"],
+        action=TrackProvidedArgsAction,
+        help="AdaMerging mode: task_wise (one coeff per model) or layer_wise (one coeff per layer per model)"
+    )
+    parser.add_argument(
+        "--adamerging-iterations",
+        type=int,
+        default=100,
+        action=TrackProvidedArgsAction,
+        help="Number of optimization iterations for AdaMerging"
+    )
+    parser.add_argument(
+        "--adamerging-lr",
+        type=float,
+        default=1e-3,
+        action=TrackProvidedArgsAction,
+        help="Learning rate for AdaMerging coefficient optimization"
+    )
+    parser.add_argument(
+        "--adamerging-use-ties",
+        action="store_true",
+        default=False,
+        help="Apply TIES preprocessing before AdaMerging (AdaMerging++ variant)"
+    )
+    parser.add_argument(
+        "--statsmerging-mode",
+        type=str,
+        default="task_wise",
+        choices=["task_wise", "layer_wise"],
+        action=TrackProvidedArgsAction,
+        help="StatsMerging mode: task_wise (one coeff per model) or layer_wise (one coeff per layer per model)"
+    )
+    parser.add_argument(
+        "--statsmerging-svd-rank",
+        type=int,
+        default=3,
+        action=TrackProvidedArgsAction,
+        help="Top-r singular values to include in stats feature vector"
+    )
+    parser.add_argument(
+        "--statsmerging-hidden-dim",
+        type=int,
+        default=64,
+        action=TrackProvidedArgsAction,
+        help="Hidden dimension of the StatsMergeLearner MLP"
+    )
+    parser.add_argument(
+        "--statsmerging-num-layers",
+        type=int,
+        default=2,
+        action=TrackProvidedArgsAction,
+        help="Number of layers in the StatsMergeLearner MLP"
+    )
+    parser.add_argument(
+        "--statsmerging-lr",
+        type=float,
+        default=1e-3,
+        action=TrackProvidedArgsAction,
+        help="Learning rate for StatsMergeLearner"
+    )
+    parser.add_argument(
+        "--statsmerging-epochs",
+        type=int,
+        default=5,
+        action=TrackProvidedArgsAction,
+        help="Training epochs for StatsMergeLearner"
+    )
+    parser.add_argument(
+        "--statsmerging-batch-size",
+        type=int,
+        default=16,
+        action=TrackProvidedArgsAction,
+        help="Batch size for StatsMergeLearner training"
+    )
+    parser.add_argument(
+        "--statsmerging-num-examples",
+        type=int,
+        default=1000,
+        action=TrackProvidedArgsAction,
+        help="Examples per locale for StatsMergeLearner training"
+    )
+    parser.add_argument(
+        "--statsmerging-normalize",
+        type=str,
+        default="softmax",
+        choices=["softmax", "none"],
+        action=TrackProvidedArgsAction,
+        help="Normalize StatsMerging coefficients (softmax or none)"
+    )
+    parser.add_argument(
+        "--statsmerging-dataset-split",
+        type=str,
+        default="validation",
+        action=TrackProvidedArgsAction,
+        help="Dataset split for StatsMergeLearner training"
+    )
+    parser.add_argument(
+        "--statsmerging-seed",
+        type=int,
+        default=42,
+        action=TrackProvidedArgsAction,
+        help="Random seed for StatsMergeLearner data sampling"
+    )
+
+    args = parser.parse_args()
+
+    # Determine config source: YAML file or CLI arguments
+    if args.config is not None:
+        # Load from YAML config file (new path)
+        if not args.config.exists():
+            parser.error(f"Config file not found: {args.config}")
+        print(f"Loading configuration from: {args.config}")
+        config = create_config_from_yaml(args.config, args)
+    else:
+        # Legacy path: create from CLI arguments only
+        if args.mode is None:
+            parser.error("--mode is required when not using --config")
+        config = create_config_from_args(args)
+
+    pipeline = MergingPipeline(config, args.merged_models_dir)
+    pipeline.run()
+
+
+if __name__ == "__main__":
+    main()

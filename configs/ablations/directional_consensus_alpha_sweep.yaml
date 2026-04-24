@@ -1,0 +1,43 @@
+# Ablation: Soft Projection Alpha Sweep for Directional Consensus
+#
+# Purpose: Find optimal alpha value for soft projection
+#   - alpha=0.0: No projection (equivalent to similarity method)
+#   - alpha=1.0: Full projection (current directional_consensus)
+#   - 0 < alpha < 1: Interpolate, preserving some orthogonal signal
+#
+# Hypothesis: Intermediate alpha values may balance variance reduction
+# (helping interference targets) while preserving beneficial orthogonal
+# components (helping synergy targets).
+#
+# Targets:
+#   - sw-KE: Synergy target (+2.30% Merging Effect) - hurt by alpha=1.0
+#   - cy-GB: Interference target (-1.58% Merging Effect) - helped by alpha=1.0
+#
+# Expected runs: 2 locales x 5 alpha values = 10 runs
+
+ablation:
+  name: "directional_consensus_alpha_sweep"
+  description: "Sweep soft projection alpha values to find optimal balance"
+
+  fixed:
+    method: "directional_consensus"
+    similarity_type: "REAL"
+    num_languages: 5
+    include_target: false
+    model_family: "xlm-roberta-base"
+    models_root: "haryos_model"
+    merged_models_dir: "merged_models"
+    locales:
+      - "sw-KE"   # Synergy target - currently hurt by full projection
+      - "cy-GB"   # Interference target - currently helped by full projection
+
+  sweep:
+    alpha:
+      - 0.0    # No projection (should match similarity method)
+      - 0.25   # Light projection
+      - 0.5    # Half projection
+      - 0.75   # Strong projection
+      - 1.0    # Full projection (current default)
+
+  db_path: "experiments_alpha_sweep.db"
+  resume: true

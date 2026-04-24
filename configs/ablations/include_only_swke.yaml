@@ -1,0 +1,44 @@
+# Include-only layer ablation for sw-KE (Swahili-Kenya)
+# Merge ONLY specified layers, keep pretrained XLM-RoBERTa-base for everything else.
+#
+# Motivation (LinguaMap): Multilingual LLMs have three phases:
+#   - Early (0-3): Semantic alignment (language-invariant)
+#   - Middle (4-7): Task reasoning (language-invariant)
+#   - Late (8-11): Language-specific generation
+#
+# Hypothesis: Merging only middle layers (task reasoning) with pretrained base
+# for early/late layers may outperform full merging by avoiding interference
+# from language-specific layers.
+#
+# Method: Leave-one-source-out CV with include-only ablation.
+# Non-merged encoder layers = pretrained XLM-RoBERTa-base weights.
+# Embeddings and classifier head are always merged from finetuned models.
+
+ablation:
+  name: "include_only_swke_v1"
+  description: "Include-only layer merging for sw-KE: LinguaMap three-phase hypothesis"
+
+  fixed:
+    target_locale: "sw-KE"
+    method: "linear"
+    similarity_type: "REAL"
+    num_languages: 5
+    include_target: false  # ExcTar mode
+    pretrained_model_name: "xlm-roberta-base"
+    model_family: "xlm-roberta-base"
+    models_root: "haryos_model"
+    nxn_matrix_path: "nxn_results/nxn_eval_20251027_103544/evaluation_matrix_xlm-roberta-base.csv"
+
+  cv_source_locales:
+    - "en-US"
+    - "de-DE"
+    - "fr-FR"
+    - "es-ES"
+    - "nl-NL"
+    - "pt-PT"
+    - "it-IT"
+
+  db_path: "experiments_include_only_swke.db"
+  results_dir: "results/include_only/sw-KE"
+  resume: true
+  dry_run: false

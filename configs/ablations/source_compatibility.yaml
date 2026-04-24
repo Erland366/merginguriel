@@ -1,0 +1,35 @@
+# Source Compatibility Analysis Ablation
+#
+# Hypothesis: Not all good source models are compatible with each other.
+# Two sources might transfer well individually but interfere when merged.
+#
+# Method: Analyze pairwise compatibility using Task Vector Cosine or CKA,
+# then apply multiplicative weighting: final_weight = similarity × compatibility
+#
+# Expected: 2 locales × 3 methods = 6 experiments
+
+ablation:
+  name: "source_compatibility_ablation"
+  description: "Compare similarity-only vs compatibility-aware merging (TV Cosine and CKA)"
+
+  fixed:
+    num_languages: 5
+    include_target: false           # ExcTar mode - pure cross-lingual transfer
+    similarity_type: "URIEL"        # Use URIEL for base similarity
+    model_family: "xlm-roberta-base"
+    models_root: "haryos_model"
+    merged_models_dir: "merged_models_compatibility"
+    # Ablation targets: diverse low-resource languages
+    locales:
+      - "sw-KE"   # Swahili-Kenya (Niger-Congo)
+      - "cy-GB"   # Welsh-UK (Celtic)
+
+  sweep:
+    method:
+      - "similarity"                    # Baseline: similarity only
+      - "similarity_x_tv_compatibility" # Multiplicative with Task Vector Cosine
+      - "similarity_x_cka_compatibility" # Multiplicative with CKA
+
+  db_path: "experiments_compatibility.db"
+  results_base_dir: "results_compatibility"
+  resume: true

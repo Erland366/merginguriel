@@ -1,0 +1,27 @@
+# Direct best-source-base layer ablation for sq-AL (Albanian)
+# No cross-validation — evaluates directly on sq-AL.
+# sq-AL is a moderate case — merging barely beats baseline.
+
+ablation:
+  name: "bsb_direct_sqal_v1"
+  description: "Direct best-source-base layer merging for sq-AL"
+
+  fixed:
+    target_locale: "sq-AL"
+    method: "linear"
+    model_family: "xlm-roberta-base"
+    models_root: "haryos_model"
+    nxn_matrix_path: "nxn_results/nxn_eval_20251027_103544/evaluation_matrix_xlm-roberta-base.csv"
+
+  source_locales:
+    - "en-US"
+    - "de-DE"
+    - "fr-FR"
+    - "es-ES"
+    - "nl-NL"
+    - "pt-PT"
+    - "it-IT"
+
+  db_path: "experiments_bsb_direct_sqal.db"
+  results_dir: "results/best_source_base_direct/sq-AL"
+  resume: true

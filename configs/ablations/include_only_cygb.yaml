@@ -1,0 +1,32 @@
+# Include-only layer ablation for cy-GB (Welsh)
+# cy-GB is a known interference case — full merging hurts performance.
+# Include-only may help by restricting merging to beneficial layer subsets.
+
+ablation:
+  name: "include_only_cygb_v1"
+  description: "Include-only layer merging for cy-GB: LinguaMap three-phase hypothesis"
+
+  fixed:
+    target_locale: "cy-GB"
+    method: "linear"
+    similarity_type: "REAL"
+    num_languages: 5
+    include_target: false
+    pretrained_model_name: "xlm-roberta-base"
+    model_family: "xlm-roberta-base"
+    models_root: "haryos_model"
+    nxn_matrix_path: "nxn_results/nxn_eval_20251027_103544/evaluation_matrix_xlm-roberta-base.csv"
+
+  cv_source_locales:
+    - "en-US"
+    - "de-DE"
+    - "fr-FR"
+    - "es-ES"
+    - "nl-NL"
+    - "pt-PT"
+    - "it-IT"
+
+  db_path: "experiments_include_only_cygb.db"
+  results_dir: "results/include_only/cy-GB"
+  resume: true
+  dry_run: false

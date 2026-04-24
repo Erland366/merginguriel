@@ -1,0 +1,36 @@
+# Ablation: Compare URIEL vs REAL similarity metrics
+#
+# Purpose: Determine which similarity metric produces better merged models
+#
+# Expected runs: 3 locales × 2 similarity types = 6 runs
+
+ablation:
+  name: "similarity_type_ablation"
+  description: "Compare URIEL vs REAL similarity metrics across diverse locales"
+
+  # Fixed parameters (same for all runs)
+  fixed:
+    method: "similarity"
+    num_languages: 3
+    include_target: false
+    model_family: "xlm-roberta-base"
+    models_root: "haryos_model"
+    cleanup_after_eval: false
+    # Diverse locales: Albanian, Vietnamese, Swahili
+    locales:
+      - "sq-AL"
+      - "vi-VN"
+      - "sw-KE"
+
+  # Parameters to sweep
+  sweep:
+    similarity_type:
+      - "URIEL"
+      - "REAL"
+
+  # Output configuration
+  results_base_dir: "results_ablation_similarity"
+  db_path: "experiments.db"
+
+  # Execution
+  resume: true  # Skip already-completed experiments

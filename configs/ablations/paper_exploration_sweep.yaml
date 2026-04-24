@@ -1,0 +1,35 @@
+# Paper Exploration Overnight Sweep
+# Tests: DARE preprocessing × TIES vs TaskArithmetic × IncTar vs ExcTar
+# Focus on improving merging performance via DARE sparsification
+#
+# Based on: "Language Models are Super Mario" (DARE paper)
+# Key insight: Drop-and-rescale (DARE) reduces task vector interference
+
+ablation:
+  name: "paper_exploration_20260120"
+  description: "Test DARE preprocessing for cross-lingual model merging"
+
+  fixed:
+    num_languages: 3
+    model_family: "xlm-roberta-base"
+    models_root: "haryos_model"
+    merged_models_dir: "merged_models"
+    similarity_type: "URIEL"
+    dare_seed: 42  # For reproducibility
+    dare_rescale: true
+    # Diverse locales covering different language families
+    locales:
+      - "sq-AL"   # Albanian (Indo-European, Balkan)
+      - "vi-VN"   # Vietnamese (Austroasiatic)
+      - "sw-KE"   # Swahili (Niger-Congo)
+      - "th-TH"   # Thai (Kra-Dai)
+      - "fi-FI"   # Finnish (Uralic)
+
+  sweep:
+    method: ["ties", "task_arithmetic"]
+    dare_drop_rate: [0.0, 0.9]  # 0.0 = no DARE, 0.9 = paper recommended
+    include_target: [false, true]  # ExcTar vs IncTar
+
+  # Total experiments: 5 locales × 2 methods × 2 dare × 2 include = 40 experiments
+  db_path: "experiments_paper_exploration.db"
+  resume: true

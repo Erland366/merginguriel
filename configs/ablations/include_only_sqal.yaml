@@ -1,0 +1,32 @@
+# Include-only layer ablation for sq-AL (Albanian)
+# sq-AL is a moderate case — merging barely beats baseline.
+# Include-only may reveal which layers carry the useful transfer signal.
+
+ablation:
+  name: "include_only_sqal_v1"
+  description: "Include-only layer merging for sq-AL: LinguaMap three-phase hypothesis"
+
+  fixed:
+    target_locale: "sq-AL"
+    method: "linear"
+    similarity_type: "REAL"
+    num_languages: 5
+    include_target: false
+    pretrained_model_name: "xlm-roberta-base"
+    model_family: "xlm-roberta-base"
+    models_root: "haryos_model"
+    nxn_matrix_path: "nxn_results/nxn_eval_20251027_103544/evaluation_matrix_xlm-roberta-base.csv"
+
+  cv_source_locales:
+    - "en-US"
+    - "de-DE"
+    - "fr-FR"
+    - "es-ES"
+    - "nl-NL"
+    - "pt-PT"
+    - "it-IT"
+
+  db_path: "experiments_include_only_sqal.db"
+  results_dir: "results/include_only/sq-AL"
+  resume: true
+  dry_run: false

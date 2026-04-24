@@ -1,0 +1,34 @@
+# Ablation: Scaling behavior with number of source languages
+#
+# Purpose: Determine how performance scales with more source models
+#
+# Expected runs: 3 locales × 4 num_languages = 12 runs
+
+ablation:
+  name: "num_languages_ablation"
+  description: "Test scaling behavior with 3, 5, 7, 10 source languages"
+
+  # Fixed parameters
+  fixed:
+    method: "similarity"
+    similarity_type: "URIEL"
+    include_target: false
+    model_family: "xlm-roberta-base"
+    models_root: "haryos_model"
+    cleanup_after_eval: false
+    locales:
+      - "sq-AL"
+      - "vi-VN"
+      - "sw-KE"
+
+  # Parameters to sweep
+  sweep:
+    num_languages:
+      - 3
+      - 5
+      - 7
+      - 10
+
+  results_base_dir: "results_ablation_num_langs"
+  db_path: "experiments.db"
+  resume: true

@@ -1,0 +1,62 @@
+# Large-Scale Multi-Locale Experiment Configuration
+#
+# This config runs all merging methods on all available locales.
+# Usage: python merginguriel/run_large_scale_experiment.py --config configs/examples/large_scale_all_methods.yaml
+
+# Target locales (null = all available locales)
+locales: null
+
+# Target configuration
+target:
+  inclusion: "ExcTar"  # Or "IncTar" to include target, or run with --target-inclusion both
+
+# Merging methods to run
+modes:
+  - baseline          # No merging (single model evaluation)
+  - similarity        # URIEL similarity-weighted merging
+  - average           # Equal-weight averaging
+  - fisher            # Fisher-weighted merging (target data)
+  - ties              # TIES merging
+  - task_arithmetic   # Task Arithmetic merging
+  - slerp             # Spherical linear interpolation
+  - regmean           # RegMean merging
+
+# Similarity configuration
+similarity:
+  type: "URIEL"
+  source: "dense"
+  top_k: 20
+  sinkhorn_iters: 20
+
+# Model configuration
+model:
+  base_model: "xlm-roberta-base"
+  models_root: "haryos_model"
+  num_languages: 5
+
+# Dataset configuration
+dataset:
+  name: "AmazonScience/massive"
+  split: "train"
+  text_column: "utt"
+  label_column: "label"
+
+# Fisher configuration
+fisher:
+  data_mode: "target"
+  preweight: "uriel"    # Use URIEL weights for Fisher preweighting
+  num_examples: 1000
+  batch_size: 16
+  max_seq_length: 128
+
+# Output configuration
+output:
+  results_dir: "results"
+  merged_models_dir: "merged_models"
+  cleanup_after_eval: true  # Clean up to save disk space
+
+# Experiment control
+preset: "none"          # none, fairness, or target
+resume: true            # Resume from existing results
+start_from: 0           # Start from locale index
+max_locales: null       # null = process all locales

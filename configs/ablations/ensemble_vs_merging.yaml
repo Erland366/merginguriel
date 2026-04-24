@@ -1,0 +1,48 @@
+# Ensemble vs Merging Ablation Study
+# Hypothesis: Parameter averaging causes interference. Output averaging (ensemble) doesn't.
+#
+# Total experiments: 84 = 2 locales x 2 modes x 7 methods x 3 num_languages
+#
+# Targets:
+#   sw-KE (Swahili): Self=82.85%, Best zero-shot=46.7% (sq-AL)
+#   cy-GB (Welsh): Self=82.95%, Best zero-shot=44.45% (lv-LV)
+
+ablation:
+  name: "ensemble_vs_merging_v1"
+  description: "Compare ensemble inference vs parameter merging for cross-lingual transfer"
+
+  fixed:
+    model_family: "xlm-roberta-base"
+    models_root: "haryos_model"
+    merged_models_dir: "merged_models"
+    similarity_type: "URIEL"
+    top_k: 20
+    sinkhorn_iters: 20
+    # Low-resource locales with weak zero-shot transfer
+    locales:
+      - "sw-KE"  # Swahili: self=82.85%, ZS=46.7%
+      - "cy-GB"  # Welsh: self=82.95%, ZS=44.45%
+
+  sweep:
+    num_languages: [3, 5, 10]
+    include_target: [false, true]  # ExcTar vs IncTar
+    experiment_type:
+      # Ensemble methods (output averaging)
+      - type: "ensemble"
+        method: "majority"
+      - type: "ensemble"
+        method: "weighted_majority"
+      - type: "ensemble"
+        method: "soft"
+      - type: "ensemble"
+        method: "uriel_logits"
+      # Merging methods (parameter averaging)
+      - type: "merging"
+        method: "similarity"
+      - type: "merging"
+        method: "ties"
+      - type: "merging"
+        method: "task_arithmetic"
+
+  db_path: "experiments_ensemble_vs_merging.db"
+  resume: true

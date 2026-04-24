@@ -1,0 +1,31 @@
+# Ablation: Validate Directional Consensus method
+#
+# Purpose: Test if projecting task vectors onto consensus direction reduces interference
+# Targets: sw-KE (constructive) and cy-GB (low-resource)
+#
+# Expected runs: 2 locales x 4 methods = 8 runs
+
+ablation:
+  name: "directional_consensus_validation"
+  description: "Compare directional_consensus against similarity, ties, task_arithmetic"
+
+  fixed:
+    similarity_type: "REAL"
+    num_languages: 5
+    include_target: false
+    model_family: "xlm-roberta-base"
+    models_root: "haryos_model"
+    merged_models_dir: "merged_models"
+    locales:
+      - "sw-KE"   # Constructive target (56% ZS/Self)
+      - "cy-GB"   # Low-resource constructive target
+
+  sweep:
+    method:
+      - "similarity"
+      - "task_arithmetic"
+      - "ties"
+      - "directional_consensus"
+
+  db_path: "experiments_directional_consensus.db"
+  resume: true

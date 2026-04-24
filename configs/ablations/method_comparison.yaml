@@ -1,0 +1,33 @@
+# Ablation: Compare different merging methods
+#
+# Purpose: Test if Fisher/TIES preserve features better than linear averaging
+# Targets: sw-KE (constructive) and vi-VN (destructive)
+#
+# Expected runs: 2 locales × 4 methods = 8 runs
+
+ablation:
+  name: "method_comparison_v2"
+  description: "Compare similarity, average, fisher, ties on constructive vs destructive targets"
+
+  fixed:
+    similarity_type: "REAL"  # Use REAL (better than URIEL)
+    num_languages: 5
+    include_target: false
+    model_family: "xlm-roberta-base"
+    models_root: "haryos_model"
+    merged_models_dir: "merged_models"
+    dataset_name: "AmazonScience/massive"  # Required for fisher method
+    text_column: "utt"  # MASSIVE uses 'utt' for utterances
+    locales:
+      - "sw-KE"  # Constructive (56% ZS/Self)
+      - "vi-VN"  # Destructive (86% ZS/Self)
+
+  sweep:
+    method:
+      - "similarity"
+      - "average"
+      # - "fisher"  # Disabled: too resource-intensive, crashes machine
+      - "ties"
+
+  db_path: "experiments_methods.db"
+  resume: true

@@ -1,0 +1,78 @@
+# Layer ablation for cy-GB (Welsh-UK)
+# Tests which layers cause interference vs positive transfer in cross-lingual merging
+#
+# Hypothesis: Some transformer layers transfer cross-lingually better than others.
+# Method: Leave-one-layer-out ablation with leave-one-source-out cross-validation.
+#
+# For each holdout language:
+#   1. Merge remaining sources (excluding specific layers)
+#   2. Copy excluded layers from best single source
+#   3. Evaluate on holdout
+#   4. Compare to baseline (all layers merged)
+#
+# Interpretation:
+#   - delta < 0: Excluding layer HURT performance -> layer has POSITIVE TRANSFER
+#   - delta > 0: Excluding layer HELPED performance -> layer causes INTERFERENCE
+
+ablation:
+  name: "layer_ablation_cygb_v1"
+  description: "Leave-one-layer-out ablation for cy-GB cross-lingual transfer"
+
+  fixed:
+    target_locale: "cy-GB"
+    method: "linear"
+    similarity_type: "REAL"
+    num_languages: 5
+    include_target: false  # ExcTar mode - no target in merge
+    model_family: "xlm-roberta-base"
+    models_root: "haryos_model"
+    merged_models_dir: "merged_models"
+    nxn_matrix_path: "nxn_results/nxn_eval_20251027_103544/evaluation_matrix_xlm-roberta-base.csv"
+
+  # Source locales for leave-one-out cross-validation
+  # Selected to cover diverse European languages with reasonable zero-shot transfer
+  # Welsh is Celtic, so include some languages closer to Celtic family
+  cv_source_locales:
+    - "en-US"   # English (Germanic, but historically influenced by Celtic)
+    - "de-DE"   # German (Germanic)
+    - "fr-FR"   # French (Romance, geographic proximity)
+    - "es-ES"   # Spanish (Romance)
+    - "nl-NL"   # Dutch (Germanic)
+    - "pt-PT"   # Portuguese (Romance)
+    - "it-IT"   # Italian (Romance)
+
+  # Layer ablation points (16 total)
+  # Each point specifies which layers to EXCLUDE from merging
+  layer_ablation_points:
+    # Baseline: no exclusion (all layers merged)
+    baseline_all_layers: []
+
+    # Individual layers (12 points)
+    exclude_layer_0: [0]
+    exclude_layer_1: [1]
+    exclude_layer_2: [2]
+    exclude_layer_3: [3]
+    exclude_layer_4: [4]
+    exclude_layer_5: [5]
+    exclude_layer_6: [6]
+    exclude_layer_7: [7]
+    exclude_layer_8: [8]
+    exclude_layer_9: [9]
+    exclude_layer_10: [10]
+    exclude_layer_11: [11]
+
+    # Layer groups (3 points)
+    # Bottom: typically lexical/phonological
+    exclude_group_bottom: [0, 1, 2, 3]
+    # Middle: typically syntactic
+    exclude_group_middle: [4, 5, 6, 7]
+    # Top: typically semantic/task-specific
+    exclude_group_top: [8, 9, 10, 11]
+
+  # Database and output
+  db_path: "experiments_layer_ablation_cygb.db"
+  results_dir: "results/layer_ablation/cy-GB"
+
+  # Execution options
+  resume: true
+  dry_run: false

@@ -1,0 +1,32 @@
+# Best-source-base layer ablation for sq-AL (Albanian)
+# sq-AL is a moderate case — merging barely beats baseline.
+# Best-source-base tests whether a finetuned base changes which
+# layer subsets are beneficial for cross-lingual transfer.
+
+ablation:
+  name: "best_source_base_sqal_v1"
+  description: "Best-source-base layer merging for sq-AL"
+
+  fixed:
+    target_locale: "sq-AL"
+    method: "linear"
+    similarity_type: "REAL"
+    num_languages: 5
+    include_target: false  # ExcTar mode
+    model_family: "xlm-roberta-base"
+    models_root: "haryos_model"
+    nxn_matrix_path: "nxn_results/nxn_eval_20251027_103544/evaluation_matrix_xlm-roberta-base.csv"
+
+  cv_source_locales:
+    - "en-US"
+    - "de-DE"
+    - "fr-FR"
+    - "es-ES"
+    - "nl-NL"
+    - "pt-PT"
+    - "it-IT"
+
+  db_path: "experiments_best_source_base_sqal.db"
+  results_dir: "results/best_source_base/sq-AL"
+  resume: true
+  dry_run: false

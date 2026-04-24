@@ -1,0 +1,52 @@
+# Ablation: Expanded Validation for Merging Effect Predictor V2
+#
+# Purpose: Test predictor accuracy on 12 new targets across the score spectrum
+#
+# Target Selection Strategy:
+# - HIGH coherence + HIGH score (4): Test if regional coherence enables synergy
+# - MIDDLE score, MIXED coherence (4): Calibrate the decision boundary
+# - LOW score (4): Confirm interference predictions
+#
+# Expected runs: 12 locales × 1 method × 1 similarity × 1 num_languages = 12 runs
+
+ablation:
+  name: "expanded_predictor_validation"
+  description: "Expanded validation for Merging Effect Predictor V2"
+
+  fixed:
+    method: "similarity"
+    similarity_type: "REAL"
+    num_languages: 5
+    include_target: false
+    model_family: "xlm-roberta-base"
+    models_root: "haryos_model"
+    merged_models_dir: "merged_models"
+
+  sweep:
+    locales:
+      # HIGH coherence (1.0 or 0.8), HIGH synergy_score - Predicted SYNERGY
+      - "ms-MY"   # Score=0.579, Coherence=1.0 (SE Asian), Quality=0.75
+      - "hi-IN"   # Score=0.563, Coherence=1.0 (S Asian), Quality=0.79
+      - "km-KH"   # Score=0.500, Coherence=0.8 (SE Asian), Quality=0.64
+      - "th-TH"   # Score=0.496, Coherence=0.8 (SE Asian), Quality=0.74
+
+      # MIDDLE score, LOW coherence (0.2-0.4) - Boundary cases
+      - "ko-KR"   # Score=0.112, Coherence=0.4 (E Asian), Quality=0.79
+      - "fa-IR"   # Score=0.100, Coherence=0.4 (mixed), Quality=0.79
+      - "lv-LV"   # Score=0.099, Coherence=0.4 (Baltic), Quality=0.72
+      - "el-GR"   # Score=0.098, Coherence=0.2 (S European), Quality=0.75
+
+      # LOW synergy_score - Predicted INTERFERENCE
+      - "my-MM"   # Score=0.071, Coherence=0.6 (S Asian), Quality=0.72
+      - "ka-GE"   # Score=0.079, Coherence=0.4 (S Asian), Quality=0.62
+      - "bn-BD"   # Score=0.082, Coherence=0.6 (S Asian), Quality=0.69
+      - "ml-IN"   # Score=0.082, Coherence=0.6 (S Asian), Quality=0.75
+
+  db_path: "experiments_expanded_validation.db"
+  resume: true
+
+# Success Criteria:
+# - High-coherence targets: Should show SYNERGY (Merging Effect > 0%)
+# - Middle-score targets: Help calibrate decision boundary
+# - Low-score targets: Should show INTERFERENCE (Merging Effect < 0%)
+# - Target accuracy: 9/12 (75%) or better

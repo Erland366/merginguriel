@@ -1,0 +1,28 @@
+# Direct best-source-base layer ablation for cy-GB (Welsh)
+# No cross-validation — evaluates directly on cy-GB.
+# cy-GB is a known interference case. Tests whether selectively merging
+# layers onto the strongest source can mitigate interference.
+
+ablation:
+  name: "bsb_direct_cygb_v1"
+  description: "Direct best-source-base layer merging for cy-GB"
+
+  fixed:
+    target_locale: "cy-GB"
+    method: "linear"
+    model_family: "xlm-roberta-base"
+    models_root: "haryos_model"
+    nxn_matrix_path: "nxn_results/nxn_eval_20251027_103544/evaluation_matrix_xlm-roberta-base.csv"
+
+  source_locales:
+    - "en-US"
+    - "de-DE"
+    - "fr-FR"
+    - "es-ES"
+    - "nl-NL"
+    - "pt-PT"
+    - "it-IT"
+
+  db_path: "experiments_bsb_direct_cygb.db"
+  results_dir: "results/best_source_base_direct/cy-GB"
+  resume: true
